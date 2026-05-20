@@ -1,0 +1,27 @@
+{
+  "experience": [
+    {"id": "noExperience", "name": "Нет опыта"},
+    {"id": "between1And3", "name": "От 1 года до 3 лет"},
+    {"id": "between3And6", "name": "От 3 до 6 лет"},
+    {"id": "moreThan6", "name": "Более 6 лет"}
+  ],
+  "employment": [
+    {"id": "full", "name": "Полная занятость"},
+    {"id": "part", "name": "Частичная занятость"},
+    {"id": "project", "name": "Проектная работа"}
+  ],
+  "schedule": [
+    {"id": "fullDay", "name": "Полный день"},
+    {"id": "shift", "name": "Сменный график"},
+    {"id": "flexible", "name": "Гибкий график"},
+    {"id": "remote", "name": "Удалённая работа"}
+  ],
+  "vacancy_type": [
+    {"id": "open", "name": "Открытая"},
+    {"id": "anonymous", "name": "Анонимная"}
+  ],
+  "currency": [
+    {"code": "RUR", "abbr": "руб.", "name": "Рубли", "in_use": true, "rate": 1.0},
+    {"code": "USD", "abbr": "$", "name": "Доллары", "in_use": true, "rate": 0.011}
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "190719026",
+  "last_name": "Иванов",
+  "first_name": "Иван",
+  "middle_name": "Петрович",
+  "is_employer": true,
+  "email": "hr@example.com",
+  "employer": {
+    "id": "186503",
+    "name": "ООО \"Страховая компания 21 век\"",
+    "url": "https://api.hh.ru/employers/186503"
+  },
+  "manager": {
+    "id": "16492257",
+    "is_main_contact_person": true
+  }
+}

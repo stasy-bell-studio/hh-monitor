@@ -1,0 +1,34 @@
+[
+  {
+    "id": "113",
+    "parent_id": null,
+    "name": "Россия",
+    "areas": [
+      {
+        "id": "1",
+        "parent_id": "113",
+        "name": "Москва",
+        "areas": []
+      },
+      {
+        "id": "2",
+        "parent_id": "113",
+        "name": "Санкт-Петербург",
+        "areas": []
+      }
+    ]
+  },
+  {
+    "id": "5",
+    "parent_id": null,
+    "name": "Беларусь",
+    "areas": [
+      {
+        "id": "29",
+        "parent_id": "5",
+        "name": "Минск",
+        "areas": []
+      }
+    ]
+  }
+]
