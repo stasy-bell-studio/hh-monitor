@@ -1,537 +1,288 @@
-Информация есть, и довольно подробная. Сводка:
-
-**Что было**
-
-- Встреча с Лесницкой Т.Ю. — **06.05.2026** (не позапрошлая неделя, а 12 дней назад). Протокол: [HR-автоматизация HeadHunter — 06.05.2026](https://www.notion.so/HR-HeadHunter-06-05-2026-f7c5ea9a717446df9df2d462c8b101e6?pvs=21).
-- До этого, **05.05.2026**, ты уже собрал концепцию и страницу-хаб: [Мониторинг резюме HH](https://www.notion.so/HH-5460c252321a4ef08656d448a8b50c0f?pvs=21) и [Сообщение для команды](https://www.notion.so/52922687eacf4dd0938391fe27f037f0?pvs=21). Под это есть база [База резюме HH](https://www.notion.so/cf04cb4ab8c84b9387d8f14ff7fa81d4?pvs=21).
-- На «Новых проектах» 11.05 тема шла повесткой: запросить сервер у Никитина, список прав API, корпоративная почта для бота.
-
-**Архитектура (то, что ты с Лесницкой согласовал)**
-
-- **Агент 1 — Парсер.** HH API, забирает новые/обновлённые резюме по заданным фильтрам, складывает в Postgres на нашем сервере. Работает ежедневно, растянут до 5 часов, чтобы не упираться в лимиты API.
-- **Агент 2 — Анализатор.** Сравнивает срез «вчера vs сегодня», находит новых и обновлённых, оценивает % соответствия портрету кандидата, отдаёт события: Новое / Обновлено / ЗП изменилась / Контакты открылись.
-- **Витрина:** Notion (база резюме) + еженедельный дайджест к понедельнику 11:00 на «Новых проектах».
-- **Telegram-бот:** в группу «как только идеальный кандидат по критериям — сразу сюда» (это твой пункт, Лесницкая согласилась).
-- **Открытие контактов:** только вручную HR — Лесницкая категорически против автооткрытия (платно, по регионам разная цена). Договорились: агент анализирует без открытия, открытие — точечное решение HR.
-
-**6 направлений поиска (по которым нужны портреты от Лесницкой)**
-
-Директор филиала, директор агентства, РУ ОП, менеджер АГ, РД, андеррайтер.
-
-**Что висит на мне (по состоянию на 11.05 — все 🔴 не выполнено)**
-
-1. Запросить сервер ~40 ГБ у Никитина А.В. — дедлайн был 08.05.
-2. Список прав API HH → отправить Лесницкой — 08.05.
-3. Создать корпоративную почту для бота через техподдержку (нейтральное имя) — 08.05.
-4. Спроектировать архитектуру AI-агентов (парсер + анализатор) — Чернобривец, дедлайн 13.05.
-
-**Сроки по плану**
-
-- До 11.05 — сбор исходных и каркас.
-- К **01.06** — первый автоматический дайджест на «Новые проекты».
-- Бюджет: сервер 0 ₽, разработка 0 ₽, рабочий режим 5–15 тыс. ₽/мес (открытие контактов + LLM-скоринг).
-
-**Один нюанс по твоей формулировке**
-
-Ты сказал «Ульев вставил задачу» — в материалах, что у меня под рукой, Ульев в этой ветке не фигурирует. Инициатор и архитектор — ты, Лесницкая согласовала, Голубева подтвердила ПДн на РФ-сервере, Никитин — сервер, Ульев — не вижу следа. Возможно, было устно или на другом совещании — если так, скажи, привяжу.
-
-Что обсуждаем дальше — портреты по 6 направлениям, добивание моих 4 просроченных, или сразу алгоритм скоринга и логику Telegram-уведомления?
-
-Создаю декомпозицию: закрываю 4 старые задачи (1 выполнена, 3 поглощены) и создаю 14 новых.
-
-Сейчас разложу: апдейтну 4 существующие задачи и создам 16 новых под декомпозицию проекта. Запускаю параллельно.
-
-Декомпозиция в базе. Ниже — то, что ты просил отдельно.
-
-## 📨 Сообщение Никитину (копируй в Telegram)
-
-> Андрей, по HR-автоматизации HH (мониторинг резюме) — нужен сервер. Перенаправь, пожалуйста, на Михайлова В.А., с ним добью настройку.
-> 
-
-> 
-> 
-
-> **Что нужно:**
-> 
-
-> – Виртуалка / LXC-контейнер на внутреннем сервере компании (хостинг РФ — это требование Голубевой по ПДн, без вариантов)
-> 
-
-> – ОС: Ubuntu 22.04 LTS (или Debian 12)
-> 
-
-> – CPU: 2 vCPU, RAM: 4 ГБ (с запасом — реально хватит 2)
-> 
-
-> – Диск: **40 ГБ SSD** (Postgres + снапшоты резюме, ~400 МБ/день, ротация бэкапов 30 дней)
-> 
-
-> – Сеть: внутренний IP + исходящий доступ в интернет (HH API, Telegram API, Sentry, Anthropic API)
-> 
-
-> – SSH-ключ — пришлю отдельно после подтверждения
-> 
-
-> – Docker + Docker Compose (поставлю сам, если нет)
-> 
-
-> 
-> 
-
-> **Что я туда поставлю:** Postgres 16, парсер на Python 3.12, ежедневный pg_dump в бэкап.
-> 
-
-> **Стоимость:** 0 ₽ (внутренний сервер). Разработка тоже 0 ₽ (делаю сам в Claude Code).
-> 
-
-> **Срок:** хочу получить доступ к 22.05, чтобы успеть W2–W4 и выйти 01.06 с первым еженедельным дайджестом на «Новых проектах».
-> 
-
-> 
-> 
-
-> Дай знать, кто заводит тикет — я или ты.
-> 
-
-## 🔑 Что беру из HH API (для письма Лесницкой)
-
-Раздел, на который ты дал ссылку — «Просмотр резюме / Ссылки на скачивание». Это **платный для работодателя метод** (badge `emp_paid`), требует тарифа работодателя с доступом к API.
-
-**Эндпоинты, которые буду дёргать:**
-
-| --- | --- | --- |
-
-**Что НЕ дёргаем (сознательно):**
-
-- Открытие контактов кандидата (платная операция в тарифе) — только по ручной команде HR. Лесницкая категорически против автооткрытия. На MVP — не используем.
-- Ссылки на скачивание PDF/RTF (`download.pdf.url`, `download.rtf.url`) — пока не нужно, всё, что нам нужно, есть в JSON.
-- Negotiations / отклики / приглашения — не наш сценарий.
-
-**Что нужно от Лесницкой (в одном письме):**
-
-1. Подтвердить, что **в текущем тарифе работодателя 21 Века включён доступ к API на просмотр и поиск резюме** (`emp_paid` методы). Если нет — какой тариф нужен и сколько стоит.
-1. **Создать приложение** в личном кабинете HH (Настройки → Интеграции → API) → выдать **client_id + client_secret**. Тип — серверное (server-side).
-1. **Scope** при OAuth-флоу — минимально нужен доступ работодателя к резюме (стандартный для employer-приложений; HH сам подскажет при создании, доп. скоупов вручную не выбираем).
-1. **Refresh token** через OAuth-флоу с корпоративной почтой бота (она уже есть).
-1. Текущие **фильтры поиска** в её рабочем кабинете HH (по 6 должностям) — выгрузить как URL или JSON, чтобы я воспроизвёл их в коде.
-1. Подтверждение, что **открытие контактов остаётся ручным** на её стороне (без авто).
-
----
-
-Все 20 задач разложены — сегодня бьём 3 «горящие» (сервер, права API, архитектура), остальные расписаны по неделям W2–W4 и М2. Roadmap на странице проекта совпадает с дедлайнами в базе.
-
-Хорошо, давай по шагам.
-
-## 1. Что значит твоя текущая роль в ЛК
-
-То, что ты видишь («менеджер, без прав на вакансии и без просмотра контактов») — это **роль менеджера внутри работодательского аккаунта**, а не права API. Это два разных уровня:
-
-- **Роль в ЛК работодателя** (даёт Никитин/админ аккаунта) — определяет, что ТЫ можешь делать в интерфейсе [hh.ru](http://hh.ru).
-- **Подключённые услуги работодателя** — определяют, что вообще доступно через API всему аккаунту. Это:
-
-То есть «без просмотра контактов» — это нам **на руку**: мы и не хотим, чтобы агент случайно списывал контакты и палил ПДн. Главное — чтобы у компании были услуги **«Доступ к API»** и **«База резюме»**, и чтобы у твоего менеджерского аккаунта был **доступ к базе резюме** (это право выдаётся отдельно админом аккаунта).
-
-## 2. Куда смотреть документацию по API
-
-Три источника, по приоритету:
-
-| --- | --- | --- |
-
-Конкретно по нашему сценарию читать в первую очередь:
-
-- **Авторизация** — https://github.com/hhru/api/blob/master/docs/authorization.md
-- **Авторизация работодателя** — https://github.com/hhru/api/blob/master/docs/authorization_for_user.md
-- **Работа с резюме (employer)** — https://github.com/hhru/api/blob/master/docs/employer_resumes.md
-- **Условия использования API** — https://dev.hh.ru/admin/developer_agreement (в т.ч. п. 4.3: нельзя выгружать базу резюме в свою БД для предоставления третьим лицам — нам это и не нужно, у нас закрытый внутренний контур)
-
-## 3. Как создать приложение (пошагово)
-
-1. Заходи на [**https://dev.hh.ru**](https://dev.hh.ru) под **тем же корпоративным работодательским аккаунтом**, к которому подключены услуги «Доступ к API» и «База резюме». Это важно — приложение создаётся в контексте конкретного аккаунта.
-1. «**Личный кабинет**» → «**Добавить приложение**».
-1. Заполняешь:
-1. Принимаешь условия использования.
-1. Сохраняешь.
-1. После создания получаешь **`client_id`** и **`client_secret`** — это и есть «ключи от API». **Никуда их не выкладывай, ни в Notion, ни в чат** — мы их положим в env-файл на сервере, когда Михайлов его развернёт.
-1. **Модерация**: [hh.ru](http://hh.ru) проверяет приложение от нескольких часов до нескольких рабочих дней. До одобрения работает в тестовом режиме (ограниченное число запросов).
-
-## 4. Что мы будем делать с приложением дальше (для понимания)
-
-Чтобы ты понимал, что мы потом запросим от твоего имени:
-
-1. Один раз — авторизация через браузер: `GET https://hh.ru/oauth/authorize?response_type=code&client_id=...&redirect_uri=...` — ты залогинишься, согласишься, получишь `code`.
-1. Сервер обменяет `code` на `access_token` + `refresh_token` через `POST https://api.hh.ru/oauth/token`.
-1. Дальше парсер ходит с заголовком `Authorization: Bearer <access_token>`:
-1. Когда `access_token` протухает (8 часов) — обновляем через `refresh_token`.
-
-Контакты соискателей мы **не** запрашиваем — даже если бы услуга была подключена, мы намеренно не вызываем методы открытия контактов. Это и про ПДн, и про лимиты, и про требование Лесницкой.
-
-## 5. Что мне нужно от тебя сейчас
-
-Чтобы двигаться дальше, проверь два пункта в ЛК работодателя (или спроси у Никитина / у вашего персонального менеджера [hh.ru](http://hh.ru)):
-
-1. **Подключена ли услуга «Доступ к API hh»** к корпоративному аккаунту? Если нет — нужно подключить (это делается через персонального менеджера [hh.ru](http://hh.ru) по телефону или письмом на `api@hh.ru`).
-1. **Подключена ли услуга «База резюме» (DBSearch)** и **есть ли у твоего менеджерского аккаунта доступ к ней**? Признак: в ЛК должен быть раздел «Поиск резюме» с возможностью открыть полное резюме (без контактов — это нормально). Если поиска резюме нет — без неё API по резюме не работает, и это блокер №1 для всего проекта.
-
-Пришли мне скрин раздела «Услуги» / «Информация о компании» — я по нему точно скажу, чего не хватает. И параллельно создавай приложение по шагам выше — оно нужно в любом случае.
-
-Сразу важная поправка по тому, что ты уже написал: в поле «Какие задачи» у тебя написано **«смотреть изменения в вакансиях»** — нам нужны **резюме**, не вакансии. Это критично, потому что [hh.ru](http://hh.ru) при модерации смотрит именно на это: если напишешь «вакансии», они не поймут, зачем нам DBSearch, и могут отклонить или дать неподходящие лимиты.
-
-Вот готовые формулировки, можешь скопировать как есть.
-
----
-
-### Информация о создателе приложения
-
-> ООО «Страховая компания 21 век» (ИНН [подставь ИНН компании]) — действующий работодатель на [hh.ru](http://hh.ru). Приложение разрабатывается силами внутреннего IT-подразделения компании для собственных нужд по подбору персонала и не предназначено для публичного распространения или передачи третьим лицам.
-> 
-
----
-
-### Кто будет его использовать
-
-> Сотрудники HR-подразделения ООО «Страховая компания 21 век» (руководитель направления — Лесницкая Т.Ю.). Приложение работает в закрытом корпоративном контуре, доступ — только у авторизованных HR-менеджеров компании. Внешних пользователей нет.
-> 
-
----
-
-### Какие задачи должно решать приложение
-
-> Автоматизация ежедневного мониторинга базы резюме [hh.ru](http://hh.ru) по заранее настроенным корпоративным фильтрам поиска (регион, должность, опыт, ключевые навыки) для шести ключевых вакансий компании.
-> 
-
-> 
-> 
-
-> Приложение:
-> 
-
-> 1. Раз в сутки выполняет поиск по сохранённым параметрам и фиксирует новые резюме, а также изменения в ранее найденных (обновление опыта, смена желаемой должности, изменение зарплатных ожиданий, статус активного поиска).
-> 
-
-> 2. Сопоставляет резюме с внутренним «портретом подходящего кандидата» (набор критериев, заданных HR) и присваивает оценку соответствия.
-> 
-
-> 3. Передаёт HR-менеджеру список наиболее релевантных резюме во внутреннюю систему компании для дальнейшей ручной работы.
-> 
-
-> 
-> 
-
-> Открытие контактов соискателей через API **не выполняется** — контакты HR-менеджер открывает вручную через интерфейс [hh.ru](http://hh.ru) после принятия решения о приглашении.
-> 
-
----
-
-### Функциональные возможности и используемые методы API
-
-> **Авторизация (OAuth 2.0):**
-> 
-
-> - `GET /oauth/authorize` — получение авторизационного кода
-> 
-
-> - `POST /oauth/token` — обмен кода на access_token, обновление access_token по refresh_token
-> 
-
-> 
-> 
-
-> **Служебные методы:**
-> 
-
-> - `GET /me` — проверка авторизованного пользователя
-> 
-
-> - `GET /employers/{employer_id}/managers` — получение информации о менеджерах работодателя
-> 
-
-> - `GET /areas` — справочник регионов
-> 
-
-> - `GET /dictionaries` — справочники (опыт, занятость, график и т.д.)
-> 
-
-> 
-> 
-
-> **Работа с резюме (основной функционал):**
-> 
-
-> - `GET /resumes` — поиск резюме по сохранённым корпоративным фильтрам
-> 
-
-> - `GET /resumes/{resume_id}` — просмотр содержимого резюме для анализа соответствия портрету кандидата
-> 
-
-> - `GET /saved_searches/resumes` — управление сохранёнными поисками
-> 
-
-> 
-> 
-
-> **Что приложение НЕ использует:**
-> 
-
-> - Методы открытия контактов соискателей
-> 
-
-> - Методы создания, редактирования и публикации вакансий
-> 
-
-> - Методы работы с откликами и приглашениями
-> 
-
-> - Любые методы, связанные с действиями от имени соискателя
-> 
-
----
-
-## Несколько важных моментов перед нажатием «Добавить»
-
-1. **ИНН подставь свой** в первом поле — это поможет при модерации, hh видит, что приложение создаёт реальный работодатель, а не сторонний разработчик.
-1. **Слово «hh» / «HeadHunter» в названии приложения не используй** — это нарушает п. 4.2 условий и приведёт к отказу. Если ещё не задал название, возьми что-то вроде `СК 21 Век — HR Monitor` или `21vek HR Resume Monitor`.
-1. **Redirect URI**, который ты заполнял раньше (если поле было) — пока поставь `https://localhost:8080/callback`, потом поменяем на боевой адрес, когда Михайлов поднимет сервер.
-1. **После «Добавить»**: получишь `client_id` и `client_secret`. **Не вставляй их в чат и не клади в Notion** — пришли мне только `client_id` (его не страшно показывать), а `client_secret` сохрани в менеджер паролей и потом передадим напрямую в env на сервере.
-1. Приложение уйдёт на модерацию — обычно 1–3 рабочих дня. Параллельно как раз успеем поднять сервер.
-
-Поправь поле «вакансии → резюме», вставь готовые тексты и жми «Добавить». Как только появятся `client_id` и сообщение от модераторов — пиши, двинемся к следующему шагу.
-
-Да, всё правильно — заявка ушла на модерацию, всё как надо:
-
-- ✅ **Название** «СК 21 Век — мониторинг резюме» — без слов «hh»/«HeadHunter», понятно описывает суть. Проходит требования.
-- ✅ **Redirect URI** `https://localhost:8080/callback` — нормальная заглушка, поменяем на боевой URL после развёртки сервера у Михайлова. Менять можно в любой момент в карточке приложения.
-- ✅ **Заявка #21932, рассматривается** — приложение ушло модераторам [hh.ru](http://hh.ru). Обычно это 1–3 рабочих дня, иногда быстрее.
-
-## Что происходит дальше
-
-1. **Модерация**. Тебе на корпоративную почту (ту, что указал при регистрации приложения) придёт письмо «Приложение одобрено» либо «Требуется доработка» с комментарием. Если запросят правки — пришли мне текст письма, ответим грамотно.
-1. **После одобрения** в карточке приложения появятся **`Client ID`** и **`Client Secret`**. Пришли мне сюда только `Client ID` — по нему я подготовлю авторизационную ссылку. `Client Secret` сохрани в менеджер паролей и не вставляй в чат.
-1. **Пока ждём модерацию** — самое время не простаивать, а делать в параллель две вещи:
-
-## Что бы я сделал прямо сейчас на твоём месте
-
-В таком порядке:
-
-1. **Тебе → Никитину**: отправить запрос на сервер (давай я сейчас финализирую текст).
-1. **Тебе → Лесницкой**: короткое сообщение «Таня, проверь, пожалуйста, у нашего персонального менеджера [hh.ru](http://hh.ru) — подключены ли у нас услуги "Доступ к API" и "База резюме" (DBSearch)? Без них API по резюме не заработает. Если нет — нужно подключать.»
-1. Ждём одобрения приложения + ответа по услугам.
-
-Скажи: **скидывать готовый текст для Никитина?** И параллельно — **написать черновик письма Лесницкой про проверку услуг**?
-
-Да, **самое время начинать** — и именно через Claude Code. Объясню, почему и что конкретно делать сейчас, а что отложить до сервера и одобрения приложения.
-
-## Что можно делать прямо сейчас (не зависит от сервера и от модерации hh)
-
-Заявка #21932 ещё рассматривается → `client_id`/`client_secret` будут через 1–3 дня. Сервера Никитин/Михайлов ещё не выдали. Но **80% работы можно сделать локально на твоём ноуте**, и когда придут креды и сервер — мы просто переключим конфиги.
-
-### Что точно можно начать локально:
-
-1. **Скелет проекта** — структура папок, `pyproject.toml`/`poetry`, линтеры, `.env.example`, README.
-1. **OAuth flow** — реализация и проверка на твоём аккаунте (redirect URI `https://localhost:8080/callback` мы уже зарегистрировали, он работает локально без всякого сервера).
-1. **HTTP-клиент к [hh.ru](http://hh.ru)** — обёртка с retry, rate-limiting, обработкой 403/429, авто-refresh токена.
-1. **Работа со справочниками** — `GET /areas`, `GET /dictionaries`, `GET /me` — **бесплатные методы, не требуют DBSearch и одобрения приложения** (в режиме «рассматривается» приложение работает с урезанными лимитами, но базовые методы доступны под твоим личным токеном).
-1. **Схема БД** — описать модель в SQLAlchemy (`resumes`, `snapshots`, `events`, `searches`, `candidates_match`), отладить миграции на локальном SQLite. На сервере просто переключим DSN на PostgreSQL.
-1. **Алгоритм diff** — сравнение двух снапшотов резюме → события «новое / опыт обновлён / ЗП изменена / удалено». Это вообще без API можно отладить на синтетических JSON.
-1. **Fit Score v1** — правила «должность + регион + опыт». Тестировать можно на руками собранных примерах резюме (3–5 шт., чтобы прогнать через скрипт).
-1. **Notion sync воркер** — записывать тестовые «резюме» в нашу базу `https://www.notion.so/cf04cb4ab8c84b9387d8f14ff7fa81d4` через Notion API. Это уже работает.
-1. **Telegram-бот** — каркас на `aiogram`/`python-telegram-bot`, заглушки команд. Реальный канал/группу подключим, когда HR определится.
-
-### Что ждёт сервер/одобрение:
-
-- ❌ Реальный прогон поиска по `/resumes` — только после одобрения приложения (рассматриваемому приложению hh скорее всего не даст платные методы) **и** после подтверждения, что у компании активна услуга «Доступ к API» именно для этого `client_id`.
-- ❌ Прод-деплой, cron, бэкапы, мониторинг — после сервера.
-- ❌ Долгие парсинг-сессии (по нашим расчётам до 5 ч в сутки) — на ноуте не имеет смысла, лимиты API считаются на аккаунт.
-
-## Почему Claude Code, а не «голые руки» или Cursor
-
-Под нашу задачу Claude Code подходит хорошо:
-
-- ✅ Хорошо держит средние Python-проекты целиком в контексте — у нас будет ~3–5 тыс. строк, это его комфортная зона.
-- ✅ Сам гоняет тесты, читает ошибки, исправляет — нам это нужно для OAuth/HTTP-клиента, там много мелких косяков с заголовками и refresh-токенами.
-- ✅ Может сам читать документацию hh (`github.com/hhru/api`) — попросишь, он подтянет.
-- ⚠️ Минус: его легко увлечь «давай ещё фичу» — нужно жёстко вести по плану. Это уже моя задача — держать тебя в рамках спринтов.
-
-Альтернативы (Cursor, чистый GPT в IDE) тоже сработают, но у Claude Code лучше agentic loop под наш кейс (долгие задачи с тестами и итерациями). Если у тебя уже стоит — берём его.
-
-## План первой сессии в Claude Code (на сегодня-завтра)
-
-Я бы сделал так. Открываешь Claude Code в пустой папке и даёшь ему ровно эту последовательность. **Не пытайтесь с ним сделать всё сразу** — он начнёт переусложнять.
-
-### Сессия 1 (1.5–2 часа): скелет + OAuth + `/me`
-
-**Цель:** в конце сессии ты в терминале запускаешь `python -m hh_monitor.cli auth`, у тебя открывается браузер, ты логинишься на [hh.ru](http://hh.ru) под рабочим аккаунтом, видишь редирект на `localhost:8080`, токен сохраняется в `~/.hh_monitor/tokens.json`, и `python -m hh_monitor.cli me` печатает твоё ФИО и `employer_id` СК 21 Век.
-
-Дальше — итеративно: справочники → схема БД → парсер PoC → diff → Notion sync → Telegram → Fit Score.
-
-## Что подготовить перед запуском Claude Code
-
-1. **Создать приватный гит-репозиторий** — GitHub/GitLab компании или твой личный приватный. Назови `hh-monitor` или `sk21-hr-monitor`.
-1. **Установить локально**: Python 3.12+, `poetry` (или `uv`), Claude Code.
-1. **Решить язык**: я рекомендую **Python**. Причины: вся экосистема hh-интеграций на Python (есть готовые либы — посмотрим, использовать ли), `httpx`/`aiohttp` для async, `SQLAlchemy`/`Alembic` для БД, `aiogram` для Telegram. Если у тебя нет предпочтения — берём Python.
-1. **Подождать `client_id`** — без него OAuth не пощупать. Но всё остальное (скелет, схема БД, diff-логика, Notion sync, Telegram) можно начать **прямо сейчас**, не дожидаясь.
-
-## Мой ответ коротко
-
-**Да, начинаем сегодня.** Параллельно с ожиданием модерации и сервера. Первая сессия — скелет + OAuth (как только придёт `client_id`) или скелет + схема БД + diff-логика (если хочешь начать раньше, до одобрения).
-
-Скажи:
-
-- Какой язык — **Python** (моя рекомендация) или хочешь Node/TypeScript?
-- Где будет репо — GitHub корпоративный, GitHub личный, GitLab?
-- Хочешь, чтобы я **сейчас написал тебе системный промпт / `CLAUDE.md`** для Claude Code — туда вшиты архитектура, схема БД, контракт с Notion, требования к ПДн и стиль кода? Это сильно ускорит первую сессию и не даст Claude «уплыть».
-
-Заполни так — иду по полям сверху вниз.
-
-## ⚠️ Сначала самое важное
-
-**Visibility: смени с `Public` на `Private`.** Это критично. В репозитории будут:
-
-- упоминания внутренней архитектуры компании,
-- конфиги под наш OAuth,
-- ссылки на внутренние Notion-страницы,
-- логика обработки персональных данных соискателей.
-
-Публичный репо тут — это и риск по ПДн (Голубева не одобрит), и нарушение п. 4.3 условий [hh.ru](http://hh.ru). **Private — обязательно.**
-
-## Поля для заполнения
-
-### Owner
-
-✅ `Sam44ik` — оставь, это твой личный аккаунт. Когда оформим всё на корпоративный GitHub-org (если он есть), просто перенесём репо. Для старта личный аккаунт нормально.
-
-> Кстати, у компании есть свой GitHub-org? Если есть — лучше сразу создавать там. Если не знаешь / нет — стартуем у тебя, перенесём позже.
-> 
-
-### Repository name
-
-✅ `hh-monitor` — нормальное короткое имя, оставляй.
-
-### Description
-
-Вставь:
-
-```
-Внутренний сервис мониторинга базы резюме hh.ru по корпоративным фильтрам для HR ООО «Страховая компания 21 век». Парсер + детектор изменений + Fit Score + интеграция с Notion и Telegram.
+# hh-monitor — HR Resume Monitor for SK 21 Vek
+
+## Project Context
+
+Internal corporate tool for ООО «Страховая компания 21 век» that automates daily monitoring of the [hh.ru](http://hh.ru) resume database for six key positions. Output is a weekly digest of best-fit candidates delivered to HR via Notion and Telegram. **Closed corporate use only**, not for public distribution.
+
+**Stakeholders:**
+
+- **Tech lead / single developer**: Alexander Lukin (user of this Claude Code session)
+- **HR owner / business owner**: Tatiana Lesnitskaya
+- **Server / DevOps**: Vladimir Mikhaylov (server provisioning in progress)
+- **PII / security gatekeeper**: Elena Golubeva (DPO)
+
+## Hard Constraints (NEVER violate)
+
+- ❌ **NEVER** call [hh.ru](http://hh.ru) contact-disclosure endpoints. Contacts are opened manually by HR in the [hh.ru](http://hh.ru) UI, never via API. The bot does not request, store, log, or display phone numbers, emails, or any other contact data of candidates.
+- ❌ **NEVER** commit secrets (`client_secret`, OAuth tokens, Telegram bot tokens, Notion API keys, database passwords) to git. Use `.env` files (gitignored) and `.env.example` for documentation.
+- ❌ **NEVER** call vacancy management endpoints (`POST /vacancies`, `PUT /vacancies/{id}`, etc.) — we don't create or edit vacancies through this app.
+- ❌ **NEVER** export the resume database in bulk to any external system. We store only structured snapshots of resumes we have already legitimately viewed via API, for diff detection. We don't redistribute them.
+- ❌ **NEVER** use `print` for logging — use the `structlog` logger configured in `hh_monitor.logging`.
+- ❌ **NEVER** add a Python dependency without explicit approval from the user in the chat. Stick to the stack defined below.
+- ✅ All candidate PII (full name, age, region, work history) stored in DB must be considered sensitive. The DB lives only on Russian-jurisdiction servers (local dev or corporate prod server). No cloud DB outside RF.
+
+## Architecture (4 components)
+
+```mermaid
+flowchart LR
+	A["Agent 1: Parser<br>daily cron"] -->|writes snapshots| DB[("PostgreSQL")]
+	DB -->|reads consecutive snapshots| B["Agent 2: Detector<br>diff engine"]
+	B -->|writes events| DB
+	DB -->|reads events + fit_score| C["Notion Sync Worker"]
+	C -->|upserts pages| N["Notion: База резюме HH"]
+	DB -->|reads hot events| T["Telegram Bot"]
+	T -->|sends alerts| TG["HR Telegram chat"]
+	hh["hh.ru API"] -.->|OAuth + REST| A
 ```
 
-### Choose visibility
+**Agent 1 — Parser** (`hh_monitor.parser`)
 
-🔴 **`Private`** — обязательно поменяй.
+Daily cron job. For each of the 6 saved searches: fetches the result list, then for each new or seen-recently resume calls `GET /resumes/{id}` and persists a full JSON snapshot to `snapshots` table. Respects [hh.ru](http://hh.ru) rate limits and the daily view quota. Resumable on crash (writes a `parser_runs` row).
 
-### Add README
+**Agent 2 — Detector** (`hh_monitor.detector`)
 
-✅ **Включи (`On`)** — пусть GitHub сразу создаст пустой [README.md](http://README.md), мы его наполним в первой сессии Claude Code.
+Runs after parser completes. For each resume with ≥2 snapshots, diffs the latest two and emits typed events: `NEW`, `UPDATED_EXPERIENCE`, `UPDATED_SALARY`, `UPDATED_POSITION`, `REACTIVATED`, `REMOVED`. Writes to `events` table. Idempotent — re-running on the same snapshots produces no duplicate events.
 
-### Add .gitignore
+**Notion Sync Worker** (`hh_monitor.notion_sync`)
 
-✅ Выбери **`Python`** из выпадающего списка. Это сразу закроет от коммита `__pycache__`, `.venv`, `.env`, `*.pyc` и прочий мусор — критично, чтобы случайно не закоммитить `client_secret`.
+For each new event, upserts the corresponding page in the Notion «База резюме HH» database. Maps event type → property values + content. Uses the Notion API (token from env). Cross-references the «Сотрудники» database to flag candidates already employed at SK 21 Vek.
 
-### Add license
+**Telegram Bot** (`hh_monitor.tg_bot`)
 
-✅ Оставь **`No license`**. Для приватного внутреннего проекта лицензия не нужна и даже вредна (default = «все права защищены», что нам и нужно).
+Two modes: (a) hot alerts pushed when `fit_score > 90`, (b) on-demand `/digest` command returning current top-N for each position. Uses `aiogram` v3.
 
----
+## Database Schema (PostgreSQL 16)
 
-## Что нажать
+```sql
+-- Saved hh.ru search definitions (6 positions × parameters)
+CREATE TABLE searches (
+	id             SERIAL PRIMARY KEY,
+	position_code  TEXT NOT NULL UNIQUE,  -- 'branch_director', 'agency_director', etc.
+	position_name  TEXT NOT NULL,
+	hh_params      JSONB NOT NULL,        -- raw hh.ru search query params
+	portrait       JSONB NOT NULL,        -- ideal-candidate profile for fit scoring
+	active         BOOLEAN NOT NULL DEFAULT TRUE,
+	created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-`Create repository`.
+-- Master list of resumes we have ever seen (one row per hh resume_id)
+CREATE TABLE resumes (
+	hh_resume_id   TEXT PRIMARY KEY,
+	first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	notion_page_id TEXT,                  -- set after first Notion sync
+	archived       BOOLEAN NOT NULL DEFAULT FALSE  -- true when removed from hh.ru
+);
+CREATE INDEX idx_resumes_last_seen ON resumes(last_seen_at);
 
-## Что сделать сразу после создания
+-- Full JSON snapshot of resume content at a point in time
+CREATE TABLE snapshots (
+	id             BIGSERIAL PRIMARY KEY,
+	hh_resume_id   TEXT NOT NULL REFERENCES resumes(hh_resume_id),
+	fetched_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	payload        JSONB NOT NULL,        -- exact /resumes/{id} response
+	content_hash   TEXT NOT NULL          -- sha256 of canonical payload, for dedup
+);
+CREATE INDEX idx_snapshots_resume_time ON snapshots(hh_resume_id, fetched_at DESC);
+CREATE UNIQUE INDEX uq_snapshots_dedup ON snapshots(hh_resume_id, content_hash);
 
-1. **Клонируй локально:**
-1. **Открой папку в Claude Code.**
-1. **Дай мне знать, что репо создан и Claude Code открыт** — я сразу пришлю готовый `CLAUDE.md` (контекст проекта для Claude: архитектура, схема БД, контракт с Notion, стиль кода, требования по ПДн) и первый промпт для сессии 1 (скелет проекта + структура папок + `pyproject.toml`).
+-- Detected change events (driven by detector)
+CREATE TABLE events (
+	id             BIGSERIAL PRIMARY KEY,
+	hh_resume_id   TEXT NOT NULL REFERENCES resumes(hh_resume_id),
+	event_type     TEXT NOT NULL,         -- NEW / UPDATED_EXPERIENCE / UPDATED_SALARY / UPDATED_POSITION / REACTIVATED / REMOVED
+	search_id      INTEGER REFERENCES searches(id),
+	details        JSONB,                 -- structured before/after for the change
+	fit_score      INTEGER,               -- 0..100, computed at event emission
+	created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	notion_synced  BOOLEAN NOT NULL DEFAULT FALSE,
+	telegram_sent  BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX idx_events_pending_notion ON events(notion_synced) WHERE notion_synced = FALSE;
+CREATE INDEX idx_events_pending_telegram ON events(telegram_sent) WHERE telegram_sent = FALSE;
 
----
+-- Audit trail of each parser cron execution
+CREATE TABLE parser_runs (
+	id             BIGSERIAL PRIMARY KEY,
+	started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	finished_at    TIMESTAMPTZ,
+	status         TEXT NOT NULL,         -- running / ok / failed / partial
+	searches_run   INTEGER NOT NULL DEFAULT 0,
+	resumes_seen   INTEGER NOT NULL DEFAULT 0,
+	resumes_viewed INTEGER NOT NULL DEFAULT 0,
+	error          TEXT
+);
+```
 
-**Короткая шпаргалка для копипасты в Description:**
+## [HH.ru](http://HH.ru) API Surface
 
-> Внутренний сервис мониторинга базы резюме [hh.ru](http://hh.ru) по корпоративным фильтрам для HR ООО «Страховая компания 21 век». Парсер + детектор изменений + Fit Score + интеграция с Notion и Telegram.
-> 
+**OAuth 2.0 Authorization Code flow (employer)** — see `docs/hh-oauth.md` (to be written in session 1).
 
-**Главное не забудь:** `Public` → `Private`. 🔒
+**Endpoints we use:**
 
-Отлично, обе идеи правильные. И сюрприз: **GitHub у нас уже подключён** к Notion AI — мне не нужно ничего настраивать. Проверю прямо сейчас, вижу ли я твой `hh-monitor`.
+- `GET https://hh.ru/oauth/authorize` — user authorization redirect
+- `POST https://api.hh.ru/oauth/token` — exchange code for token; refresh
+- `GET /me` — verify token works
+- `GET /employers/{employer_id}/managers` — service info
+- `GET /areas` — region dictionary (cache locally, refresh weekly)
+- `GET /dictionaries` — experience / employment / schedule dictionaries (cache locally)
+- `GET /resumes` — **paid, requires DBSearch service** — search by saved params
+- `GET /resumes/{resume_id}` — **paid, counts against view quota** — full resume content
+- `GET /saved_searches/resumes` — list saved searches (optional, we may store params locally instead)
 
-Ответ на оба вопроса — **да, погнали**. И смотри что я сейчас сделал:
+**Endpoints we DO NOT use** (explicit non-goals):
 
-## GitHub — уже работает ✅
+- Any `/resumes/{id}/contacts` / contact-revealing methods — PII boundary
+- Any `POST`/`PUT`/`DELETE` on `/vacancies` — read-only stance on vacancies
+- Any `/negotiations` (responses, invitations) — out of scope
 
-Я только что проверил через подключение Notion AI → GitHub: модуль активен, репо `Sam44ik/hh-monitor` пока пустой (это нормально, ты его только создал), но как только Claude Code запушит первый коммит — я смогу:
+**Rate limiting & errors:**
 
-- читать любые файлы (`loadFile`),
-- искать по всему коду (`grepCode`, `search`),
-- смотреть PR, issues, коммиты.
+- Default: stay under 1 req/sec to [hh.ru](http://hh.ru) API. Use exponential backoff on `429`.
+- `403 quota_exceeded` on `/resumes/{id}` means daily view quota exhausted — abort parser run gracefully, record in `parser_runs.status = 'partial'`, resume next day.
+- `403` without quota mention = service not active for employer — alert via Telegram immediately and abort.
+- `404` on `/resumes/{id}` = resume removed by candidate — mark `resumes.archived = TRUE`, emit `REMOVED` event.
 
-Создавать коммиты/PR от твоего имени я не могу — это только read-доступ. Это нам и нужно: код пишет Claude Code, я смотрю и делаю код-ревью прямо отсюда. **Никакой дополнительной настройки не требуется.**
+## Tech Stack (locked)
 
-## Локально — да, и это правильный путь
+| Layer | Choice |
+| --- | --- |
+| Language | Python 3.12+ |
+| Package manager | Poetry |
+| HTTP client | `httpx` (async) |
+| ORM | SQLAlchemy 2.0 (async) |
+| Migrations | Alembic |
+| DB | PostgreSQL 16 (Docker locally, native on prod server) |
+| CLI | `typer` |
+| Logging | `structlog` (JSON to stdout) |
+| Tests | `pytest`  • `pytest-asyncio` |
+| Lint / format | `ruff` (replaces black + flake8 + isort) |
+| Types | `mypy --strict` on `hh_monitor/*` |
+| Telegram | `aiogram` v3 |
+| Notion | direct `httpx` calls (Notion API v1, no SDK) |
+| Scheduler | Plain Linux cron on prod; `apscheduler` for local dev |
+| Container | Docker Compose for db; Dockerfile for app (added later) |
 
-Маленькая поправка по терминологии: нам не нужно «поднимать сервер» локально. На твоём ноуте мы поднимаем **dev-окружение**:
+**Do not add other dependencies without asking the user.** Specifically: no FastAPI, no Django, no Celery, no Redis (yet), no Pydantic v1, no requests/aiohttp.
 
-- **Python 3.12** + **Poetry** (зависимости)
-- **PostgreSQL 16 в Docker** (одна команда `docker compose up -d db` — БД работает в контейнере, не засоряет ноут)
-- **SQLAlchemy + Alembic** (модель и миграции)
-- **`httpx`** (HTTP-клиент к [hh.ru](http://hh.ru))
-- **`pytest`** + **`ruff`** + **`mypy`** (тесты и качество)
+## Repository Layout
 
-Когда придёт сервер от Михайлова — переносим **те же самые Docker-контейнеры одной командой**. То есть всё, что мы напишем локально, на проде заработает без переписывания.
+```
+hh-monitor/
+├── CLAUDE.md                  # this file
+├── README.md                  # human-facing project intro
+├── pyproject.toml             # Poetry config
+├── poetry.lock
+├── .env.example               # documented env vars; commit this
+├── .env                       # actual secrets; NEVER commit
+├── .gitignore
+├── docker-compose.yml         # local Postgres
+├── alembic.ini
+├── alembic/                   # migrations
+│   └── versions/
+├── hh_monitor/
+│   ├── __init__.py
+│   ├── cli.py                 # typer entry point
+│   ├── config.py              # pydantic-settings, loads .env
+│   ├── logging.py             # structlog setup
+│   ├── db/
+│   │   ├── __init__.py
+│   │   ├── engine.py          # SQLAlchemy async engine
+│   │   └── models.py          # ORM models matching the schema above
+│   ├── hh/
+│   │   ├── __init__.py
+│   │   ├── oauth.py           # token storage, refresh
+│   │   ├── client.py          # httpx wrapper with retry/backoff
+│   │   └── endpoints.py       # typed methods: me(), search_resumes(), get_resume()
+│   ├── parser/
+│   │   ├── __init__.py
+│   │   └── run.py             # main parser loop
+│   ├── detector/
+│   │   ├── __init__.py
+│   │   ├── diff.py            # pure functions: snapshot diff -> events
+│   │   └── run.py
+│   ├── fit/
+│   │   ├── __init__.py
+│   │   ├── rules.py           # v1 rule-based scorer
+│   │   └── portrait.py        # portrait schema + loader
+│   ├── notion_sync/
+│   │   ├── __init__.py
+│   │   └── run.py
+│   └── tg_bot/
+│       ├── __init__.py
+│       └── bot.py
+├── tests/
+│   ├── conftest.py
+│   ├── fixtures/              # sample hh.ru JSON responses
+│   └── test_*.py
+└── docs/
+	├── hh-oauth.md
+	├── portrait-spec.md         # how the portrait JSON is structured
+	└── decisions.md             # ADRs
+```
 
-Что можно сделать **прямо сейчас**, не дожидаясь `client_id` от модерации hh:
+## Conventions
 
-1. Скелет проекта, Poetry, Docker Compose, Postgres, миграции.
-1. Схема БД (resumes / snapshots / events / searches).
-1. HTTP-клиент с моками [hh.ru](http://hh.ru) (тестируем на фейковых JSON).
-1. Алгоритм diff снапшотов → events.
-1. Notion sync воркер (на нашу базу резюме в Notion — токен Notion уже есть).
-1. Fit Score v1 — правила-классификатор.
+**Code style:**
 
-Когда придёт `client_id` (1–3 дня) — подключим живой OAuth и реальный hh API в уже готовый каркас.
+- All new modules: type hints on every function signature.
+- Async by default for any I/O.
+- Pure functions where possible (especially `detector.diff` and `fit.rules`) — keep them DB-free and easy to unit-test.
+- Docstrings in Russian or English are both fine, but consistent within a module.
+- Errors: prefer typed exceptions from `hh_monitor.errors`, never bare `Exception`.
 
-## Сейчас сделаю две вещи
+**Tests:**
 
-1. **Создам страницу `CLAUDE.md` в Notion** внутри проекта «Мониторинг резюме HH» — это будет инструкция для Claude Code: архитектура, схема БД, стиль кода, что НЕ делать (ПДн). Ты её скопируешь как файл `CLAUDE.md` в корень репо — Claude Code автоматически прочитает её и будет следовать.
-1. **Создам страницу с планом сессий и стартовым промптом** — чтобы ты открыл, скопировал, вставил в Claude Code и работа сразу пошла.
+- Every PR adds tests for new logic. Target: ≥80% coverage on `detector/`, `fit/`, `hh/oauth.py`.
+- HTTP is mocked with `respx`. No real [hh.ru](http://hh.ru) calls in tests.
+- DB is `pytest-postgresql` ephemeral (or a per-test transaction rollback).
 
-Делаю.
+**Commits:**
 
-🚨 **СТОП. ВАЖНОЕ:**
+- Conventional commits: `feat:`, `fix:`, `chore:`, `refactor:`, `test:`, `docs:`.
+- Each commit message: brief subject in English, ≤72 chars. Body in Russian or English as needed.
+- One logical change per commit.
 
-Ты написал «получили Client Id и Client Secret» — это отлично, но **не вставляй Client Secret в этот чат, ни в Notion, ни в любое сообщение**. Я его сейчас НЕ вижу (в твоём сообщении только факт получения, без значений) — и это правильно. Если случайно скопировал куда-то — лучше сразу пересоздай в карточке приложения на [dev.hh.ru](http://dev.hh.ru), проще, чем чистить логи.
+**Branches:**
 
-**Куда положить:**
+- `main` — protected, always green.
+- Feature work on `feat/<short-name>`. PR to `main`. Squash-merge.
 
-- `Client Secret` → только в локальный файл `.env` в корне репо (он в `.gitignore` через шаблон Python, который ты выбрал — не закоммитится)
-- `Client ID` → тоже в `.env`, но его можно показывать (не страшно, если попадёт в логи)
-- Резервная копия `Client Secret` → менеджер паролей (1Password, Bitwarden, Apple Keychain — что используешь)
+## How Claude Code Should Work
 
-Кстати, заявка прошла модерацию за 2 дня вместо ожидаемых 3 — быстро.
+1. **Read this file first** at the start of every session.
+2. **Confirm the plan** with the user before making large changes (>3 files or any new dependency).
+3. **Run tests** after every meaningful change: `poetry run pytest`.
+4. **Run lint** before declaring a task done: `poetry run ruff check . && poetry run ruff format --check . && poetry run mypy hh_monitor`.
+5. **Commit in small, logical steps**, not one giant commit at the end.
+6. **Ask for clarification** when business rules (e.g. fit-score thresholds, event types, portrait fields) are ambiguous. Don't guess.
+7. **When in doubt about [hh.ru](http://hh.ru) API behavior**, fetch the official docs from `https://github.com/hhru/api/blob/master/docs/` and cite which doc file in the PR description.
+8. **Don't touch `CLAUDE.md`** without asking the user — it's the source of truth maintained jointly with the Notion AI assistant («Сэм»).
 
----
+## Environment Variables (`.env.example`)
 
-Прежде чем продолжу — давай зафиксирую то, что я только что сделал (`CLAUDE.md`), а потом создам стартовый промпт для первой сессии Claude Code, чтобы ты сразу начал.
+```bash
+# hh.ru OAuth (filled in after app moderation)
+HH_CLIENT_ID=
+HH_CLIENT_SECRET=
+HH_REDIRECT_URI=https://localhost:8080/callback
+HH_USER_AGENT="SK21Vek HR Monitor (luk44646@gmail.com)"
 
-Теперь создаю промпт для сессии 1 — параллельно расскажу, что ты делаешь сразу после её завершения.
+# Database
+DATABASE_URL=postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor
 
-Готово — все материалы для старта собраны.
+# Notion
+NOTION_API_TOKEN=
+NOTION_DATABASE_RESUMES_ID=
+NOTION_DATABASE_EMPLOYEES_ID=
 
-## Что делать прямо сейчас (по порядку)
+# Telegram
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_HR_CHAT_ID=
 
-1. **Открой обе страницы** ([CLAUDE.md](http://CLAUDE.md) и план сессий) в соседних вкладках.
-1. **В корне репо `hh-monitor` создай файл `CLAUDE.md`** — скопируй туда содержимое страницы [CLAUDE.md](http://CLAUDE.md) (всё ниже горизонтальной черты). Пушни первым коммитом `chore: add CLAUDE.md`. После этого я смогу прочитать его прямо из GitHub.
-1. **Создай файл `.env` локально** (НЕ коммитить!) и положи в него:
-1. **Открой Claude Code в папке репо**, скопируй стартовый промпт сессии 1 целиком из соседней страницы, вставь и нажми Enter.
+# Runtime
+ENV=local                     # local | prod
+LOG_LEVEL=INFO
+```
 
-## Что я делаю параллельно
-
-- Когда ты пушнёшь первый коммит — я зайду в репо через GitHub-подключение и проверю, что `CLAUDE.md` лёг правильно.
-- По ходу сессии — если Claude Code где-то застрянет или начнёт делать не то, скидывай мне сюда либо ошибку, либо вопрос. Я смотрю логику и подсказываю.
-- Когда сессия 1 завершится — я прочитаю код прямо из GitHub, сделаю код-ревью и подготовлю промпт сессии 2 (HH API клиент + OAuth, где как раз пригодятся твои `client_id` / `client_secret`).
-
-## Что важно помнить
-
-- **Сессия 1 НЕ трогает OAuth и HH API** — только каркас, БД, миграции. Это специально: чтобы убедиться, что окружение работает, до того как лезть в живые API-вызовы.
-- **Если Claude Code попытается реализовать парсер в первой сессии** — останови его словами «фокус на скелет, OAuth в следующей сессии».
-- **Client Secret из менеджера паролей в `.env`, и больше нигде** — ни в коммитах, ни в чате, ни в скриншотах.
-
-Поехали. Жду «сессия 1 готова» либо вопросы по ходу.
+When prod env is provisioned by Mikhaylov, only `DATABASE_URL`, `HH_REDIRECT_URI`, and `ENV=prod` change. Application code stays identical.
