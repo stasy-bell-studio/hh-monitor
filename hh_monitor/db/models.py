@@ -112,3 +112,30 @@ class ParserRun(Base):
     resumes_seen: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     resumes_viewed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class OAuthToken(Base):
+    __tablename__ = "oauth_tokens"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    token_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="bearer")
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
+    )
+
+
+class DictionaryCache(Base):
+    __tablename__ = "dictionaries_cache"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    payload: Mapped[dict[str, Any] | list[Any]] = mapped_column(JSONB, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
+    )
