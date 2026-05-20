@@ -9,7 +9,7 @@
 2. hh.ru → redirect_uri         GET https://localhost:8080/callback?code=AUTH_CODE&state=...
                                  Получаем одноразовый code
 
-3. Приложение → api.hh.ru       POST /oauth/token  (grant_type=authorization_code, code=...)
+3. Приложение → hh.ru           POST /oauth/token  (grant_type=authorization_code, code=...)
                                  Получаем access_token + refresh_token
 ```
 

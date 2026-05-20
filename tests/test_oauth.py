@@ -13,7 +13,7 @@ from hh_monitor.hh.oauth import (
     refresh_access_token,
 )
 
-_TOKEN_URL = "https://api.hh.ru/oauth/token"
+_TOKEN_URL = "https://hh.ru/oauth/token"
 
 _FAKE_TOKEN_RESPONSE = {
     "access_token": "acc_test",

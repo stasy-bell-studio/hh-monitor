@@ -10,7 +10,7 @@ from hh_monitor.config import settings
 from hh_monitor.db.models import OAuthToken
 from hh_monitor.errors import HHOAuthError
 
-_HH_TOKEN_URL = "https://api.hh.ru/oauth/token"
+_HH_TOKEN_URL = "https://hh.ru/oauth/token"
 _HH_AUTHORIZE_URL = "https://hh.ru/oauth/authorize"
 
 

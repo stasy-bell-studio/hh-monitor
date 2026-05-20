@@ -121,7 +121,7 @@ CREATE TABLE parser_runs (
 **Endpoints we use:**
 
 - `GET https://hh.ru/oauth/authorize` — user authorization redirect
-- `POST https://api.hh.ru/oauth/token` — exchange code for token; refresh
+- `POST https://hh.ru/oauth/token` — exchange code for token; refresh
 - `GET /me` — verify token works
 - `GET /employers/{employer_id}/managers` — service info
 - `GET /areas` — region dictionary (cache locally, refresh weekly)
