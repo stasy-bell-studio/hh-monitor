@@ -1,0 +1,52 @@
+[tool.poetry]
+name = "hh-monitor"
+version = "0.1.0"
+description = "HR Resume Monitor for SK 21 Vek"
+authors = ["Alexander Lukin <luk44646@gmail.com>"]
+readme = "README.md"
+packages = [{ include = "hh_monitor" }]
+
+[tool.poetry.scripts]
+hh-monitor = "hh_monitor.cli:app"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+httpx = "^0.28"
+sqlalchemy = { version = "^2.0", extras = ["asyncio"] }
+asyncpg = "^0.30"
+alembic = "^1.14"
+typer = "^0.15"
+structlog = "^25.1"
+pydantic-settings = "^2.7"
+aiogram = "^3.18"
+greenlet = "^3.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-asyncio = "^0.25"
+respx = "^0.22"
+ruff = "^0.9"
+mypy = "^1.14"
+sqlalchemy = { version = "^2.0", extras = ["mypy"] }
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/versions/*.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["sqlalchemy.ext.mypy.plugin"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
