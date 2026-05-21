@@ -1,14 +1,18 @@
 import asyncio
+import json
 import secrets
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import typer
 
 from hh_monitor.config import settings
 from hh_monitor.db.engine import async_session_factory
-from hh_monitor.db.models import OAuthToken
+from hh_monitor.db.models import OAuthToken, Snapshot
 from hh_monitor.errors import HHApiError
+from hh_monitor.fit.portrait import load_portrait
+from hh_monitor.fit.rules import compute as fit_compute
 from hh_monitor.hh import cache, endpoints
 from hh_monitor.hh.client import HHClient
 from hh_monitor.hh.oauth import (
@@ -113,6 +117,91 @@ async def _dictionaries_refresh() -> None:
         await cache.save_dictionary(session, "areas", areas)
 
     typer.echo(f"Cached: dictionaries ({len(dicts)} keys), areas ({len(areas)} entries).")
+
+
+# ── detector ─────────────────────────────────────────────────────────────────
+
+detector_app = typer.Typer(help="Resume change detector commands")
+app.add_typer(detector_app, name="detector")
+
+
+@detector_app.command("run")
+def detector_run() -> None:
+    """Detect changes in resume snapshots and persist events to DB."""
+    counts = asyncio.run(_detector_run())
+    typer.echo(
+        f"Detector finished: processed={counts['processed']}, "
+        f"emitted={counts['emitted']}, "
+        f"skipped_idempotent={counts['skipped_idempotent']}"
+    )
+
+
+async def _detector_run() -> dict[str, int]:
+    from hh_monitor.detector.run import run_detector
+
+    async with async_session_factory() as session:
+        return await run_detector(session)
+
+
+# ── fit ───────────────────────────────────────────────────────────────────────
+
+fit_app = typer.Typer(help="Fit scoring commands")
+app.add_typer(fit_app, name="fit")
+
+
+@fit_app.command("score")
+def fit_score(
+    hh_resume_id: str = typer.Argument(..., help="HH resume ID to score"),
+    portrait_path: Path = typer.Option(  # noqa: B008
+        ..., "--portrait", "-p", help="Path to portrait JSON file"
+    ),
+) -> None:
+    """Score the latest snapshot of a resume against a portrait."""
+    try:
+        portrait = load_portrait(portrait_path)
+    except (FileNotFoundError, OSError) as exc:
+        typer.echo(f"Error: cannot read portrait file: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    try:
+        result = asyncio.run(_load_latest_snapshot(hh_resume_id))
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    if result is None:
+        typer.echo(f"Error: no snapshot found for resume '{hh_resume_id}'", err=True)
+        raise typer.Exit(1)
+
+    score, breakdown = fit_compute(result, portrait)
+    typer.echo(f"Resume:   {hh_resume_id}")
+    typer.echo(f"Portrait: {portrait.position_name} ({portrait.position_code})")
+    typer.echo(f"Score:    {score}/100")
+    typer.echo("")
+    typer.echo("Breakdown:")
+    for rule, delta in breakdown.items():
+        sign = "+" if delta > 0 else ""
+        typer.echo(f"  {rule:<25} {sign}{delta}")
+
+
+async def _load_latest_snapshot(hh_resume_id: str) -> dict | None:  # type: ignore[type-arg]
+    from sqlalchemy import select
+
+    async with async_session_factory() as session:
+        row = await session.execute(
+            select(Snapshot)
+            .where(Snapshot.hh_resume_id == hh_resume_id)
+            .order_by(Snapshot.fetched_at.desc())
+            .limit(1)
+        )
+        snap = row.scalar_one_or_none()
+        if snap is None:
+            return None
+        payload = snap.payload
+        # SQLAlchemy may return dict directly (JSONB) or a string; normalise.
+        if isinstance(payload, str):
+            return json.loads(payload)
+        return payload
 
 
 if __name__ == "__main__":
