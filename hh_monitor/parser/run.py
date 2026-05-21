@@ -7,11 +7,11 @@ Pure pipeline step — no fit-scoring, no events.  Those are handled by
 import asyncio
 import hashlib
 import json
-from datetime import UTC, datetime
+from contextlib import suppress
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,15 +46,22 @@ async def _upsert_resume(session: AsyncSession, resume_id: str) -> None:
     await session.execute(stmt)
 
 
-async def _get_last_hash(session: AsyncSession, resume_id: str) -> str | None:
-    """Return content_hash of the most recent snapshot, or None."""
+async def _snapshot_exists(session: AsyncSession, resume_id: str, content_hash: str) -> bool:
+    """Return True if *any* snapshot with this (hh_resume_id, content_hash) exists.
+
+    Checks against the full historical set, not just the most recent snapshot.
+    This prevents IntegrityError when a resume reverts to a previously seen state
+    (A → B → A), where the unique constraint ``uq_snapshots_dedup`` would fire.
+    """
     result = await session.execute(
-        select(Snapshot.content_hash)
-        .where(Snapshot.hh_resume_id == resume_id)
-        .order_by(Snapshot.fetched_at.desc())
+        select(Snapshot.id)
+        .where(
+            Snapshot.hh_resume_id == resume_id,
+            Snapshot.content_hash == content_hash,
+        )
         .limit(1)
     )
-    return result.scalar_one_or_none()
+    return result.scalar_one_or_none() is not None
 
 
 async def run_parser(
@@ -68,7 +75,8 @@ async def run_parser(
 
     Algorithm:
       1. Load the Search row; raise SearchNotFoundError if absent.
-      2. Create a ParserRun row with status='running'.
+      2. Create a ParserRun row with status='running' and commit it immediately
+         so it is durable before any snapshot work begins.
       3. Paginate GET /resumes (up to max_pages pages).
          For each resume in the result list:
            - sleep(_sleep) for rate-limiting (2 req/sec at default 0.5 s).
@@ -77,8 +85,13 @@ async def run_parser(
              detector can emit REMOVED via diff_snapshots(prev=full, curr=empty).
            - On quota/service errors: abort and commit partial state.
            - On other HHApiError: log, increment errors, continue.
-           - Dedup: skip INSERT if content_hash matches latest snapshot.
-      4. UPDATE ParserRun with final counts; commit.
+           - Dedup: skip INSERT if (hh_resume_id, content_hash) already exists
+             anywhere in the table (not just in the most recent snapshot).
+      4. Core UPDATE ParserRun with final counts; commit.
+         On unexpected Exception: rollback broken transaction, Core UPDATE with
+         status='failed' + error message, commit, re-raise.
+         On CancelledError/KeyboardInterrupt: rollback, Core UPDATE with
+         status='cancelled', commit, re-raise.
 
     Returns a dict:
       resumes_seen, snapshots_inserted, snapshots_skipped_dedup,
@@ -90,15 +103,20 @@ async def run_parser(
         raise SearchNotFoundError(f"Search id={search_id} not found")
 
     log = logger.bind(search_id=search_id)
+    # Capture search params before the early commit below expires the ORM object.
+    hh_params: dict[str, Any] = search.hh_params
 
-    # ── 2. Create parser_run ──────────────────────────────────────────────────
+    # ── 2. Create parser_run; commit immediately so rollbacks cannot erase it ─
     parser_run = ParserRun(status="running", searches_run=1)
     session.add(parser_run)
     await session.flush()  # populate auto-generated id
-    run_id: int = parser_run.id  # capture before commit() expires the object
+    run_id: int = parser_run.id  # capture before commit expires the object
+    await session.commit()  # durable before pagination begins; expires search + parser_run
 
     log.info("parser.start", parser_run_id=run_id)
 
+    # All counters live exclusively in local variables.  The ORM object is
+    # expired after the early commit — never touch parser_run attributes again.
     resumes_seen = 0
     snapshots_inserted = 0
     snapshots_skipped = 0
@@ -110,7 +128,7 @@ async def run_parser(
         # ── 3. Paginate ───────────────────────────────────────────────────────
         for page in range(max_pages):
             try:
-                resp = await search_resumes(hh_client, search.hh_params, page=page)
+                resp = await search_resumes(hh_client, hh_params, page=page)
             except (HHQuotaExceeded, HHServiceNotActive) as exc:
                 log.warning("parser.abort_on_search", reason=type(exc).__name__, page=page)
                 abort_exc = exc
@@ -157,10 +175,10 @@ async def run_parser(
                 # Upsert resume master row
                 await _upsert_resume(session, resume_id)
 
-                # Dedup: skip if content unchanged
+                # Dedup: skip if this (resume_id, content_hash) already exists
+                # anywhere in the table — not just in the most recent snapshot.
                 content_hash = _hash(payload)
-                last_hash = await _get_last_hash(session, resume_id)
-                if last_hash == content_hash:
+                if await _snapshot_exists(session, resume_id, content_hash):
                     snapshots_skipped += 1
                     log.info("parser.dedup_skipped", resume_id=resume_id)
                     continue
@@ -183,15 +201,23 @@ async def run_parser(
                 break
 
         # ── 4. Finalise parser_run and commit ─────────────────────────────────
+        #
+        # Core UPDATE (not ORM assignment) because parser_run is expired after
+        # the early commit in step 2.
         status = "quota_exceeded" if abort_exc else ("ok" if errors == 0 else "partial_errors")
 
-        parser_run.finished_at = datetime.now(UTC)
-        parser_run.status = status
-        parser_run.resumes_seen = resumes_seen
-        parser_run.resumes_viewed = snapshots_inserted + errors
-        parser_run.snapshots_inserted = snapshots_inserted
-        parser_run.snapshots_skipped = snapshots_skipped
-
+        await session.execute(
+            update(ParserRun)
+            .where(ParserRun.id == run_id)
+            .values(
+                finished_at=func.now(),
+                status=status,
+                resumes_seen=resumes_seen,
+                resumes_viewed=snapshots_inserted + errors,
+                snapshots_inserted=snapshots_inserted,
+                snapshots_skipped=snapshots_skipped,
+            )
+        )
         await session.commit()
 
         log.info(
@@ -204,21 +230,8 @@ async def run_parser(
             errors=errors,
         )
 
-        if abort_exc:
-            raise abort_exc  # re-raise so CLI can show user-friendly message
-
-        return {
-            "resumes_seen": resumes_seen,
-            "snapshots_inserted": snapshots_inserted,
-            "snapshots_skipped_dedup": snapshots_skipped,
-            "errors": errors,
-            "parser_run_id": run_id,
-            "resume_ids": resume_ids,
-        }
-
     except (asyncio.CancelledError, KeyboardInterrupt):
         # ── Graceful cancellation (Ctrl+C / task.cancel()) ────────────────────
-        # Commit whatever partial state we have so the run is resumable next day.
         log.info(
             "parser.cancelled",
             parser_run_id=run_id,
@@ -226,11 +239,61 @@ async def run_parser(
             snapshots_skipped=snapshots_skipped,
             errors=errors,
         )
-        parser_run.finished_at = datetime.now(UTC)
-        parser_run.status = "cancelled"
-        parser_run.resumes_seen = resumes_seen
-        parser_run.resumes_viewed = snapshots_inserted + errors
-        parser_run.snapshots_inserted = snapshots_inserted
-        parser_run.snapshots_skipped = snapshots_skipped
+        with suppress(Exception):  # session may be in broken state; don't mask the real exc
+            await session.rollback()
+        await session.execute(
+            update(ParserRun)
+            .where(ParserRun.id == run_id)
+            .values(
+                finished_at=func.now(),
+                status="cancelled",
+                resumes_seen=resumes_seen,
+                resumes_viewed=snapshots_inserted + errors,
+                snapshots_inserted=snapshots_inserted,
+                snapshots_skipped=snapshots_skipped,
+            )
+        )
         await session.commit()
         raise
+
+    except Exception as e:
+        # ── Unexpected failure (IntegrityError, network error, bug, …) ────────
+        with suppress(Exception):  # session may be in broken state; don't mask the real exc
+            await session.rollback()
+        await session.execute(
+            update(ParserRun)
+            .where(ParserRun.id == run_id)
+            .values(
+                finished_at=func.now(),
+                status="failed",
+                resumes_seen=resumes_seen,
+                resumes_viewed=snapshots_inserted + errors,
+                snapshots_inserted=snapshots_inserted,
+                snapshots_skipped=snapshots_skipped,
+                error=repr(e)[:500],
+            )
+        )
+        await session.commit()
+        log.error(
+            "parser.failed",
+            parser_run_id=run_id,
+            resumes_seen=resumes_seen,
+            snapshots_inserted=snapshots_inserted,
+            snapshots_skipped=snapshots_skipped,
+            error=repr(e),
+        )
+        raise
+
+    # ── Re-raise quota/service abort *outside* the try/except so it is not
+    # caught by the except-Exception handler above.
+    if abort_exc:
+        raise abort_exc
+
+    return {
+        "resumes_seen": resumes_seen,
+        "snapshots_inserted": snapshots_inserted,
+        "snapshots_skipped_dedup": snapshots_skipped,
+        "errors": errors,
+        "parser_run_id": run_id,
+        "resume_ids": resume_ids,
+    }
