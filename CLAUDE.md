@@ -20,6 +20,7 @@ Internal corporate tool for ООО «Страховая компания 21 ве
 - ❌ **NEVER** use `print` for logging — use the `structlog` logger configured in `hh_monitor.logging`.
 - ❌ **NEVER** add a Python dependency without explicit approval from the user in the chat. Stick to the stack defined below.
 - ✅ All candidate PII (full name, age, region, work history) stored in DB must be considered sensitive. The DB lives only on Russian-jurisdiction servers (local dev or corporate prod server). No cloud DB outside RF.
+- ⚠️ `api.hh.ru` геофильтрует исходящий трафик: с западного IP запросы молча зависают на TLS handshake. Для smoke-тестов парсера переключай VPN на РФ. Тесты на respx-моках и Notion API работают откуда угодно.
 
 ## Architecture (4 components)
 
@@ -71,7 +72,9 @@ CREATE TABLE resumes (
 	first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	notion_page_id TEXT,                  -- set after first Notion sync
-	archived       BOOLEAN NOT NULL DEFAULT FALSE  -- true when removed from hh.ru
+	archived       BOOLEAN NOT NULL DEFAULT FALSE, -- true when removed from hh.ru
+	excluded       BOOLEAN NOT NULL DEFAULT FALSE, -- true когда HR ставит "Свой / исключить" в Notion
+	excluded_at    TIMESTAMPTZ                     -- когда чекбокс был замечен sync'ом
 );
 CREATE INDEX idx_resumes_last_seen ON resumes(last_seen_at);
 
@@ -106,12 +109,33 @@ CREATE TABLE parser_runs (
 	id             BIGSERIAL PRIMARY KEY,
 	started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	finished_at    TIMESTAMPTZ,
-	status         TEXT NOT NULL,         -- running / ok / failed / partial
+	status         TEXT NOT NULL,         -- running / ok / partial / partial_errors / quota_exceeded / cancelled / failed
 	searches_run   INTEGER NOT NULL DEFAULT 0,
 	resumes_seen   INTEGER NOT NULL DEFAULT 0,
 	resumes_viewed INTEGER NOT NULL DEFAULT 0,
 	error          TEXT
 );
+
+-- OAuth-токены для hh.ru (фактически одна строка; refresh обновляет её in place)
+CREATE TABLE oauth_tokens (
+	id             SERIAL PRIMARY KEY,
+	access_token   TEXT NOT NULL,
+	refresh_token  TEXT NOT NULL,
+	token_type     TEXT NOT NULL DEFAULT 'bearer',
+	expires_at     TIMESTAMPTZ NOT NULL,
+	scope          TEXT,
+	created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Кеш справочников hh.ru (areas, dictionaries) — рефрешим раз в неделю
+CREATE TABLE dictionaries_cache (
+	key            TEXT PRIMARY KEY,      -- 'dictionaries' | 'areas'
+	payload        JSONB NOT NULL,
+	fetched_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Примечание: модели ORM используют TIMESTAMP(timezone=True); SQL выше — эквивалентная иллюстрация на чистом DDL.
 ```
 
 ## [HH.ru](http://HH.ru) API Surface
@@ -138,7 +162,7 @@ CREATE TABLE parser_runs (
 
 **Rate limiting & errors:**
 
-- Default: stay under 1 req/sec to [hh.ru](http://hh.ru) API. Use exponential backoff on `429`.
+- Default: stay under 2 req/sec (parser использует `sleep(0.5)` между detail-fetches). Exponential backoff на `429`, `Retry-After` honored.
 - `403 quota_exceeded` on `/resumes/{id}` means daily view quota exhausted — abort parser run gracefully, record in `parser_runs.status = 'partial'`, resume next day.
 - `403` without quota mention = service not active for employer — alert via Telegram immediately and abort.
 - `404` on `/resumes/{id}` = resume removed by candidate — mark `resumes.archived = TRUE`, emit `REMOVED` event.
@@ -150,7 +174,7 @@ CREATE TABLE parser_runs (
 | Language | Python 3.12+ |
 | Package manager | Poetry |
 | HTTP client | `httpx` (async) |
-| ORM | SQLAlchemy 2.0 (async) |
+| ORM | SQLAlchemy 2.0 (async) + `greenlet` (явная зависимость) |
 | Migrations | Alembic |
 | DB | PostgreSQL 16 (Docker locally, native on prod server) |
 | CLI | `typer` |
@@ -167,7 +191,7 @@ CREATE TABLE parser_runs (
 
 ## Repository Layout
 
-```
+```jsx
 hh-monitor/
 ├── CLAUDE.md                  # this file
 ├── README.md                  # human-facing project intro
@@ -179,12 +203,20 @@ hh-monitor/
 ├── docker-compose.yml         # local Postgres
 ├── alembic.ini
 ├── alembic/                   # migrations
+│   ├── env.py                 # async; URL передаётся через cfg.attributes["sqlalchemy_url"]
 │   └── versions/
+├── scripts/
+│   ├── init-test-db.sh        # создаёт hh_monitor_test при первой инициализации volume Postgres
+│   └── seed_fixtures.py       # dev-only: засеивает синтетические resumes для detector smoke
+├── portraits/                 # JSON-портреты целевых должностей
+│   ├── _README.md
+│   └── branch_director.json
 ├── hh_monitor/
 │   ├── __init__.py
 │   ├── cli.py                 # typer entry point
 │   ├── config.py              # pydantic-settings, loads .env
 │   ├── logging.py             # structlog setup
+│   ├── errors.py              # типизированные HH-исключения (HHApiError + подклассы)
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── engine.py          # SQLAlchemy async engine
@@ -193,14 +225,16 @@ hh-monitor/
 │   │   ├── __init__.py
 │   │   ├── oauth.py           # token storage, refresh
 │   │   ├── client.py          # httpx wrapper with retry/backoff
-│   │   └── endpoints.py       # typed methods: me(), search_resumes(), get_resume()
+│   │   ├── endpoints.py       # typed methods: me(), dictionaries_raw(), areas_raw(), search_resumes(), get_resume()
+│   │   └── cache.py           # dictionaries_cache layer (areas + dictionaries)
 │   ├── parser/
 │   │   ├── __init__.py
 │   │   └── run.py             # main parser loop
 │   ├── detector/
 │   │   ├── __init__.py
+│   │   ├── types.py           # EventType enum, DetectedEvent dataclass
 │   │   ├── diff.py            # pure functions: snapshot diff -> events
-│   │   └── run.py
+│   │   └── run.py             # DB-обвязка; idempotent через events.details->>'snapshot_id'
 │   ├── fit/
 │   │   ├── __init__.py
 │   │   ├── rules.py           # v1 rule-based scorer
@@ -218,6 +252,7 @@ hh-monitor/
 └── docs/
 	├── hh-oauth.md
 	├── portrait-spec.md         # how the portrait JSON is structured
+	├── parser.md                # парсер: pipeline modes, cancellation, dedup
 	└── decisions.md             # ADRs
 ```
 
@@ -267,13 +302,17 @@ HH_CLIENT_ID=
 HH_CLIENT_SECRET=
 HH_REDIRECT_URI=https://localhost:8080/callback
 HH_USER_AGENT="SK21Vek HR Monitor (luk44646@gmail.com)"
+HH_EMPLOYER_ID=186503        # ООО "Страховая компания 21 век"
+HH_MANAGER_ID=               # service info from GET /employers/{id}/managers
+HH_USER_ID=                  # current user from /me
 
 # Database
 DATABASE_URL=postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor
+TEST_DATABASE_URL=postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor_test
 
 # Notion
 NOTION_API_TOKEN=
-NOTION_DATABASE_RESUMES_ID=
+NOTION_DATABASE_RESUMES_ID=  # см. "База резюме HH" в этом воркспейсе — ID из URL базы
 NOTION_DATABASE_EMPLOYEES_ID=
 
 # Telegram
@@ -286,3 +325,5 @@ LOG_LEVEL=INFO
 ```
 
 When prod env is provisioned by Mikhaylov, only `DATABASE_URL`, `HH_REDIRECT_URI`, and `ENV=prod` change. Application code stays identical.
+
+Notion-база для sync (сессия 5+): [](https://www.notion.so/38c1315f583e452297aaa297e9942756?pvs=21) (в воркспейсе «Сэм», parent — корневая страница проекта). `NOTION_DATABASE_RESUMES_ID` — ID из URL базы.
