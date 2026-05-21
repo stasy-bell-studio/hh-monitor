@@ -64,6 +64,25 @@ If `HH_EMPLOYER_ID` is set in `.env`, it is merged into every
 resumes that responded to your employer's vacancies.  The OAuth token already
 restricts access, so this parameter is optional — omit it for broad searches.
 
+## Cancellation
+
+`run_parser` handles both `asyncio.CancelledError` (task cancel, e.g. via
+`asyncio.run()` + Ctrl+C) and `KeyboardInterrupt` (direct SIGINT on the main
+thread, which Python 3.14 does not always convert to `CancelledError`).
+
+On either signal the handler:
+
+1. Logs `parser.cancelled` with partial counts.
+2. Sets `parser_run.status = 'cancelled'` and `finished_at = NOW()`.
+3. Records the partial snapshot and error counts.
+4. Calls `await session.commit()` to persist partial state.
+5. Re-raises the original exception so `asyncio.run()` can propagate it.
+
+This means a run interrupted mid-way leaves the DB in a consistent state:
+resumes already fetched are stored, and the `parser_runs` row is marked
+`'cancelled'` rather than left as `'running'`.  The next scheduled run will
+resume from scratch (no resume-level checkpointing in v1).
+
 ## ParserRun status values
 
 | status            | meaning                                      |
@@ -72,6 +91,24 @@ restricts access, so this parameter is optional — omit it for broad searches.
 | `ok`              | completed with zero errors                   |
 | `partial_errors`  | completed but some resume fetches failed     |
 | `quota_exceeded`  | aborted by daily view quota (403)            |
+| `cancelled`       | interrupted by Ctrl+C / SIGINT               |
+
+## Pipeline modes
+
+The `pipeline run` command wraps the full flow: parse → detect → score → top-N.
+
+```bash
+# Normal mode: fetch fresh data from hh.ru, then score
+poetry run hh-monitor pipeline run --search-id 1 --top 10
+
+# No-parse mode: skip hh.ru API, re-score existing snapshots
+poetry run hh-monitor pipeline run --search-id 1 --top 10 --no-parse
+```
+
+`--no-parse` is useful when iterating on a portrait without burning the daily
+view quota.  It queries all resume IDs in `resumes`, scores the most recent
+snapshot for each, and prints the top-N table — without making a single call
+to hh.ru.
 
 ## CLI usage
 
@@ -88,8 +125,11 @@ poetry run hh-monitor searches list
 # Parse resumes for search id=1
 poetry run hh-monitor parse run --search-id 1 --max-pages 5
 
-# Full pipeline: parse → detect → score → top-N
+# Full pipeline: parse → detect → score → top-N (normal mode)
 poetry run hh-monitor pipeline run --search-id 1 --top 10
+
+# Full pipeline: skip fetch, re-score existing snapshots
+poetry run hh-monitor pipeline run --search-id 1 --top 10 --no-parse
 ```
 
 ## Return value of `run_parser`
