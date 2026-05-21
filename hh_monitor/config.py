@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor"
+    test_database_url: str | None = None  # set in .env for test isolation; prod ignores this
 
     # Notion
     notion_api_token: str | None = None

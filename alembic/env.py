@@ -18,7 +18,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Allow programmatic override via cfg.attributes["sqlalchemy_url"] (e.g. from
+# test fixtures).  Falls back to settings.database_url for normal CLI usage.
+_db_url: str = config.attributes.get("sqlalchemy_url") or settings.database_url
+config.set_main_option("sqlalchemy.url", _db_url)
 
 target_metadata = Base.metadata
 
