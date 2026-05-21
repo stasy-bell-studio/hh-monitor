@@ -111,6 +111,8 @@ class ParserRun(Base):
     searches_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     resumes_seen: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     resumes_viewed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    snapshots_inserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    snapshots_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

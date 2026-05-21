@@ -28,6 +28,13 @@ class HHRateLimit(HHApiError):
         super().__init__(status_code, body)
 
 
+class SearchNotFoundError(Exception):
+    """Raised when a Search row with the given id does not exist."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class HHOAuthError(HHApiError):
     def __init__(
         self, message: str, status_code: int = 401, body: dict[str, Any] | str = ""
