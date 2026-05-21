@@ -20,3 +20,29 @@ cp .env.example .env  # заполнить HH_CLIENT_ID, HH_CLIENT_SECRET и т.
 poetry run alembic upgrade head
 poetry run pytest -v
 ```
+
+## Запуск тестов
+
+Тесты ходят в отдельную БД `hh_monitor_test`, не в dev `hh_monitor`.
+
+### Одноразовая настройка (существующий Docker volume)
+
+```bash
+docker compose exec db psql -U hh_monitor -d hh_monitor \
+  -c "CREATE DATABASE hh_monitor_test;"
+```
+
+Убедись, что в `.env` есть строка:
+```
+TEST_DATABASE_URL=postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor_test
+```
+
+### Запуск
+
+```bash
+poetry run pytest -v
+```
+
+Миграции на test-БД накатываются автоматически один раз за pytest-сессию (`alembic upgrade head`). Каждый тест работает в транзакции, которая откатывается после завершения — данные не накапливаются.
+
+Если `TEST_DATABASE_URL` не задан, все DB-тесты пропускаются с предупреждением в stderr.
