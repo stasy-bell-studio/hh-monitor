@@ -5,6 +5,8 @@ no real hh.ru API calls are made.
 """
 
 import asyncio
+import hashlib
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,10 +17,16 @@ from httpx import Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hh_monitor.db.models import OAuthToken, ParserRun, Search, Snapshot
+from hh_monitor.db.models import OAuthToken, ParserRun, Resume, Search, Snapshot
 from hh_monitor.errors import HHQuotaExceeded, SearchNotFoundError
 from hh_monitor.hh.client import HHClient
 from hh_monitor.parser.run import run_parser
+
+
+def _make_hash(payload: dict[str, Any]) -> str:
+    """Compute the same SHA-256 content_hash as run_parser._hash."""
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
 
 _BASE = "https://api.hh.ru"
 
@@ -322,3 +330,120 @@ async def test_cancelled_error_commits_partial_state(db_session: AsyncSession) -
     assert pr.finished_at is not None
     # First resume was saved before the cancel arrived on the second.
     assert pr.snapshots_inserted == 1
+
+
+# ── Test 7: historical-hash dedup (A → B → A reversion) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_historical_hash_dedup(db_session: AsyncSession) -> None:
+    """A resume that reverted to a previously seen payload is skipped, not re-inserted.
+
+    Scenario: snapshot A was stored at T1, snapshot B at T2 (resume changed).
+    Now hh.ru returns payload A again.  The old dedup check (_get_last_hash)
+    would see B as the most-recent hash, consider A as new, and hit the
+    unique constraint uq_snapshots_dedup.  The new check (_snapshot_exists)
+    correctly detects A exists historically and skips.
+    """
+    search_id = await _add_search(db_session)
+    rid = "r100"  # matches _RESUME_URL_RE (r\d{3})
+
+    # Pre-seed: resume master row + two historical snapshots (A then B)
+    db_session.add(Resume(hh_resume_id=rid))
+    await db_session.flush()
+
+    payload_a = _make_resume_payload(rid)  # first version
+    hash_a = _make_hash(payload_a)
+    db_session.add(Snapshot(hh_resume_id=rid, payload=payload_a, content_hash=hash_a))
+    await db_session.flush()
+
+    payload_b = {**payload_a, "title": "Senior Manager"}  # resume changed
+    hash_b = _make_hash(payload_b)
+    db_session.add(Snapshot(hh_resume_id=rid, payload=payload_b, content_hash=hash_b))
+    await db_session.flush()
+
+    # hh.ru now returns payload_a again (candidate reverted their resume)
+    def _single_page(request: Request) -> Response:
+        return Response(
+            200,
+            json={
+                "items": [{"id": rid}],
+                "found": 1,
+                "pages": 1,
+                "page": 0,
+                "per_page": 50,
+            },
+        )
+
+    def _resume_a(request: Request) -> Response:
+        return Response(200, json=payload_a)
+
+    async with respx.mock:
+        respx.get(f"{_BASE}/resumes").mock(side_effect=_single_page)
+        respx.get(_RESUME_URL_RE).mock(side_effect=_resume_a)
+
+        result = await run_parser(db_session, _client(), search_id, max_pages=5, _sleep=0)
+
+    assert result["snapshots_skipped_dedup"] == 1
+    assert result["snapshots_inserted"] == 0
+    assert result["errors"] == 0
+
+    pr = (
+        await db_session.execute(select(ParserRun).where(ParserRun.id == result["parser_run_id"]))
+    ).scalar_one()
+    assert pr.status == "ok"
+    assert pr.snapshots_skipped == 1
+    assert pr.snapshots_inserted == 0
+
+
+# ── Test 8: unexpected exception → parser_run marked 'failed' ────────────────
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_marks_failed(db_session: AsyncSession) -> None:
+    """RuntimeError mid-run: parser_run marked 'failed' with error captured; re-raised."""
+    search_id = await _add_search(db_session)
+
+    ids = ["r001", "r002", "r003"]
+    call_count = 0
+
+    def _single_page(request: Request) -> Response:
+        return Response(
+            200,
+            json={
+                "items": [{"id": rid} for rid in ids],
+                "found": 3,
+                "pages": 1,
+                "page": 0,
+                "per_page": 50,
+            },
+        )
+
+    def _error_on_third(request: Request) -> Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 3:
+            raise RuntimeError("boom")
+        rid = request.url.path.rstrip("/").split("/")[-1]
+        return Response(200, json=_make_resume_payload(rid))
+
+    async with respx.mock:
+        respx.get(f"{_BASE}/resumes").mock(side_effect=_single_page)
+        respx.get(_RESUME_URL_RE).mock(side_effect=_error_on_third)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await run_parser(db_session, _client(), search_id, max_pages=5, _sleep=0)
+
+    # Parser must have committed an audit record before re-raising.
+    pr = (
+        await db_session.execute(select(ParserRun).order_by(ParserRun.id.desc()).limit(1))
+    ).scalar_one()
+    assert pr.status == "failed"
+    assert pr.finished_at is not None
+    # error column must capture the exception repr
+    assert pr.error is not None
+    assert "boom" in pr.error
+    # Two resumes were successfully processed before the crash.
+    assert pr.snapshots_inserted == 2
+    # All three items were returned from the search page before the per-item loop.
+    assert pr.resumes_seen == 3
