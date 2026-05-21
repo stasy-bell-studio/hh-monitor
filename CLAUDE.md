@@ -121,7 +121,7 @@ CREATE TABLE parser_runs (
 **Endpoints we use:**
 
 - `GET https://hh.ru/oauth/authorize` — user authorization redirect
-- `POST https://hh.ru/oauth/token` — exchange code for token; refresh
+- `POST https://hh.ru/oauth/token` — exchange code for token; refresh (note: on `hh.ru`, NOT `api.hh.ru` — `api.hh.ru/oauth/token` returns `method_not_allowed`)
 - `GET /me` — verify token works
 - `GET /employers/{employer_id}/managers` — service info
 - `GET /areas` — region dictionary (cache locally, refresh weekly)
@@ -176,7 +176,7 @@ hh-monitor/
 ├── .env.example               # documented env vars; commit this
 ├── .env                       # actual secrets; NEVER commit
 ├── .gitignore
-├── docker-compose.yml         # local Postgres (mounts init-test-db.sh)
+├── docker-compose.yml         # local Postgres
 ├── alembic.ini
 ├── alembic/                   # migrations
 │   └── versions/
@@ -211,9 +211,6 @@ hh-monitor/
 │   └── tg_bot/
 │       ├── __init__.py
 │       └── bot.py
-├── scripts/
-│   ├── init-test-db.sh        # creates hh_monitor_test on first volume init
-│   └── seed_fixtures.py       # seeds synthetic resumes for smoke testing
 ├── tests/
 │   ├── conftest.py
 │   ├── fixtures/              # sample hh.ru JSON responses
@@ -273,7 +270,6 @@ HH_USER_AGENT="SK21Vek HR Monitor (luk44646@gmail.com)"
 
 # Database
 DATABASE_URL=postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor
-TEST_DATABASE_URL=postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor_test
 
 # Notion
 NOTION_API_TOKEN=
