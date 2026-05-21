@@ -10,7 +10,7 @@ import typer
 
 from hh_monitor.config import settings
 from hh_monitor.db.engine import async_session_factory
-from hh_monitor.db.models import OAuthToken, Search, Snapshot
+from hh_monitor.db.models import OAuthToken, Resume, Search, Snapshot
 from hh_monitor.errors import HHApiError, HHQuotaExceeded, HHServiceNotActive, SearchNotFoundError
 from hh_monitor.fit.portrait import Portrait, load_portrait
 from hh_monitor.fit.rules import compute as fit_compute
@@ -351,10 +351,18 @@ def pipeline_run(
     ),
     top: int = typer.Option(10, "--top", help="Number of top candidates to display"),
     max_pages: int = typer.Option(5, "--max-pages", help="Maximum pages to fetch"),
+    no_parse: bool = typer.Option(
+        False, "--no-parse", help="Skip parsing; score existing snapshots"
+    ),
 ) -> None:
-    """Parse → detect → score → show top-N candidates."""
+    """Parse → detect → score → show top-N candidates.
+
+    Use --no-parse to skip the hh.ru API fetch and re-score the snapshots
+    already stored in the database.  Useful for iterating on portraits without
+    burning quota.
+    """
     try:
-        asyncio.run(_pipeline_run(search_id, portrait_path, top, max_pages))
+        asyncio.run(_pipeline_run(search_id, portrait_path, top, max_pages, no_parse))
     except SearchNotFoundError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -366,11 +374,15 @@ def pipeline_run(
         raise typer.Exit(1) from exc
 
 
+_HH_RESUME_BASE = "https://hh.ru/resume"
+
+
 async def _pipeline_run(
     search_id: int,
     portrait_path: Path | None,
     top: int,
     max_pages: int,
+    no_parse: bool = False,
 ) -> None:
     from sqlalchemy import select
 
@@ -389,19 +401,31 @@ async def _pipeline_run(
         else:
             portrait = Portrait.model_validate(search.portrait)
 
-        client = HHClient(
-            token_provider=lambda: get_valid_token(session),
-            user_agent=settings.hh_user_agent,
-        )
+        if no_parse:
+            # ── No-parse mode: reuse existing snapshots ────────────────────
+            typer.echo("Mode: no-parse (using existing snapshots)")
+            rows = (await session.execute(select(Resume.hh_resume_id))).scalars().all()
+            resume_ids: list[str] = list(rows)
+        else:
+            # ── Normal mode: fetch from hh.ru first ───────────────────────
+            client = HHClient(
+                token_provider=lambda: get_valid_token(session),
+                user_agent=settings.hh_user_agent,
+            )
+            parser_result = await run_parser(session, client, search_id, max_pages=max_pages)
+            resume_ids = parser_result["resume_ids"]
+            typer.echo(
+                f"\nParser run id={parser_result['parser_run_id']}  "
+                f"seen={parser_result['resumes_seen']}  "
+                f"inserted={parser_result['snapshots_inserted']}  "
+                f"skipped={parser_result['snapshots_skipped_dedup']}  "
+                f"errors={parser_result['errors']}\n"
+            )
 
-        # 1. Parse
-        parser_result = await run_parser(session, client, search_id, max_pages=max_pages)
-        resume_ids: list[str] = parser_result["resume_ids"]
-
-        # 2. Detect changes
+        # ── Detect changes ─────────────────────────────────────────────────
         await run_detector(session)
 
-        # 3. Score each resume by its latest snapshot
+        # ── Score each resume by its latest snapshot ───────────────────────
         scored: list[tuple[str, dict, int, dict]] = []  # type: ignore[type-arg]
         for rid in resume_ids:
             row = (
@@ -418,27 +442,19 @@ async def _pipeline_run(
             score, breakdown = fit_compute(payload, portrait)
             scored.append((rid, payload, score, breakdown))
 
-        # 4. Sort by score descending, print top-N
+        # ── Sort by score descending, print top-N ─────────────────────────
         scored.sort(key=lambda x: x[2], reverse=True)
 
-        typer.echo(
-            f"\nParser run id={parser_result['parser_run_id']}  "
-            f"seen={parser_result['resumes_seen']}  "
-            f"inserted={parser_result['snapshots_inserted']}  "
-            f"skipped={parser_result['snapshots_skipped_dedup']}  "
-            f"errors={parser_result['errors']}\n"
-        )
         typer.echo(f"Top-{min(top, len(scored))} candidates (portrait: {portrait.position_name}):")
-        typer.echo(f"{'#':<3} {'ID':<12} {'Name':<25} {'Title':<30} {'Score':>5}  Breakdown")
-        typer.echo("-" * 110)
+        typer.echo(f"{'#':<3} {'ID':<10} {'Title':<30} {'Score':>5}  {'URL':<55}  Breakdown")
+        typer.echo("-" * 120)
 
         for rank, (rid, payload, score, breakdown) in enumerate(scored[:top], start=1):
-            fname = payload.get("first_name", "") or ""
-            lname = payload.get("last_name", "") or ""
-            full_name = f"{lname} {fname}".strip() or rid
+            short_id = rid[:8]
             title = (payload.get("title") or "")[:28]
+            url = f"{_HH_RESUME_BASE}/{rid}"
             bd_str = " ".join(f"{k}:{v:+d}" for k, v in breakdown.items() if v != 0)
-            typer.echo(f"{rank:<3} {rid:<12} {full_name:<25} {title:<30} {score:>5}  {bd_str}")
+            typer.echo(f"{rank:<3} {short_id:<10} {title:<30} {score:>5}  {url:<55}  {bd_str}")
 
 
 if __name__ == "__main__":
