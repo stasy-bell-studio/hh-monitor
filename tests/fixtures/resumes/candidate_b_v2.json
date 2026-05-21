@@ -1,0 +1,34 @@
+{
+  "id": "test_b",
+  "last_name": "Козлова",
+  "first_name": "Марина",
+  "middle_name": "Ивановна",
+  "title": "Главный бухгалтер",
+  "age": 42,
+  "area": {"id": "1", "name": "Москва"},
+  "salary": {"amount": 80000, "currency": "RUR"},
+  "total_experience": {"months": 36},
+  "experience": [
+    {
+      "company": "ООО Торговый дом",
+      "position": "Главный бухгалтер",
+      "start": "2023-01",
+      "end": null,
+      "description": "Ведение бухгалтерского и налогового учёта, подготовка отчётности."
+    },
+    {
+      "company": "ИП Сидоров",
+      "position": "Бухгалтер",
+      "start": "2021-04",
+      "end": "2022-12",
+      "description": "Первичная документация, учёт ТМЦ."
+    }
+  ],
+  "education": {
+    "level": {"id": "secondary_vocational", "name": "Среднее специальное"},
+    "primary": [
+      {"name": "Бухгалтерский учёт", "organization": "Московский финансовый колледж"}
+    ]
+  },
+  "updated_at": "2026-03-15T09:00:00+0300"
+}
