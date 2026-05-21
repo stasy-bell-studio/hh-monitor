@@ -3,7 +3,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import respx
 from httpx import Response
-from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.db.models import OAuthToken
@@ -72,16 +71,12 @@ async def test_refresh_access_token_success(db_session: AsyncSession) -> None:
 
 @pytest.mark.asyncio
 async def test_refresh_no_token_in_db(db_session: AsyncSession) -> None:
-    await db_session.execute(delete(OAuthToken))
-    await db_session.flush()
     with pytest.raises(HHOAuthError, match="No token in DB"):
         await refresh_access_token(db_session)
 
 
 @pytest.mark.asyncio
 async def test_get_valid_token_fresh(db_session: AsyncSession) -> None:
-    await db_session.execute(delete(OAuthToken))
-    await db_session.flush()
     token = OAuthToken(
         access_token="acc_fresh",
         refresh_token="ref_fresh",
@@ -98,8 +93,6 @@ async def test_get_valid_token_fresh(db_session: AsyncSession) -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_get_valid_token_triggers_refresh(db_session: AsyncSession) -> None:
-    await db_session.execute(delete(OAuthToken))
-    await db_session.flush()
     token = OAuthToken(
         access_token="old_acc",
         refresh_token="old_ref",
@@ -121,7 +114,5 @@ async def test_get_valid_token_triggers_refresh(db_session: AsyncSession) -> Non
 
 @pytest.mark.asyncio
 async def test_get_valid_token_empty_db(db_session: AsyncSession) -> None:
-    await db_session.execute(delete(OAuthToken))
-    await db_session.flush()
     with pytest.raises(HHOAuthError, match="Not authorized"):
         await get_valid_token(db_session)

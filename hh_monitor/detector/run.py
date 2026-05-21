@@ -91,11 +91,7 @@ async def _already_processed(
     result = await session.execute(
         select(Event.id)
         .where(Event.hh_resume_id == hh_resume_id)
-        .where(
-            Event.details.cast(JSONB).op("@>")(
-                {"curr_snapshot_id": curr_snapshot_id}
-            )
-        )
+        .where(Event.details.cast(JSONB).op("@>")({"curr_snapshot_id": curr_snapshot_id}))
         .limit(1)
     )
     return result.scalar_one_or_none() is not None

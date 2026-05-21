@@ -34,15 +34,9 @@ async def seed() -> None:
     async with async_session_factory() as session:
         # Wipe any previous seed data for these IDs
         resume_ids = [rid for rid, _ in SEEDS]
-        await session.execute(
-            delete(Event).where(Event.hh_resume_id.in_(resume_ids))
-        )
-        await session.execute(
-            delete(Snapshot).where(Snapshot.hh_resume_id.in_(resume_ids))
-        )
-        await session.execute(
-            delete(Resume).where(Resume.hh_resume_id.in_(resume_ids))
-        )
+        await session.execute(delete(Event).where(Event.hh_resume_id.in_(resume_ids)))
+        await session.execute(delete(Snapshot).where(Snapshot.hh_resume_id.in_(resume_ids)))
+        await session.execute(delete(Resume).where(Resume.hh_resume_id.in_(resume_ids)))
         await session.flush()
 
         for rid, fixtures in SEEDS:
