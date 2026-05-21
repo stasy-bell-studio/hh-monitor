@@ -4,6 +4,7 @@ Uses per-test DB rollback (via conftest db_session) and respx HTTP mocks —
 no real hh.ru API calls are made.
 """
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -272,3 +273,52 @@ async def test_search_not_found_raises(db_session: AsyncSession) -> None:
     """A non-existent search_id raises SearchNotFoundError before any HTTP call."""
     with pytest.raises(SearchNotFoundError):
         await run_parser(db_session, _client(), search_id=99999, max_pages=1, _sleep=0)
+
+
+# ── Test 6: graceful cancellation (Ctrl+C / SIGINT) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_commits_partial_state(db_session: AsyncSession) -> None:
+    """asyncio.CancelledError mid-run → status='cancelled', partial state committed."""
+    search_id = await _add_search(db_session)
+
+    ids = ["r001", "r002", "r003"]
+    call_count = 0
+
+    def _single_page(request: Request) -> Response:
+        return Response(
+            200,
+            json={
+                "items": [{"id": rid} for rid in ids],
+                "found": 3,
+                "pages": 1,
+                "page": 0,
+                "per_page": 50,
+            },
+        )
+
+    def _cancel_on_second(request: Request) -> Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            # Simulates Ctrl+C arriving while a resume is being fetched.
+            raise asyncio.CancelledError()
+        rid = request.url.path.rstrip("/").split("/")[-1]
+        return Response(200, json=_make_resume_payload(rid))
+
+    async with respx.mock:
+        respx.get(f"{_BASE}/resumes").mock(side_effect=_single_page)
+        respx.get(_RESUME_URL_RE).mock(side_effect=_cancel_on_second)
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_parser(db_session, _client(), search_id, max_pages=5, _sleep=0)
+
+    # Parser must have committed partial state before re-raising.
+    pr = (
+        await db_session.execute(select(ParserRun).order_by(ParserRun.id.desc()).limit(1))
+    ).scalar_one()
+    assert pr.status == "cancelled"
+    assert pr.finished_at is not None
+    # First resume was saved before the cancel arrived on the second.
+    assert pr.snapshots_inserted == 1

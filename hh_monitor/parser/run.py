@@ -106,111 +106,131 @@ async def run_parser(
     resume_ids: list[str] = []
     abort_exc: BaseException | None = None
 
-    # ── 3. Paginate ───────────────────────────────────────────────────────────
-    for page in range(max_pages):
-        try:
-            resp = await search_resumes(hh_client, search.hh_params, page=page)
-        except (HHQuotaExceeded, HHServiceNotActive) as exc:
-            log.warning("parser.abort_on_search", reason=type(exc).__name__, page=page)
-            abort_exc = exc
-            break
-
-        items: list[dict[str, Any]] = resp.get("items", [])
-        total_pages: int = resp.get("pages", 1)
-
-        if not items:
-            break
-
-        resumes_seen += len(items)
-        log.info("parser.page_fetched", page=page, items=len(items), total_pages=total_pages)
-
-        for item in items:
-            resume_id: str = str(item["id"])
-            if resume_id not in resume_ids:
-                resume_ids.append(resume_id)
-
-            await asyncio.sleep(_sleep)
-
-            # Fetch full payload
+    try:
+        # ── 3. Paginate ───────────────────────────────────────────────────────
+        for page in range(max_pages):
             try:
-                payload: dict[str, Any] = await get_resume(hh_client, resume_id)
-            except HHNotFound:
-                # Resume removed on hh.ru — write minimal snapshot so the
-                # detector can recognise REMOVED via diff_snapshots.
-                log.info("parser.resume_not_found", resume_id=resume_id)
-                payload = {"id": resume_id}
-                errors += 1
+                resp = await search_resumes(hh_client, search.hh_params, page=page)
             except (HHQuotaExceeded, HHServiceNotActive) as exc:
-                log.warning(
-                    "parser.abort_on_resume",
-                    reason=type(exc).__name__,
-                    resume_id=resume_id,
-                )
+                log.warning("parser.abort_on_search", reason=type(exc).__name__, page=page)
                 abort_exc = exc
                 break
-            except HHApiError as exc:
-                log.warning("parser.resume_error", resume_id=resume_id, status=exc.status_code)
-                errors += 1
-                continue
 
-            # Upsert resume master row
-            await _upsert_resume(session, resume_id)
+            items: list[dict[str, Any]] = resp.get("items", [])
+            total_pages: int = resp.get("pages", 1)
 
-            # Dedup: skip if content unchanged
-            content_hash = _hash(payload)
-            last_hash = await _get_last_hash(session, resume_id)
-            if last_hash == content_hash:
-                snapshots_skipped += 1
-                log.info("parser.dedup_skipped", resume_id=resume_id)
-                continue
+            if not items:
+                break
 
-            # Insert new snapshot
-            session.add(
-                Snapshot(
-                    hh_resume_id=resume_id,
-                    payload=payload,
-                    content_hash=content_hash,
+            resumes_seen += len(items)
+            log.info("parser.page_fetched", page=page, items=len(items), total_pages=total_pages)
+
+            for item in items:
+                resume_id: str = str(item["id"])
+                if resume_id not in resume_ids:
+                    resume_ids.append(resume_id)
+
+                await asyncio.sleep(_sleep)
+
+                # Fetch full payload
+                try:
+                    payload: dict[str, Any] = await get_resume(hh_client, resume_id)
+                except HHNotFound:
+                    # Resume removed on hh.ru — write minimal snapshot so the
+                    # detector can recognise REMOVED via diff_snapshots.
+                    log.info("parser.resume_not_found", resume_id=resume_id)
+                    payload = {"id": resume_id}
+                    errors += 1
+                except (HHQuotaExceeded, HHServiceNotActive) as exc:
+                    log.warning(
+                        "parser.abort_on_resume",
+                        reason=type(exc).__name__,
+                        resume_id=resume_id,
+                    )
+                    abort_exc = exc
+                    break
+                except HHApiError as exc:
+                    log.warning("parser.resume_error", resume_id=resume_id, status=exc.status_code)
+                    errors += 1
+                    continue
+
+                # Upsert resume master row
+                await _upsert_resume(session, resume_id)
+
+                # Dedup: skip if content unchanged
+                content_hash = _hash(payload)
+                last_hash = await _get_last_hash(session, resume_id)
+                if last_hash == content_hash:
+                    snapshots_skipped += 1
+                    log.info("parser.dedup_skipped", resume_id=resume_id)
+                    continue
+
+                # Insert new snapshot
+                session.add(
+                    Snapshot(
+                        hh_resume_id=resume_id,
+                        payload=payload,
+                        content_hash=content_hash,
+                    )
                 )
-            )
-            snapshots_inserted += 1
-            log.info("parser.resume_saved", resume_id=resume_id)
+                snapshots_inserted += 1
+                log.info("parser.resume_saved", resume_id=resume_id)
+
+            if abort_exc:
+                break
+
+            if page >= total_pages - 1:
+                break
+
+        # ── 4. Finalise parser_run and commit ─────────────────────────────────
+        status = "quota_exceeded" if abort_exc else ("ok" if errors == 0 else "partial_errors")
+
+        parser_run.finished_at = datetime.now(UTC)
+        parser_run.status = status
+        parser_run.resumes_seen = resumes_seen
+        parser_run.resumes_viewed = snapshots_inserted + errors
+        parser_run.snapshots_inserted = snapshots_inserted
+        parser_run.snapshots_skipped = snapshots_skipped
+
+        await session.commit()
+
+        log.info(
+            "parser.done",
+            parser_run_id=run_id,
+            status=status,
+            resumes_seen=resumes_seen,
+            snapshots_inserted=snapshots_inserted,
+            snapshots_skipped=snapshots_skipped,
+            errors=errors,
+        )
 
         if abort_exc:
-            break
+            raise abort_exc  # re-raise so CLI can show user-friendly message
 
-        if page >= total_pages - 1:
-            break
+        return {
+            "resumes_seen": resumes_seen,
+            "snapshots_inserted": snapshots_inserted,
+            "snapshots_skipped_dedup": snapshots_skipped,
+            "errors": errors,
+            "parser_run_id": run_id,
+            "resume_ids": resume_ids,
+        }
 
-    # ── 4. Finalise parser_run and commit ─────────────────────────────────────
-    status = "quota_exceeded" if abort_exc else ("ok" if errors == 0 else "partial_errors")
-
-    parser_run.finished_at = datetime.now(UTC)
-    parser_run.status = status
-    parser_run.resumes_seen = resumes_seen
-    parser_run.resumes_viewed = snapshots_inserted + errors
-    parser_run.snapshots_inserted = snapshots_inserted
-    parser_run.snapshots_skipped = snapshots_skipped
-
-    await session.commit()
-
-    log.info(
-        "parser.done",
-        parser_run_id=run_id,
-        status=status,
-        resumes_seen=resumes_seen,
-        snapshots_inserted=snapshots_inserted,
-        snapshots_skipped=snapshots_skipped,
-        errors=errors,
-    )
-
-    if abort_exc:
-        raise abort_exc  # re-raise so CLI can show user-friendly message
-
-    return {
-        "resumes_seen": resumes_seen,
-        "snapshots_inserted": snapshots_inserted,
-        "snapshots_skipped_dedup": snapshots_skipped,
-        "errors": errors,
-        "parser_run_id": run_id,
-        "resume_ids": resume_ids,
-    }
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        # ── Graceful cancellation (Ctrl+C / task.cancel()) ────────────────────
+        # Commit whatever partial state we have so the run is resumable next day.
+        log.info(
+            "parser.cancelled",
+            parser_run_id=run_id,
+            snapshots_inserted=snapshots_inserted,
+            snapshots_skipped=snapshots_skipped,
+            errors=errors,
+        )
+        parser_run.finished_at = datetime.now(UTC)
+        parser_run.status = "cancelled"
+        parser_run.resumes_seen = resumes_seen
+        parser_run.resumes_viewed = snapshots_inserted + errors
+        parser_run.snapshots_inserted = snapshots_inserted
+        parser_run.snapshots_skipped = snapshots_skipped
+        await session.commit()
+        raise
