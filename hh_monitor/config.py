@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     hh_redirect_uri: str = "https://localhost:8080/callback"
     hh_user_agent: str = "SK21Vek HR Monitor (luk44646@gmail.com)"
 
+    # hh.ru employer context (optional — inferred from OAuth token, but
+    # passing explicitly is safe and required for some employer-scoped searches)
+    hh_employer_id: str | None = None
+
     # Database
     database_url: str = "postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor"
     test_database_url: str | None = None  # set in .env for test isolation; prod ignores this
