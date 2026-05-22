@@ -23,10 +23,88 @@ from hh_monitor.errors import (
     HHServiceNotActive,
     SearchNotFoundError,
 )
+from hh_monitor.fit.portrait import Portrait
 from hh_monitor.hh.client import HHClient
 from hh_monitor.hh.endpoints import get_resume, search_resumes
 
 logger = structlog.get_logger(__name__)
+
+# hh.ru area IDs for territories that joined RF after 2022.
+# These IDs exist on api.hh.ru but may silently time-out from non-RF IPs
+# (TLS handshake hangs due to geo-filtering).  Warn the operator; never fail.
+_NEW_TERRITORY_AREA_IDS: frozenset[int] = frozenset(
+    {
+        2134,  # ДНР (Донецкая Народная Республика)
+        2155,  # Запорожская область
+        2173,  # ЛНР (Луганская Народная Республика)
+        2209,  # Херсонская область
+    }
+)
+
+# Maximum number of position synonyms to include in the hh.ru text query.
+_MAX_SYNONYMS = 5
+# Hard character limit for the text= parameter (hh.ru informal limit ~512,
+# but we keep it at 250 to stay safe and avoid truncated OR terms).
+_MAX_TEXT_LEN = 250
+
+
+def build_search_params(hh_params: dict[str, Any], portrait: Portrait) -> dict[str, Any]:
+    """Augment *hh_params* with a text query and optional period derived from *portrait*.
+
+    Text query:
+        ``<position_name> OR <syn1> OR … OR <synN>``
+        Up to ``_MAX_SYNONYMS`` synonyms from portrait.position_synonyms are
+        included.  Terms are added left-to-right until the next term would
+        exceed ``_MAX_TEXT_LEN`` characters; at least ``position_name`` is
+        always included.
+
+    Period filter:
+        If ``portrait.resume_freshness_days > 0``, ``period=N`` is added,
+        limiting results to resumes updated within N days.
+
+    Area ID warnings:
+        If any area ID in ``hh_params.get("area", [])`` belongs to
+        ``_NEW_TERRITORY_AREA_IDS``, a warning is logged.  The params are
+        passed through unchanged — we never drop or modify area IDs.
+
+    Returns:
+        A new dict (original is not mutated) with ``text`` (and optionally
+        ``period``) overridden / added.
+    """
+    # Build text= from position_name + up to _MAX_SYNONYMS synonyms
+    synonyms = portrait.position_synonyms[:_MAX_SYNONYMS]
+    terms = [portrait.position_name, *synonyms]
+
+    chosen: list[str] = []
+    current_len = 0
+    for term in terms:
+        sep = " OR " if chosen else ""
+        addition_len = len(sep) + len(term)
+        if chosen and current_len + addition_len > _MAX_TEXT_LEN:
+            break
+        chosen.append(term)
+        current_len += addition_len
+
+    text = " OR ".join(chosen)
+
+    result = {**hh_params, "text": text}
+
+    if portrait.resume_freshness_days > 0:
+        result["period"] = portrait.resume_freshness_days
+
+    # Warn on new-territory area IDs (not fail — the search will still run)
+    raw_areas = hh_params.get("area", [])
+    area_ids: list[int] = [int(a) for a in raw_areas if str(a).isdigit()]
+    new_territory_ids = [a for a in area_ids if a in _NEW_TERRITORY_AREA_IDS]
+    if new_territory_ids:
+        logger.warning(
+            "parser.new_territory_area_ids",
+            area_ids=new_territory_ids,
+            hint="api.hh.ru may geo-block these IDs from non-RF IPs; switch VPN if needed",
+        )
+
+    logger.debug("parser.search_params_built", text=text, period=result.get("period"))
+    return result
 
 
 def _hash(payload: dict[str, Any]) -> str:
@@ -103,8 +181,10 @@ async def run_parser(
         raise SearchNotFoundError(f"Search id={search_id} not found")
 
     log = logger.bind(search_id=search_id)
-    # Capture search params before the early commit below expires the ORM object.
-    hh_params: dict[str, Any] = search.hh_params
+    # Capture search params and portrait before the early commit expires the ORM object.
+    portrait = Portrait.model_validate(search.portrait)
+    # Build augmented params (text= from synonyms, period= from freshness_days)
+    hh_params: dict[str, Any] = build_search_params(search.hh_params, portrait)
 
     # ── 2. Create parser_run; commit immediately so rollbacks cannot erase it ─
     parser_run = ParserRun(status="running", searches_run=1)
