@@ -457,5 +457,304 @@ async def _pipeline_run(
             typer.echo(f"{rank:<3} {short_id:<10} {title:<30} {score:>5}  {url:<55}  {bd_str}")
 
 
+# ── portraits ─────────────────────────────────────────────────────────────────
+
+portraits_app = typer.Typer(help="Portrait management commands")
+app.add_typer(portraits_app, name="portraits")
+
+
+@portraits_app.command("list")
+def portraits_list(
+    portraits_dir: Path | None = typer.Option(  # noqa: B008
+        None, "--portraits-dir", "-d", help="Directory to scan (default: config/portraits/)"
+    ),
+) -> None:
+    """List all YAML portraits in the portraits directory."""
+    from hh_monitor.fit.portrait import load_all_portraits
+
+    portraits = load_all_portraits(portraits_dir)
+    if not portraits:
+        typer.echo("No portraits found.")
+        return
+    typer.echo(f"{'Code':<25} {'Name':<35} {'Primary regions'}")
+    typer.echo("-" * 90)
+    for code, p in sorted(portraits.items()):
+        primary = ", ".join(p.filters.regions.primary or p.preferred_areas)
+        if len(primary) > 40:
+            primary = primary[:37] + "..."
+        typer.echo(f"{code:<25} {p.position_name:<35} {primary}")
+
+
+@portraits_app.command("show")
+def portraits_show(
+    position_code: str = typer.Argument(..., help="position_code to display"),
+    portraits_dir: Path | None = typer.Option(  # noqa: B008
+        None, "--portraits-dir", "-d", help="Directory to scan (default: config/portraits/)"
+    ),
+) -> None:
+    """Show the full portrait for a position."""
+    from hh_monitor.fit.portrait import load_all_portraits
+
+    portraits = load_all_portraits(portraits_dir)
+    p = portraits.get(position_code)
+    if p is None:
+        typer.echo(
+            f"Portrait '{position_code}' not found. Available: {sorted(portraits)}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(f"Position: {p.position_name} ({p.position_code})")
+    typer.echo(f"Primary regions: {p.filters.regions.primary or p.preferred_areas}")
+    typer.echo(f"Adjacent regions: {p.filters.regions.adjacent}")
+    typer.echo(f"Stop regions: {p.filters.regions.stop}")
+    if p.filters.age_range:
+        lo, hi = p.filters.age_range
+        typer.echo(f"Age range: {lo}-{hi}")
+    if p.filters.salary_range:
+        lo_s, hi_s = p.filters.salary_range
+        typer.echo(f"Salary range: {lo_s:,}-{hi_s:,} RUB")
+    typer.echo(f"Education: {p.filters.education_level}")
+    typer.echo(f"Title keywords: {p.title_keywords}")
+    typer.echo(f"Experience keywords: {p.experience_keywords}")
+    typer.echo(f"Must-have keywords: {p.must_have_keywords}")
+    typer.echo(f"Nice-to-have keywords: {p.nice_to_have_keywords}")
+    typer.echo(f"Stop words: {p.stop_words}")
+    min_mo = p.min_total_months
+    pref_mo = p.preferred_total_months
+    typer.echo(f"Min experience: {min_mo} months ({min_mo // 12}y)")
+    typer.echo(f"Preferred exp: {pref_mo} months ({pref_mo // 12}y)")
+
+
+@portraits_app.command("validate")
+def portraits_validate(
+    portraits_dir: Path | None = typer.Option(  # noqa: B008
+        None, "--portraits-dir", "-d", help="Directory to scan (default: config/portraits/)"
+    ),
+) -> None:
+    """Validate all YAML portraits — exit 1 if any fail."""
+
+    from pydantic import ValidationError
+
+    from hh_monitor.fit.portrait import _PORTRAITS_DIR, load_portrait
+
+    directory = portraits_dir or _PORTRAITS_DIR
+    errors = 0
+    ok = 0
+    for path in sorted(Path(directory).glob("*.yaml")):
+        if path.name.startswith("_"):
+            continue
+        try:
+            load_portrait(path)
+            typer.echo(f"  OK  {path.name}")
+            ok += 1
+        except ValidationError as exc:
+            typer.echo(f"  FAIL {path.name}: {exc}", err=True)
+            errors += 1
+        except Exception as exc:
+            typer.echo(f"  ERROR {path.name}: {exc}", err=True)
+            errors += 1
+
+    typer.echo(f"\n{ok} OK, {errors} failed.")
+    if errors:
+        raise typer.Exit(1)
+
+
+@portraits_app.command("import")
+def portraits_import(
+    csv_path: Path = typer.Argument(..., help="Path to the CSV file from Lesnitskaya"),  # noqa: B008
+    portraits_dir: Path | None = typer.Option(  # noqa: B008
+        None, "--portraits-dir", "-d", help="Output directory (default: config/portraits/)"
+    ),
+) -> None:
+    """Import portrait definitions from a CSV file into YAML portraits."""
+
+    from hh_monitor.fit.portrait import _PORTRAITS_DIR
+    from scripts.import_portraits_csv import import_csv
+
+    if not csv_path.exists():
+        typer.echo(f"Error: file not found: {csv_path}", err=True)
+        raise typer.Exit(1)
+
+    out_dir = portraits_dir or _PORTRAITS_DIR
+    typer.echo(f"Importing from {csv_path} → {out_dir}")
+    n = import_csv(csv_path, out_dir)
+    typer.echo(f"\nDone: {n} portrait(s) written.")
+
+
+# ── llm ───────────────────────────────────────────────────────────────────────
+
+llm_app = typer.Typer(help="LLM enrichment commands")
+app.add_typer(llm_app, name="llm")
+
+
+@llm_app.command("score")
+def llm_score(
+    hh_resume_id: str = typer.Argument(..., help="HH resume ID to score"),
+    search_id: int = typer.Option(..., "--search-id", help="Search ID (determines portrait)"),
+) -> None:
+    """Show fit + LLM scores for a single resume (reads from DB, no API call)."""
+    try:
+        asyncio.run(_llm_score(hh_resume_id, search_id))
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+async def _llm_score(hh_resume_id: str, search_id: int) -> None:
+    from sqlalchemy import select
+
+    from hh_monitor.fit.portrait import load_all_portraits
+    from hh_monitor.fit.rules import compute as fit_compute_fn
+
+    async with async_session_factory() as session:
+        # Load search to get position_code
+        s = await session.get(Search, search_id)
+        if s is None:
+            raise ValueError(f"Search id={search_id} not found")
+
+        # Load portrait
+        portraits = load_all_portraits()
+        portrait = portraits.get(s.position_code)
+        if portrait is None:
+            raise ValueError(f"No portrait for position_code={s.position_code!r}")
+
+        # Latest snapshot
+        row = (
+            await session.execute(
+                select(Snapshot)
+                .where(Snapshot.hh_resume_id == hh_resume_id)
+                .order_by(Snapshot.fetched_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise ValueError(f"No snapshot found for resume '{hh_resume_id}'")
+
+        payload = row.payload if isinstance(row.payload, dict) else json.loads(row.payload)
+        fit_score_val, breakdown = fit_compute_fn(payload, portrait)
+
+        # Stored LLM results
+        resume = await session.get(Resume, hh_resume_id)
+
+    typer.echo(f"Resume:     {hh_resume_id}")
+    typer.echo(f"Portrait:   {portrait.position_name} ({portrait.position_code})")
+    typer.echo(f"Fit score:  {fit_score_val}/100")
+    typer.echo("Breakdown:")
+    for rule, delta in breakdown.items():
+        sign = "+" if delta > 0 else ""
+        typer.echo(f"  {rule:<25} {sign}{delta}")
+
+    if resume and resume.llm_score is not None:
+        typer.echo(f"\nLLM score:  {resume.llm_score}/100")
+        typer.echo(f"LLM verdict: {resume.llm_verdict}")
+        typer.echo(f"LLM comment: {resume.llm_comment}")
+        if resume.llm_red_flags:
+            typer.echo(f"Red flags:  {resume.llm_red_flags}")
+        typer.echo(f"Score total: {resume.score_total}/100")
+    else:
+        typer.echo("\nLLM: not yet enriched")
+
+
+@llm_app.command("run")
+def llm_run(
+    search_id: int = typer.Option(..., "--search-id", help="Search ID to enrich"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Max events to process"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Skip API calls; show what would be enriched"
+    ),
+) -> None:
+    """Run LLM enrichment on unenriched events for a search."""
+    try:
+        result = asyncio.run(_llm_run(search_id, limit, dry_run))
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(
+        f"LLM run done: search={result['search_id']} ({result['position_code']})  "
+        f"processed={result['total_processed']}  "
+        f"enriched={result['enriched']}  "
+        f"skipped={result['skipped']}  "
+        f"errors={result['errors']}"
+        + ("  [DRY RUN]" if result["dry_run"] else "")
+    )
+
+
+async def _llm_run(search_id: int, limit: int, dry_run: bool) -> dict:  # type: ignore[type-arg]
+    from hh_monitor.llm_enrich.run import run_llm_enrichment
+
+    async with async_session_factory() as session:
+        return await run_llm_enrichment(session, search_id, limit=limit, dry_run=dry_run)
+
+
+@llm_app.command("reset-cache")
+def llm_reset_cache(
+    hh_resume_id: str = typer.Argument(..., help="HH resume ID whose cache to delete"),
+) -> None:
+    """Delete all LLM cache entries for a resume (forces re-scoring on next run)."""
+    deleted = asyncio.run(_llm_reset_cache(hh_resume_id))
+    typer.echo(f"Deleted {deleted} cache entry(ies) for resume '{hh_resume_id}'.")
+
+
+async def _llm_reset_cache(hh_resume_id: str) -> int:
+    from sqlalchemy import delete
+
+    from hh_monitor.db.models import LlmCache
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            delete(LlmCache).where(LlmCache.hh_resume_id == hh_resume_id)
+        )
+        await session.commit()
+        rowcount: int = result.rowcount  # type: ignore[attr-defined]
+        return rowcount
+
+
+@llm_app.command("stats")
+def llm_stats() -> None:
+    """Show LLM enrichment stats — enriched vs pending per search."""
+    asyncio.run(_llm_stats())
+
+
+async def _llm_stats() -> None:
+    from sqlalchemy import func, select
+
+    from hh_monitor.db.models import Event
+
+    async with async_session_factory() as session:
+        rows = (
+            await session.execute(
+                select(
+                    Search.id,
+                    Search.position_code,
+                    Search.position_name,
+                    func.count(Event.id).label("total"),
+                    func.sum(
+                        func.cast(Event.llm_enriched, type_=__import__("sqlalchemy").Integer)
+                    ).label("enriched"),
+                )
+                .join(Event, Event.search_id == Search.id, isouter=True)
+                .group_by(Search.id, Search.position_code, Search.position_name)
+                .order_by(Search.id)
+            )
+        ).all()
+
+    if not rows:
+        typer.echo("No searches found.")
+        return
+
+    typer.echo(f"{'ID':<4} {'Code':<25} {'Name':<30} {'Total':>6} {'Enriched':>9} {'Pending':>8}")
+    typer.echo("-" * 90)
+    for r in rows:
+        total = r.total or 0
+        enriched = int(r.enriched or 0)
+        pending = total - enriched
+        typer.echo(
+            f"{r.id:<4} {r.position_code:<25} {r.position_name:<30} "
+            f"{total:>6} {enriched:>9} {pending:>8}"
+        )
+
+
 if __name__ == "__main__":
     app()
