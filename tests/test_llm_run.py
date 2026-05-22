@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from hh_monitor.db.models import Event, Resume, Search, Snapshot
-from hh_monitor.fit.portrait import Portrait
+from hh_monitor.fit.portrait import GlobalContext, Portrait
 from hh_monitor.llm_enrich.run import run_llm_enrichment
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -48,18 +48,28 @@ def _portrait(
     )
 
 
-def _ok_llm_response(score: int = 80, verdict: str = "yes") -> dict[str, Any]:
+def _global_ctx() -> GlobalContext:
+    return GlobalContext(
+        target_companies=["СОГАЗ"],
+        stop_companies=[],
+        market_context="",
+    )
+
+
+def _ok_llm_response(score: int = 80, verdict: str = "подходит") -> dict[str, Any]:
+    """Build a v2-format mock OpenRouter response."""
     return {
         "choices": [
             {
                 "message": {
                     "content": json.dumps(
                         {
-                            "llm_score": score,
-                            "llm_verdict": verdict,
-                            "llm_comment": "Good candidate",
-                            "llm_red_flags": [],
-                            "llm_real_role": "Director",
+                            "score": score,
+                            "verdict": verdict,
+                            "comment": "Good candidate",
+                            "red_flags": [],
+                            "real_role": "Director",
+                            "match_breakdown": {},
                         }
                     )
                 }
@@ -134,9 +144,9 @@ async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPat
     portraits = {search.position_code: _portrait(search.position_code)}
 
     with patch(
-        "hh_monitor.llm_enrich.client.chat_completion",
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
-        return_value=_ok_llm_response(score=90, verdict="strong_yes"),
+        return_value=_ok_llm_response(score=90, verdict="подходит"),
     ):
         result = await run_llm_enrichment(
             db_session,
@@ -144,6 +154,7 @@ async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPat
             limit=5,
             dry_run=False,
             portraits=portraits,
+            global_ctx=_global_ctx(),
         )
 
     assert result["enriched"] == 1
@@ -152,7 +163,7 @@ async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPat
     # Reload resume to verify persistence
     await db_session.refresh(resume)
     assert resume.llm_score == 90
-    assert resume.llm_verdict == "strong_yes"
+    assert resume.llm_verdict == "подходит"
     assert resume.score_total == round(0.3 * 70 + 0.7 * 90)  # = 84
 
     # Reload event
@@ -168,7 +179,7 @@ async def test_run_dry_run_skips_api(db_session: Any, monkeypatch: pytest.Monkey
     portraits = {search.position_code: _portrait(search.position_code)}
 
     with patch(
-        "hh_monitor.llm_enrich.client.chat_completion",
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
     ) as mock_api:
         result = await run_llm_enrichment(
@@ -177,6 +188,7 @@ async def test_run_dry_run_skips_api(db_session: Any, monkeypatch: pytest.Monkey
             limit=5,
             dry_run=True,
             portraits=portraits,
+            global_ctx=_global_ctx(),
         )
         mock_api.assert_not_called()
 
@@ -194,7 +206,7 @@ async def test_run_below_threshold_skips(db_session: Any, monkeypatch: pytest.Mo
     portraits = {search.position_code: _portrait(search.position_code)}
 
     with patch(
-        "hh_monitor.llm_enrich.client.chat_completion",
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
     ) as mock_api:
         result = await run_llm_enrichment(
@@ -202,6 +214,7 @@ async def test_run_below_threshold_skips(db_session: Any, monkeypatch: pytest.Mo
             search.id,
             limit=5,
             portraits=portraits,
+            global_ctx=_global_ctx(),
         )
         mock_api.assert_not_called()
 
@@ -227,7 +240,7 @@ async def test_run_stop_region_skips(db_session: Any, monkeypatch: pytest.Monkey
     portraits = {search.position_code: _portrait(search.position_code, stop=["Москва"])}
 
     with patch(
-        "hh_monitor.llm_enrich.client.chat_completion",
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
     ) as mock_api:
         result = await run_llm_enrichment(
@@ -235,6 +248,7 @@ async def test_run_stop_region_skips(db_session: Any, monkeypatch: pytest.Monkey
             search.id,
             limit=5,
             portraits=portraits,
+            global_ctx=_global_ctx(),
         )
         mock_api.assert_not_called()
 
@@ -249,7 +263,7 @@ async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.Monk
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
-    # Pre-populate cache
+    # Pre-populate cache with the current prompt version (v2)
     from hh_monitor.llm_enrich.cache import save_cached
     from hh_monitor.llm_enrich.prompt import LlmResponse
 
@@ -264,13 +278,13 @@ async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.Monk
     }
     content_hash = _hash(payload)
     cached_resp = LlmResponse(
-        llm_score=85, llm_verdict="yes", llm_comment="Cached", llm_red_flags=[], llm_real_role=""
+        score=85, verdict="подходит", comment="Cached", red_flags=[], real_role=""
     )
-    await save_cached(db_session, "r001", content_hash, "v1", cached_resp)
+    await save_cached(db_session, "r001", content_hash, "v2", cached_resp)
     await db_session.flush()
 
     with patch(
-        "hh_monitor.llm_enrich.client.chat_completion",
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
     ) as mock_api:
         result = await run_llm_enrichment(
@@ -278,6 +292,7 @@ async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.Monk
             search.id,
             limit=5,
             portraits=portraits,
+            global_ctx=_global_ctx(),
         )
         mock_api.assert_not_called()
 
@@ -320,13 +335,19 @@ async def test_run_respects_limit(db_session: Any, monkeypatch: pytest.MonkeyPat
 
     with (
         patch(
-            "hh_monitor.llm_enrich.client.chat_completion",
+            "hh_monitor.llm_enrich.client.chat_completion_messages",
             new_callable=AsyncMock,
             return_value=_ok_llm_response(),
         ),
         patch("hh_monitor.llm_enrich.run._INTER_CALL_DELAY", 0),
     ):
-        result = await run_llm_enrichment(db_session, search.id, limit=3, portraits=portraits)
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=3,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
 
     assert result["total_processed"] == 3
 
@@ -364,11 +385,17 @@ async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPa
     portraits = {search.position_code: _portrait(search.position_code)}
 
     with patch(
-        "hh_monitor.llm_enrich.client.chat_completion",
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
-        return_value=_ok_llm_response(score=70, verdict="yes"),
+        return_value=_ok_llm_response(score=70, verdict="спорно"),
     ):
-        await run_llm_enrichment(db_session, search.id, limit=1, portraits=portraits)
+        await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=1,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
 
     await db_session.refresh(resume)
     expected = round(0.3 * 60 + 0.7 * 70)  # = 67

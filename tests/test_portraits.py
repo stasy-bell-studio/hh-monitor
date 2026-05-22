@@ -333,3 +333,100 @@ def test_portrait_direct_validation() -> None:
     assert p.position_code == "branch_director"
     assert p.weights.experience_keywords == 15
     assert p.nice_to_have_keywords == ["MBA"]
+
+
+# ── New mini-5.5 Portrait fields ──────────────────────────────────────────────
+
+
+def test_portrait_position_description_default_empty() -> None:
+    """position_description defaults to empty string."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.position_description == ""
+
+
+def test_portrait_evaluation_focus_default_empty() -> None:
+    """evaluation_focus defaults to empty list."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.evaluation_focus == []
+
+
+def test_portrait_target_companies_override_default_empty() -> None:
+    """target_companies_override defaults to empty list."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.target_companies_override == []
+
+
+def test_portrait_stop_companies_override_default_empty() -> None:
+    """stop_companies_override defaults to empty list."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.stop_companies_override == []
+
+
+def test_portrait_new_fields_round_trip(tmp_path: Path) -> None:
+    """position_description and evaluation_focus survive YAML round-trip."""
+    data = {
+        **MINIMAL_DATA,
+        "position_description": "Руководитель филиала страховой компании.",
+        "evaluation_focus": [
+            "Управление агентской сетью",
+            "P&L-опыт",
+        ],
+        "target_companies_override": ["ВСК"],
+        "stop_companies_override": ["Капитал Лайф"],
+    }
+    p = tmp_path / "new_fields.yaml"
+    p.write_text(yaml.dump(data, allow_unicode=True), encoding="utf-8")
+    portrait = load_portrait(p)
+    assert portrait.position_description == "Руководитель филиала страховой компании."
+    assert portrait.evaluation_focus == ["Управление агентской сетью", "P&L-опыт"]
+    assert portrait.target_companies_override == ["ВСК"]
+    assert portrait.stop_companies_override == ["Капитал Лайф"]
+
+
+def test_branch_director_yaml_has_production_fields() -> None:
+    """The shipped branch_director.yaml includes all required production fields."""
+    portraits = load_all_portraits()
+    assert "branch_director" in portraits
+    bd = portraits["branch_director"]
+    assert bd.position_description  # non-empty
+    assert len(bd.evaluation_focus) >= 4
+    assert any("банк" in w.lower() for w in bd.stop_words)
+    assert any("агентская" in kw.lower() for kw in bd.must_have_keywords)
+
+
+# ── GlobalContext loader ───────────────────────────────────────────────────────
+
+
+def test_load_global_context_from_default_path() -> None:
+    """load_global_context() reads the committed _global.yaml without error."""
+    from hh_monitor.fit.portrait import load_global_context
+
+    ctx = load_global_context()
+    assert "СОГАЗ" in ctx.target_companies
+    assert len(ctx.stop_companies) >= 1
+    assert ctx.market_context  # non-empty
+
+
+def test_load_global_context_missing_file_returns_empty() -> None:
+    """load_global_context with a non-existent path returns an empty GlobalContext."""
+    from hh_monitor.fit.portrait import GlobalContext, load_global_context
+
+    ctx = load_global_context(path="/nonexistent/path/_global.yaml")
+    assert ctx == GlobalContext()
+
+
+def test_load_global_context_custom_path(tmp_path: Path) -> None:
+    """load_global_context reads a custom _global.yaml correctly."""
+    from hh_monitor.fit.portrait import load_global_context
+
+    data = {
+        "target_companies": ["ТестСтрах"],
+        "stop_companies": ["ПлохойБанк"],
+        "market_context": "Тестовый контекст рынка.",
+    }
+    p = tmp_path / "_global.yaml"
+    p.write_text(yaml.dump(data, allow_unicode=True), encoding="utf-8")
+    ctx = load_global_context(path=p)
+    assert ctx.target_companies == ["ТестСтрах"]
+    assert ctx.stop_companies == ["ПлохойБанк"]
+    assert ctx.market_context == "Тестовый контекст рынка."

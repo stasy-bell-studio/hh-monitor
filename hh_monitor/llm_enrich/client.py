@@ -35,20 +35,20 @@ def _backoff(attempt: int) -> float:
     return result
 
 
-async def chat_completion(
-    prompt: str,
+async def chat_completion_messages(
+    messages: list[dict[str, str]],
     *,
     model: str | None = None,
     max_tokens: int = 512,
     temperature: float = 0.2,
     http_client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
-    """Send a chat-completion request to OpenRouter.
+    """Send a multi-turn chat-completion request to OpenRouter.
 
     Returns the full parsed response dict from the API.
 
     Args:
-        prompt:      User-turn message (the rendered Jinja prompt).
+        messages:    Pre-built messages list, e.g. [{"role": "system", ...}, {"role": "user", ...}].
         model:       Override model slug; defaults to settings.openrouter_model.
         max_tokens:  Maximum tokens in the completion.
         temperature: Sampling temperature.
@@ -70,7 +70,7 @@ async def chat_completion(
     }
     body: dict[str, Any] = {
         "model": effective_model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "response_format": {"type": "json_object"},
@@ -123,6 +123,38 @@ async def chat_completion(
     finally:
         if _own_client:
             await client.aclose()
+
+
+async def chat_completion(
+    prompt: str,
+    *,
+    model: str | None = None,
+    max_tokens: int = 512,
+    temperature: float = 0.2,
+    http_client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Legacy shim: wraps a single user prompt into a messages list.
+
+    New code should use :func:`chat_completion_messages` directly.
+
+    Args:
+        prompt:      User-turn message (the rendered Jinja prompt).
+        model:       Override model slug; defaults to settings.openrouter_model.
+        max_tokens:  Maximum tokens in the completion.
+        temperature: Sampling temperature.
+        http_client: Optional injected client (for testing).
+
+    Raises:
+        OpenRouterAuthError: On HTTP 401.
+        OpenRouterApiError:  On any other non-200 response after retries.
+    """
+    return await chat_completion_messages(
+        [{"role": "user", "content": prompt}],
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        http_client=http_client,
+    )
 
 
 def extract_text(response: dict[str, Any]) -> str:

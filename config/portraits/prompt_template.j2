@@ -1,37 +1,90 @@
-Ты — HR-аналитик страховой компании «СК 21 Век». Тебе передан JSON-снимок резюме с hh.ru.
-Твоя задача — оценить соответствие кандидата позиции и вернуть ТОЛЬКО JSON-объект без пояснений.
+ПОЗИЦИЯ:  {{ portrait.position_name }}
 
-## Позиция
-Название: {{ portrait.position_name }}
+ОПИСАНИЕ РОЛИ:
+{{ portrait.position_description }}
 
+ИДЕАЛЬНЫЙ КАНДИДАТ:
 {% if portrait.must_have_keywords %}
-## Обязательные компетенции
-{% for kw in portrait.must_have_keywords %}- {{ kw }}
-{% endfor %}
+• Обязательный опыт/навыки: {{ portrait.must_have_keywords | join(", ") }}
 {% endif %}
-
 {% if portrait.nice_to_have_keywords %}
-## Желательные компетенции
-{% for kw in portrait.nice_to_have_keywords %}- {{ kw }}
-{% endfor %}
+• Желательные: {{ portrait.nice_to_have_keywords | join(", ") }}
 {% endif %}
-
 {% if portrait.stop_words %}
-## Стоп-слова (наличие снижает оценку)
-{% for w in portrait.stop_words %}- {{ w }}
-{% endfor %}
+• Стоп-слова (мгновенный verdict=мимо): {{ portrait.stop_words | join(", ") }}
+{% endif %}
+• Опыт работы: от {{ portrait.min_total_months }} мес (минимум), от {{ portrait.preferred_total_months }} мес (желательно)
+{% if portrait.filters.salary_range %}
+• Зарплатный диапазон: {{ portrait.filters.salary_range[0] }} – {{ portrait.filters.salary_range[1] }} ₽
+{% endif %}
+{% if portrait.filters.age_range %}
+• Возраст: {{ portrait.filters.age_range[0] }}–{{ portrait.filters.age_range[1] }} лет
 {% endif %}
 
-## Резюме кандидата (JSON)
-```json
-{{ resume_json }}
-```
+{% if portrait.evaluation_focus %}
+ФОКУСНЫЕ ВОПРОСЫ для этой позиции (обязательно учти при оценке):
+{% for q in portrait.evaluation_focus %}
+{{ loop.index }}. {{ q }}
+{% endfor %}
+{% else %}
+КРИТЕРИИ ОЦЕНКИ: выведи 4-6 ключевых критериев из ОПИСАНИЯ РОЛИ выше и используй их в match_breakdown (имена критериев — snake_case на английском).
+{% endif %}
 
-## Твой ответ (строго JSON, никакого другого текста)
+{% set targets = portrait.target_companies_override or global_ctx.target_companies %}
+{% if targets %}
+ЦЕЛЕВЫЕ КОМПАНИИ (переход из них = позитивный сигнал):
+{{ targets | join(", ") }}
+{% endif %}
+
+{% set stops = portrait.stop_companies_override or global_ctx.stop_companies %}
+{% if stops %}
+СТОП-КОМПАНИИ (текущее место работы там = verdict "стоп-сигнал"):
+{{ stops | join(", ") }}
+{% endif %}
+
+═══════════════════════════════════════════
+РЕЗЮМЕ КАНДИДАТА (hh.ru ID: {{ resume.hh_resume_id }})
+═══════════════════════════════════════════
+• Заявленная должность: {{ resume.title }}
+• Возраст: {{ resume.age | default("не указан") }}
+• Регион: {{ resume.area | default("не указан") }}
+• Желаемая зарплата: {{ resume.salary | default("не указана") }} ₽
+• Общий опыт: {{ resume.total_experience_months | default(0) }} мес
+• Образование: {{ resume.education | default("не указано") }}
+
+Опыт работы (новое сверху):
+{% for job in resume.experience %}
+{{ loop.index }}. {{ job.company }} — {{ job.position }}
+   {{ job.start }} → {% if job.end %}{{ job.end }}{% else %}по н.в.{% endif %} ({{ job.months }} мес)
+   {{ job.description | default("") | truncate(500) }}
+{% endfor %}
+
+{% if resume.key_skills %}
+Ключевые навыки: {{ resume.key_skills | join(", ") }}
+{% endif %}
+
+{% if resume.about %}
+О себе: {{ resume.about | truncate(800) }}
+{% endif %}
+
+═══════════════════════════════════════════
+ОТВЕТЬ СТРОГО В ЭТОМ ФОРМАТЕ (JSON, БЕЗ markdown-обрамления):
 {
-  "llm_score": <целое число 0..100 — итоговая оценка>,
-  "llm_verdict": "<одна из строк: strong_yes | yes | maybe | no | strong_no>",
-  "llm_comment": "<1–3 предложения с ключевыми аргументами>",
-  "llm_red_flags": ["<red flag 1>", "..."],
-  "llm_real_role": "<фактическая должность кандидата в последнем месте работы или пустая строка>"
+  "score": <0..100>,
+  "verdict": "подходит" | "спорно" | "мимо" | "стоп-сигнал",
+  "real_role": "<реальная роль кандидата своими словами>",
+  "match_breakdown": {
+    "<criterion_1>": <0..10>,
+    "<criterion_2>": <0..10>,
+    "<criterion_3>": <0..10>,
+    "<criterion_4>": <0..10>
+  },
+  "red_flags": ["<факт 1>", "<факт 2>"],
+  "comment": "<2-3 предложения для HR-карточки в Telegram>"
 }
+
+Соответствие verdict <-> score:
+• "подходит"     -> score 75+
+• "спорно"       -> score 50-74
+• "мимо"         -> score <50
+• "стоп-сигнал"  -> работает в стоп-компании ИЛИ критический red flag (выставляется ВНЕ ЗАВИСИМОСТИ от итогового score)

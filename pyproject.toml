@@ -41,6 +41,11 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/versions/*.py" = ["E501"]
+# Russian-language LLM prompt constant — Cyrillic chars intentionally
+# look like Latin; long lines are deliberate (prose sent to the API).
+"hh_monitor/llm_enrich/prompt.py" = ["RUF001", "E501"]
+# Tests use Russian company/city names in string literals — not typos.
+"tests/*.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.12"
