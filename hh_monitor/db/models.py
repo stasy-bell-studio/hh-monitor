@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -8,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     Text,
     UniqueConstraint,
 )
@@ -43,8 +45,32 @@ class Resume(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
     )
-    notion_page_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Rule-based fit score (0..100).  Computed by fit/rules.py and cached here.
+    fit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # LLM enrichment results
+    llm_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_verdict: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_red_flags: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    llm_real_role: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_scored_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    # content_hash of the snapshot used for the last LLM call (for cache invalidation)
+    llm_content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Combined score: round(0.3 * fit_score + 0.7 * llm_score)
+    score_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # HR screening workflow
+    screening_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screened_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    screened_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (Index("idx_resumes_last_seen", "last_seen_at"),)
 
@@ -82,14 +108,15 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
     )
-    notion_synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Renamed from notion_synced — marks whether this event has been LLM-enriched
+    llm_enriched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     telegram_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         Index(
-            "idx_events_pending_notion",
-            "notion_synced",
-            postgresql_where="notion_synced = FALSE",
+            "idx_events_pending_llm",
+            "llm_enriched",
+            postgresql_where="llm_enriched = FALSE",
         ),
         Index(
             "idx_events_pending_telegram",
@@ -141,3 +168,31 @@ class DictionaryCache(Base):
     fetched_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
     )
+
+
+class LlmCache(Base):
+    """Cache for LLM responses keyed by (hh_resume_id, content_hash, prompt_version).
+
+    Prevents redundant API calls when the resume content and prompt haven't changed.
+    Denormalized hh_resume_id allows cheap per-resume cache invalidation via
+    ``llm reset-cache <hh_resume_id>``.
+    """
+
+    __tablename__ = "llm_cache"
+
+    # cache_key = f"{hh_resume_id}|{content_hash}|{prompt_version}"
+    cache_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    hh_resume_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("resumes.hh_resume_id"), nullable=False
+    )
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
+    response: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
+    )
+
+    __table_args__ = (Index("idx_llm_cache_resume", "hh_resume_id"),)

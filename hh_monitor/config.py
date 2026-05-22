@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,10 +19,16 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://hh_monitor:hh_monitor_dev@localhost:5432/hh_monitor"
     test_database_url: str | None = None  # set in .env for test isolation; prod ignores this
 
-    # Notion
-    notion_api_token: str | None = None
-    notion_database_resumes_id: str | None = None
-    notion_database_employees_id: str | None = None
+    # OpenRouter / LLM
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "deepseek/deepseek-chat-v3-0324"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_http_referer: str = "https://github.com/Sam44ik/hh-monitor"
+    openrouter_title: str = "hh-monitor"
+
+    llm_prompt_version: str = "v1"
+    # Кандидаты с fit_score ниже этого порога не отправляются в LLM
+    score_fit_min_for_llm: int = Field(default=60, ge=0, le=100)
 
     # Telegram
     telegram_bot_token: str | None = None

@@ -44,3 +44,19 @@ class HHOAuthError(HHApiError):
 
     def __str__(self) -> str:
         return self.message
+
+
+class OpenRouterApiError(Exception):
+    """Raised when OpenRouter returns an unexpected HTTP error (not 401/429)."""
+
+    def __init__(self, status_code: int, body: str) -> None:
+        self.status_code = status_code
+        self.body = body
+        super().__init__(f"OpenRouter API error {status_code}: {body}")
+
+
+class OpenRouterAuthError(OpenRouterApiError):
+    """Raised on HTTP 401 from OpenRouter — invalid or missing API key."""
+
+    def __init__(self, body: str = "") -> None:
+        super().__init__(401, body)
