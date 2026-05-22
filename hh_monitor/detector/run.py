@@ -12,12 +12,18 @@ from hh_monitor.detector.types import DetectedEvent
 logger = structlog.get_logger(__name__)
 
 
-async def run_detector(session: AsyncSession) -> dict[str, int]:
-    """Detect changes across all resumes and persist new events.
+async def run_detector(session: AsyncSession, search_id: int) -> dict[str, int]:
+    """Detect changes for resumes last seen by *search_id* and persist new events.
+
+    Only resumes whose ``last_seen_search_id`` matches *search_id* are processed.
+    Emitted events carry ``search_id`` so downstream pipeline stages (LLM enrich,
+    TG bot) can filter by search without joining through resumes.
 
     Returns counts: processed / emitted / skipped_idempotent.
     """
-    result = await session.execute(select(Resume.hh_resume_id))
+    result = await session.execute(
+        select(Resume.hh_resume_id).where(Resume.last_seen_search_id == search_id)
+    )
     resume_ids: list[str] = list(result.scalars().all())
 
     processed = 0
@@ -58,13 +64,14 @@ async def run_detector(session: AsyncSession) -> dict[str, int]:
             )
 
         for ev in events:
-            await _insert_event(session, ev)
+            await _insert_event(session, ev, search_id=search_id)
             emitted += 1
 
     await session.commit()
 
     logger.info(
         "detector finished",
+        search_id=search_id,
         processed=processed,
         emitted=emitted,
         skipped_idempotent=skipped,
@@ -97,12 +104,13 @@ async def _already_processed(
     return result.scalar_one_or_none() is not None
 
 
-async def _insert_event(session: AsyncSession, ev: DetectedEvent) -> None:
+async def _insert_event(session: AsyncSession, ev: DetectedEvent, *, search_id: int) -> None:
     details: dict[str, Any] = dict(ev.details)
     session.add(
         Event(
             hh_resume_id=ev.hh_resume_id,
             event_type=ev.event_type.value,
+            search_id=search_id,
             details=details,
         )
     )

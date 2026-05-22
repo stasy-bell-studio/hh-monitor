@@ -68,6 +68,12 @@ class Resume(Base):
     screened_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     screened_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Search that most recently surfaced this resume (set by the parser on every upsert).
+    # Used by the detector to scope events to the correct search.
+    last_seen_search_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("searches.id"), nullable=True
+    )
+
     __table_args__ = (Index("idx_resumes_last_seen", "last_seen_at"),)
 
 

@@ -33,14 +33,14 @@ def _hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-async def _upsert_resume(session: AsyncSession, resume_id: str) -> None:
-    """INSERT or UPDATE last_seen_at for a resume master row."""
+async def _upsert_resume(session: AsyncSession, resume_id: str, search_id: int) -> None:
+    """INSERT or UPDATE last_seen_at and last_seen_search_id for a resume master row."""
     stmt = (
         pg_insert(Resume)
-        .values(hh_resume_id=resume_id)
+        .values(hh_resume_id=resume_id, last_seen_search_id=search_id)
         .on_conflict_do_update(
             index_elements=["hh_resume_id"],
-            set_={"last_seen_at": func.now()},
+            set_={"last_seen_at": func.now(), "last_seen_search_id": search_id},
         )
     )
     await session.execute(stmt)
@@ -172,8 +172,8 @@ async def run_parser(
                     errors += 1
                     continue
 
-                # Upsert resume master row
-                await _upsert_resume(session, resume_id)
+                # Upsert resume master row (tracks which search last saw this resume)
+                await _upsert_resume(session, resume_id, search_id)
 
                 # Dedup: skip if this (resume_id, content_hash) already exists
                 # anywhere in the table — not just in the most recent snapshot.

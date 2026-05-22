@@ -127,9 +127,11 @@ app.add_typer(detector_app, name="detector")
 
 
 @detector_app.command("run")
-def detector_run() -> None:
-    """Detect changes in resume snapshots and persist events to DB."""
-    counts = asyncio.run(_detector_run())
+def detector_run(
+    search_code: str = typer.Option(..., "--search-code", help="position_code of the saved search"),
+) -> None:
+    """Detect changes in resume snapshots for a specific search and persist events to DB."""
+    counts = asyncio.run(_detector_run(search_code))
     typer.echo(
         f"Detector finished: processed={counts['processed']}, "
         f"emitted={counts['emitted']}, "
@@ -137,11 +139,21 @@ def detector_run() -> None:
     )
 
 
-async def _detector_run() -> dict[str, int]:
+async def _detector_run(search_code: str) -> dict[str, int]:
+    from sqlalchemy import select
+
+    from hh_monitor.db.models import Search
     from hh_monitor.detector.run import run_detector
 
     async with async_session_factory() as session:
-        return await run_detector(session)
+        result = await session.execute(
+            select(Search.id).where(Search.position_code == search_code, Search.active.is_(True))
+        )
+        search_id: int | None = result.scalar_one_or_none()
+        if search_id is None:
+            typer.echo(f"Error: no active search found for position_code={search_code!r}", err=True)
+            raise typer.Exit(code=1)
+        return await run_detector(session, search_id)
 
 
 # ── fit ───────────────────────────────────────────────────────────────────────
@@ -423,7 +435,7 @@ async def _pipeline_run(
             )
 
         # ── Detect changes ─────────────────────────────────────────────────
-        await run_detector(session)
+        await run_detector(session, search_id)
 
         # ── Score each resume by its latest snapshot ───────────────────────
         scored: list[tuple[str, dict, int, dict]] = []  # type: ignore[type-arg]
