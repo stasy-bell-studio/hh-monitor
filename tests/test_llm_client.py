@@ -22,7 +22,13 @@ _BASE = "https://openrouter.ai/api/v1"
 _ENDPOINT = f"{_BASE}/chat/completions"
 
 
-def _ok_response(content: str = '{"llm_score":80,"llm_verdict":"yes","llm_comment":"Good","llm_red_flags":[],"llm_real_role":"Director"}') -> dict:
+_DEFAULT_LLM_CONTENT = (
+    '{"llm_score":80,"llm_verdict":"yes","llm_comment":"Good",'
+    '"llm_red_flags":[],"llm_real_role":"Director"}'
+)
+
+
+def _ok_response(content: str = _DEFAULT_LLM_CONTENT) -> dict:
     return {
         "choices": [{"message": {"content": content}}],
         "usage": {"prompt_tokens": 100, "completion_tokens": 50},
@@ -101,7 +107,11 @@ def test_parse_response_clean_json() -> None:
 
 def test_parse_response_json_embedded_in_text() -> None:
     """Regex fallback: JSON buried inside prose text."""
-    raw = 'Sure, here is the answer: {"llm_score": 55, "llm_verdict": "maybe", "llm_comment": "ok", "llm_red_flags": [], "llm_real_role": ""}'
+    raw = (
+        "Sure, here is the answer: "
+        '{"llm_score": 55, "llm_verdict": "maybe", "llm_comment": "ok",'
+        ' "llm_red_flags": [], "llm_real_role": ""}'
+    )
     resp = parse_response(raw)
     assert resp.llm_score == 55
     assert resp.llm_verdict == "maybe"
@@ -157,9 +167,7 @@ async def test_chat_completion_200(monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: 200 response returns parsed JSON."""
     monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     with respx.mock:
-        respx.post(_ENDPOINT).mock(
-            return_value=httpx.Response(200, json=_ok_response())
-        )
+        respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=_ok_response()))
         result = await chat_completion("hello")
     assert result["choices"][0]["message"]["content"]
 

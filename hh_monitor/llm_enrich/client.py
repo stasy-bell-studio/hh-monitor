@@ -22,14 +22,14 @@ log = structlog.get_logger(__name__)
 
 # Retry config
 _MAX_RETRIES = 3
-_BASE_DELAY = 2.0   # seconds
+_BASE_DELAY = 2.0  # seconds
 _MAX_DELAY = 60.0
-_JITTER = 0.25       # ±25 % jitter
+_JITTER = 0.25  # ±25 % jitter
 
 
 def _backoff(attempt: int) -> float:
     """Exponential back-off with full jitter."""
-    base: float = min(_MAX_DELAY, _BASE_DELAY * (2 ** attempt))
+    base: float = min(_MAX_DELAY, _BASE_DELAY * (2**attempt))
     jitter: float = float(random.uniform(-_JITTER, _JITTER))
     result: float = base * (1.0 + jitter)
     return result

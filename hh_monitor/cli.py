@@ -676,8 +676,7 @@ def llm_run(
         f"processed={result['total_processed']}  "
         f"enriched={result['enriched']}  "
         f"skipped={result['skipped']}  "
-        f"errors={result['errors']}"
-        + ("  [DRY RUN]" if result["dry_run"] else "")
+        f"errors={result['errors']}" + ("  [DRY RUN]" if result["dry_run"] else "")
     )
 
 

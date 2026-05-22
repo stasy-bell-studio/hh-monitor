@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import csv
 import json
-import textwrap
 from pathlib import Path
 
 import pytest
 import yaml
 
 from hh_monitor.fit.portrait import Portrait, load_all_portraits, load_portrait
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 

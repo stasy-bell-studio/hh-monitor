@@ -84,8 +84,6 @@ def parse_response(raw: str) -> LlmResponse:
     except json.JSONDecodeError as exc:
         m = _JSON_BLOCK_RE.search(raw)
         if not m:
-            raise ValueError(
-                f"No JSON object found in LLM response: {raw[:200]!r}"
-            ) from exc
+            raise ValueError(f"No JSON object found in LLM response: {raw[:200]!r}") from exc
         data = json.loads(m.group(0))
     return LlmResponse.model_validate(data)

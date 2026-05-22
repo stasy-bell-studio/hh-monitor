@@ -35,9 +35,7 @@ async def get_cached(
 ) -> LlmResponse | None:
     """Return a cached LlmResponse, or None on cache miss."""
     key = make_cache_key(hh_resume_id, content_hash, prompt_version)
-    result = await session.execute(
-        select(LlmCache).where(LlmCache.cache_key == key)
-    )
+    result = await session.execute(select(LlmCache).where(LlmCache.cache_key == key))
     row: LlmCache | None = result.scalar_one_or_none()
     if row is None:
         return None

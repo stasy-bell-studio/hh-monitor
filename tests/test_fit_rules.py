@@ -384,7 +384,7 @@ def _area_payload(area_name: str) -> dict:  # type: ignore[type-arg]
 def test_region_primary_match_scores_full_weight() -> None:
     """Candidate in a primary region receives the full region weight (+10)."""
     portrait = _geo_portrait(primary=["Самарская область"], adjacent=[], stop=[])
-    score, bd = compute(_area_payload("г. Самара, Самарская область"), portrait)
+    score, bd = compute(_area_payload("Самара, Самарская область"), portrait)
     assert bd["area"] == 10
 
 
@@ -395,7 +395,7 @@ def test_region_adjacent_match_scores_half_weight() -> None:
         adjacent=["Оренбургская область"],
         stop=[],
     )
-    score, bd = compute(_area_payload("г. Оренбург, Оренбургская область"), portrait)
+    score, bd = compute(_area_payload("Оренбург, Оренбургская область"), portrait)
     assert bd["area"] == 5  # 10 // 2
 
 
@@ -406,7 +406,7 @@ def test_region_stop_sets_huge_negative_and_clamps_to_zero() -> None:
         adjacent=[],
         stop=["Москва"],
     )
-    score, bd = compute(_area_payload("г. Москва"), portrait)
+    score, bd = compute(_area_payload("Москва"), portrait)
     assert bd["area"] < 0
     assert score == 0
 
@@ -414,7 +414,7 @@ def test_region_stop_sets_huge_negative_and_clamps_to_zero() -> None:
 def test_region_stop_detected_by_caller_sentinel() -> None:
     """Callers detect stop-region via breakdown.get('area', 0) < 0."""
     portrait = _geo_portrait(primary=[], adjacent=[], stop=["Питер"])
-    _, bd = compute(_area_payload("г. Санкт-Петербург (Питер)"), portrait)
+    _, bd = compute(_area_payload("Санкт-Петербург (Питер)"), portrait)
     assert bd.get("area", 0) < 0
 
 
@@ -425,6 +425,6 @@ def test_region_no_match_gives_zero() -> None:
         adjacent=["Оренбургская область"],
         stop=["Москва"],
     )
-    score, bd = compute(_area_payload("г. Новосибирск, Новосибирская область"), portrait)
+    score, bd = compute(_area_payload("Новосибирск, Новосибирская область"), portrait)
     assert bd["area"] == 0
     assert score >= 0

@@ -129,9 +129,7 @@ async def _seed_db(
 @pytest.mark.asyncio
 async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: event is enriched, resume columns updated, event marked done."""
-    monkeypatch.setattr(
-        "hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key"
-    )
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -165,9 +163,7 @@ async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPat
 @pytest.mark.asyncio
 async def test_run_dry_run_skips_api(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """dry_run=True skips the API call; event remains un-enriched."""
-    monkeypatch.setattr(
-        "hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key"
-    )
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -190,16 +186,10 @@ async def test_run_dry_run_skips_api(db_session: Any, monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_run_below_threshold_skips(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_run_below_threshold_skips(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Events with fit_score below threshold are skipped without API call."""
-    monkeypatch.setattr(
-        "hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key"
-    )
-    monkeypatch.setattr(
-        "hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80
-    )
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
     search, resume, event = await _seed_db(db_session, fit_score=50)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -221,13 +211,9 @@ async def test_run_below_threshold_skips(
 
 
 @pytest.mark.asyncio
-async def test_run_stop_region_skips(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_run_stop_region_skips(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Resume in a stop region is skipped without API call."""
-    monkeypatch.setattr(
-        "hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key"
-    )
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     payload = {
         "id": "r_stop",
         "title": "директор",
@@ -238,9 +224,7 @@ async def test_run_stop_region_skips(
         db_session, resume_id="r_stop", fit_score=75, payload=payload
     )
     # Portrait with Москва as a stop region
-    portraits = {
-        search.position_code: _portrait(search.position_code, stop=["Москва"])
-    }
+    portraits = {search.position_code: _portrait(search.position_code, stop=["Москва"])}
 
     with patch(
         "hh_monitor.llm_enrich.client.chat_completion",
@@ -259,13 +243,9 @@ async def test_run_stop_region_skips(
 
 
 @pytest.mark.asyncio
-async def test_run_cache_hit_skips_api(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Cache hit: no API call, but resume is still enriched from cache."""
-    monkeypatch.setattr(
-        "hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key"
-    )
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -273,19 +253,20 @@ async def test_run_cache_hit_skips_api(
     from hh_monitor.llm_enrich.cache import save_cached
     from hh_monitor.llm_enrich.prompt import LlmResponse
 
-    payload = {"id": "r001", "title": "директор филиала страхование",
-               "total_experience": {"months": 48},
-               "salary": {"amount": 150000, "currency": "RUR"},
-               "education": {"level": {"id": "higher"}},
-               "area": {"id": "63", "name": "Самара, Самарская область"},
-               "experience": []}
+    payload = {
+        "id": "r001",
+        "title": "директор филиала страхование",
+        "total_experience": {"months": 48},
+        "salary": {"amount": 150000, "currency": "RUR"},
+        "education": {"level": {"id": "higher"}},
+        "area": {"id": "63", "name": "Самара, Самарская область"},
+        "experience": [],
+    }
     content_hash = _hash(payload)
     cached_resp = LlmResponse(
         llm_score=85, llm_verdict="yes", llm_comment="Cached", llm_red_flags=[], llm_real_role=""
     )
-    await save_cached(
-        db_session, "r001", content_hash, "v1", cached_resp
-    )
+    await save_cached(db_session, "r001", content_hash, "v1", cached_resp)
     await db_session.flush()
 
     with patch(
@@ -305,13 +286,9 @@ async def test_run_cache_hit_skips_api(
 
 
 @pytest.mark.asyncio
-async def test_run_respects_limit(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_run_respects_limit(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Only `limit` events are processed per run."""
-    monkeypatch.setattr(
-        "hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key"
-    )
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     search = Search(position_code="multi", position_name="Multi", hh_params={}, portrait={})
     db_session.add(search)
     await db_session.flush()
@@ -320,29 +297,36 @@ async def test_run_respects_limit(
 
     for i in range(5):
         rid = f"r{i:03d}_multi"
-        payload = {"id": rid, "title": "директор", "experience": [],
-                   "area": {"id": "63", "name": "Самара, Самарская область"}}
+        payload = {
+            "id": rid,
+            "title": "директор",
+            "experience": [],
+            "area": {"id": "63", "name": "Самара, Самарская область"},
+        }
         db_session.add(Resume(hh_resume_id=rid))
         await db_session.flush()
-        db_session.add(Snapshot(
-            hh_resume_id=rid, payload=payload, content_hash=_hash(payload)
-        ))
+        db_session.add(Snapshot(hh_resume_id=rid, payload=payload, content_hash=_hash(payload)))
         await db_session.flush()
-        db_session.add(Event(
-            hh_resume_id=rid, event_type="NEW", search_id=search.id,
-            fit_score=75, llm_enriched=False,
-        ))
+        db_session.add(
+            Event(
+                hh_resume_id=rid,
+                event_type="NEW",
+                search_id=search.id,
+                fit_score=75,
+                llm_enriched=False,
+            )
+        )
     await db_session.flush()
 
-    with patch(
-        "hh_monitor.llm_enrich.client.chat_completion",
-        new_callable=AsyncMock,
-        return_value=_ok_llm_response(),
+    with (
+        patch(
+            "hh_monitor.llm_enrich.client.chat_completion",
+            new_callable=AsyncMock,
+            return_value=_ok_llm_response(),
+        ),
+        patch("hh_monitor.llm_enrich.run._INTER_CALL_DELAY", 0),
     ):
-        with patch("hh_monitor.llm_enrich.run._INTER_CALL_DELAY", 0):
-            result = await run_llm_enrichment(
-                db_session, search.id, limit=3, portraits=portraits
-            )
+        result = await run_llm_enrichment(db_session, search.id, limit=3, portraits=portraits)
 
     assert result["total_processed"] == 3
 
@@ -373,13 +357,9 @@ async def test_run_no_portrait_raises(db_session: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_score_total_formula(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """score_total = round(0.3 * fit_score + 0.7 * llm_score)."""
-    monkeypatch.setattr(
-        "hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key"
-    )
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=60)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -388,9 +368,7 @@ async def test_score_total_formula(
         new_callable=AsyncMock,
         return_value=_ok_llm_response(score=70, verdict="yes"),
     ):
-        await run_llm_enrichment(
-            db_session, search.id, limit=1, portraits=portraits
-        )
+        await run_llm_enrichment(db_session, search.id, limit=1, portraits=portraits)
 
     await db_session.refresh(resume)
     expected = round(0.3 * 60 + 0.7 * 70)  # = 67

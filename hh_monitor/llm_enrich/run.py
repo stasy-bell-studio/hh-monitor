@@ -178,9 +178,7 @@ async def _enrich_one(
     )
 
     # 8. Mark event as enriched
-    await session.execute(
-        update(Event).where(Event.id == event_id).values(llm_enriched=True)
-    )
+    await session.execute(update(Event).where(Event.id == event_id).values(llm_enriched=True))
 
     await session.commit()
 
@@ -231,8 +229,7 @@ async def run_llm_enrichment(
     portrait = portraits.get(position_code)
     if portrait is None:
         raise ValueError(
-            f"No portrait found for position_code={position_code!r}. "
-            f"Available: {sorted(portraits)}"
+            f"No portrait found for position_code={position_code!r}. Available: {sorted(portraits)}"
         )
 
     # Fetch pending events as primitive tuples to avoid ORM expiry issues.
@@ -279,9 +276,7 @@ async def run_llm_enrichment(
                 error=repr(exc),
             )
             errors += 1
-            results.append(
-                {"resume_id": resume_id, "status": "error", "error": repr(exc)}
-            )
+            results.append({"resume_id": resume_id, "status": "error", "error": repr(exc)})
             continue
 
         results.append(result)
