@@ -8,10 +8,19 @@ What it does:
   1. Loads config/portraits/branch_director.yaml (source of truth).
   2. Builds hh_params: 27 area IDs + experience filter + text= (from
      build_search_params) + period=30 (from portrait.resume_freshness_days).
-  3. Inserts a Search row with position_code='branch_director_21vek'.
+  3. Inserts a Search row with position_code='branch_director' (canonical
+     portrait code, shared with any other branch_director searches).
   4. Prints a verification summary.
 
 Re-running is idempotent — prints a notice if the search already exists.
+
+Note on position_code:
+  position_code='branch_director' aligns with the branch_director.yaml portrait
+  and is the canonical value after the session-5.7 cleanup migration.  On a
+  production VPS where the legacy SPb search (id=1) has been decommissioned,
+  this script creates a single row.  If id=1 still exists with the same
+  position_code, the idempotency check aborts safely without creating a
+  duplicate.
 """
 
 import asyncio
@@ -92,7 +101,7 @@ AREA_IDS: list[int] = [
 ]
 
 _PORTRAIT_YAML = _ROOT / "config" / "portraits" / "branch_director.yaml"
-_POSITION_CODE = "branch_director_21vek"
+_POSITION_CODE = "branch_director"
 _POSITION_NAME = "Директор филиала (21 Век)"
 
 
