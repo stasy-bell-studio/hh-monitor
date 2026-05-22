@@ -41,22 +41,31 @@ _NEW_TERRITORY_AREA_IDS: frozenset[int] = frozenset(
     }
 )
 
-# Maximum number of position synonyms to include in the hh.ru text query.
-_MAX_SYNONYMS = 5
-# Hard character limit for the text= parameter (hh.ru informal limit ~512,
-# but we keep it at 250 to stay safe and avoid truncated OR terms).
-_MAX_TEXT_LEN = 250
+# Hard character limit for the full text= parameter (including prefix/suffix).
+# hh.ru informal limit is ~512; we stay well under it.
+_MAX_TEXT_LEN = 255
+
+# Wrapper added around the OR-terms: "(" prefix + ") страхование" suffix.
+# Total overhead = 1 + 13 = 14 characters.
+_QUERY_PREFIX = "("
+_QUERY_SUFFIX = ") страхование"
+_QUERY_OVERHEAD = len(_QUERY_PREFIX) + len(_QUERY_SUFFIX)  # 14
 
 
 def build_search_params(hh_params: dict[str, Any], portrait: Portrait) -> dict[str, Any]:
     """Augment *hh_params* with a text query and optional period derived from *portrait*.
 
-    Text query:
-        ``<position_name> OR <syn1> OR … OR <synN>``
-        Up to ``_MAX_SYNONYMS`` synonyms from portrait.position_synonyms are
-        included.  Terms are added left-to-right until the next term would
-        exceed ``_MAX_TEXT_LEN`` characters; at least ``position_name`` is
-        always included.
+    Text query format:
+        ``(<position_name> OR <syn1> OR … OR <synN>) страхование``
+
+        ALL synonyms from portrait.position_synonyms are considered.  They are
+        added left-to-right until the next term would push the *total* text=
+        length above ``_MAX_TEXT_LEN`` characters (255).  At least
+        ``position_name`` is always included.
+
+        The ``страхование`` suffix and grouping parens ensure that hh.ru
+        returns only resumes where (one of the title variants) AND
+        "страхование" are present.
 
     Period filter:
         If ``portrait.resume_freshness_days > 0``, ``period=N`` is added,
@@ -71,21 +80,23 @@ def build_search_params(hh_params: dict[str, Any], portrait: Portrait) -> dict[s
         A new dict (original is not mutated) with ``text`` (and optionally
         ``period``) overridden / added.
     """
-    # Build text= from position_name + up to _MAX_SYNONYMS synonyms
-    synonyms = portrait.position_synonyms[:_MAX_SYNONYMS]
-    terms = [portrait.position_name, *synonyms]
+    # Budget for the OR-terms content between the parens.
+    _or_budget = _MAX_TEXT_LEN - _QUERY_OVERHEAD  # 241
+
+    # Try all synonyms; include each one while the final text= stays within budget.
+    terms = [portrait.position_name, *portrait.position_synonyms]
 
     chosen: list[str] = []
     current_len = 0
     for term in terms:
         sep = " OR " if chosen else ""
         addition_len = len(sep) + len(term)
-        if chosen and current_len + addition_len > _MAX_TEXT_LEN:
+        if chosen and current_len + addition_len > _or_budget:
             break
         chosen.append(term)
         current_len += addition_len
 
-    text = " OR ".join(chosen)
+    text = f"{_QUERY_PREFIX}{' OR '.join(chosen)}{_QUERY_SUFFIX}"
 
     result = {**hh_params, "text": text}
 
