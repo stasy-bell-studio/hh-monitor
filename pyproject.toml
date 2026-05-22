@@ -44,8 +44,12 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 # Russian-language LLM prompt constant — Cyrillic chars intentionally
 # look like Latin; long lines are deliberate (prose sent to the API).
 "hh_monitor/llm_enrich/prompt.py" = ["RUF001", "E501"]
-# Tests use Russian company/city names in string literals — not typos.
-"tests/*.py" = ["RUF001"]
+# Insurance keyword stems (ОСАГО/КАСКО/ИФЛ) in string literals and comments — Cyrillic intentional.
+"hh_monitor/fit/rules.py" = ["RUF001", "RUF003"]
+# Russian field comments in portrait model — Cyrillic in comments is intentional.
+"hh_monitor/fit/portrait.py" = ["RUF003"]
+# Tests use Russian company/city names in string literals and docstrings — not typos.
+"tests/*.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.12"

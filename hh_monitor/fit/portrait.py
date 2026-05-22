@@ -39,15 +39,38 @@ class Filters(BaseModel):
 
 
 class Weights(BaseModel):
-    """Per-rule score weights.  Default sum = 90 (leaves room for edge cases)."""
+    """Per-rule score weights.
 
+    Legacy fields (used by old rules.py, max theoretical sum = 90):
+      title_match, experience_keywords, total_experience, salary_fit,
+      education, region, age
+
+    New fields (Lesnitskaya etalon v1, used by new fit/rules.py, max raw = 45):
+      agent_network_experience (10), osago_knowledge (9),
+      target_region_primary (8), target_region_adjacent (4),
+      ifl_experience (7), top4_competitor_experience (6),
+      higher_specialized_education (5).
+      NOTE: region score = max(target_region_primary, target_region_adjacent),
+      so the achievable max is 10+9+8+7+6+5 = 45.
+    """
+
+    # ── Legacy weights (kept for backward compat) ────────────────────────────
     title_match: int = 25
     experience_keywords: int = 15
     total_experience: int = 20
-    salary_fit: int = 10
+    salary_fit: int = 10  # removed from new formula per Lesnitskaya etalon 5.7
     education: int = 5
     region: int = 10
     age: int = 5
+
+    # ── New etalon weights (Lesnitskaya v1) ──────────────────────────────────
+    agent_network_experience: int = 10
+    osago_knowledge: int = 9
+    target_region_primary: int = 8
+    target_region_adjacent: int = 4
+    ifl_experience: int = 7
+    top4_competitor_experience: int = 6
+    higher_specialized_education: int = 5
 
 
 # ── Main portrait model ───────────────────────────────────────────────────────
@@ -82,13 +105,45 @@ class Portrait(BaseModel):
     target_companies_override: list[str] = []
     stop_companies_override: list[str] = []
 
-    # ── New fields ───────────────────────────────────────────────────────────
+    # ── Search / hh.ru params ────────────────────────────────────────────────
     search_params: dict[str, Any] = {}
+    # Synonyms used to build the hh.ru text= query (OR-joined with position_name).
+    # Order = priority; parser uses first 5 to stay within hh.ru ~256-char limit.
+    position_synonyms: list[str] = []
+    # Filter period= in hh.ru API (days since last update); 0 = no filter.
+    resume_freshness_days: int = 0
+
+    # ── Scoring structure ────────────────────────────────────────────────────
     filters: Filters = Field(default_factory=Filters)
     weights: Weights = Field(default_factory=Weights)
     stop_words: list[str] = []
     must_have_keywords: list[str] = []
     nice_to_have_keywords: list[str] = []
+
+    # ── Experience requirements ──────────────────────────────────────────────
+    # Minimum months of insurance-specific experience (separate from total_exp).
+    min_insurance_experience_months: int = 0
+    # Whether motor insurance (КАСКО/ОСАГО) experience is preferred (soft, not hard filter).
+    motor_experience_preferred: bool = False
+    # Minimum months at most recent job; fewer = red_flag for LLM.
+    min_tenure_last_job_months: int = 0
+    # Max allowed career gap in months; 0 = no restriction.
+    max_career_gap_months: int = 0
+
+    # ── Hard filters — demographics / education ──────────────────────────────
+    # If True, candidates without higher education are hard-rejected (fit_score=0).
+    higher_education_required: bool = False
+    # Preferred specialisation areas for bonus in higher_specialized_education criterion.
+    preferred_education_fields: list[str] = []
+    # Required citizenship; None = no restriction.
+    citizenship: str | None = None
+
+    # ── Company signals ──────────────────────────────────────────────────────
+    # Subset of _global.yaml target_companies that give a fit_score boost.
+    bonus_companies: list[str] = []
+    # Industries that trigger hard-reject (стоп-сигнал verdict) when found in
+    # most recent experience entry.  Values are case-insensitive substrings.
+    forbidden_industries: list[str] = []
 
     # ── Legacy fields (kept for backward compat) ─────────────────────────────
     title_keywords: list[str] = []

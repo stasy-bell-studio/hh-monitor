@@ -3,7 +3,7 @@
 For each unenriched event:
   1. Load the latest snapshot payload for the resume.
   2. Load the Portrait for the search's position_code.
-  3. Check the stop-region guard (fit rules breakdown).
+  3. Check the hard-reject guard (stop region / forbidden industry / missing quals).
   4. Check the LLM cache.
   5. Call OpenRouter if no cache hit.
   6. Compute score_total = round(0.3 * fit_score + 0.7 * llm_score).
@@ -81,16 +81,22 @@ async def _enrich_one(
         return {"resume_id": resume_id, "status": "skipped", "reason": "no_snapshot"}
     payload, content_hash = snap
 
-    # 2. Compute fit score and check stop-region guard
+    # 2. Compute fit score and check hard-reject guard (stop region, forbidden
+    # industry, missing qualifications, etc.)
     fit_score_val: int | None = event_fit_score
     if fit_score_val is None:
         fit_score_val, breakdown = fit_compute(payload, portrait)
     else:
         _, breakdown = fit_compute(payload, portrait)
 
-    if breakdown.get("area", 0) < 0:
-        log_ctx.info("llm_enrich.stop_region_skip", fit_score=fit_score_val)
-        return {"resume_id": resume_id, "status": "skipped", "reason": "stop_region"}
+    reject_reason: str | None = breakdown.get("hard_reject_reason")
+    if reject_reason is not None:
+        log_ctx.info(
+            "llm_enrich.hard_reject_skip",
+            reason=reject_reason,
+            fit_score=fit_score_val,
+        )
+        return {"resume_id": resume_id, "status": "skipped", "reason": reject_reason}
 
     # 3. Check fit threshold
     if fit_score_val < settings.score_fit_min_for_llm:

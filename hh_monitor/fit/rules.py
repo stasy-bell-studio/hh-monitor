@@ -1,8 +1,28 @@
 """Rule-based fit scorer for hh.ru resume payloads.
 
 Pure module — no I/O, no side effects except debug-level structlog calls.
+
+Scoring v2 (Lesnitskaya etalon v1, session 5.7):
+  1. Seven hard filters: any triggered → fit_score=0,
+     breakdown["hard_reject_reason"] is set to the reason string.
+  2. Six weighted scored criteria; max achievable raw sum = 45.
+  3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
+
+Scoring v1 (legacy) — salary fit removed in 5.7 per Lesnitskaya etalon.
+  Legacy breakdown keys (title_match, experience_keywords, etc.) are no
+  longer computed; the new keys replace them.
+
+Hard reject reasons (breakdown["hard_reject_reason"]):
+  "age"                 — candidate age outside portrait.filters.age_range
+  "education"           — higher_education_required=True but no higher edu
+  "stop_region"         — candidate area in filters.regions.stop
+  "forbidden_industry"  — most recent job in portrait.forbidden_industries
+  "career_gap"          — longest gap > portrait.max_career_gap_months
+  "total_experience"    — total months < portrait.min_total_months
+  "insurance_experience"— insurance months < portrait.min_insurance_experience_months
 """
 
+import re
 from datetime import date
 from typing import Any
 
@@ -11,6 +31,23 @@ import structlog
 from hh_monitor.fit.portrait import Portrait
 
 logger = structlog.get_logger(__name__)
+
+# Education levels considered "higher" for hard-filter purposes
+_HIGHER_EDU_IDS: frozenset[str] = frozenset({"higher", "bachelor", "master", "candidate", "doctor"})
+
+# Keyword stems for insurance-related experience detection (substring match)
+# "страхов" catches: страхование, страховая, страховой, страховщик, etc.
+_INSURANCE_STEMS: frozenset[str] = frozenset(
+    {"страхов", "insurance", "осаго", "каско", "дмс", "ифл"}
+)
+
+# Regex for agent-network FULL match: covers all inflections of "агентская сеть"
+# and "руководство филиалом".  "агентск" matches агентской, агентскую, etc.
+_RE_AGENT_FULL = re.compile(r"агентск|руководство\s+филиал", re.IGNORECASE)
+# Regex for agent-network PARTIAL match: any word starting with "агент" —
+# covers агент, агенты, агентов, агентами, агентах, etc.
+# (когда есть "агентск", _RE_AGENT_FULL уже сработал; elif гарантирует no double-count)
+_RE_AGENT_PARTIAL = re.compile(r"\bагент", re.IGNORECASE)
 
 
 # ── date helpers ──────────────────────────────────────────────────────────────
@@ -21,8 +58,18 @@ def _today() -> date:
     return date.today()
 
 
+def _parse_ym(s: str | None) -> int | None:
+    """Parse 'YYYY-MM' → absolute months (year*12 + month), or None on error."""
+    if not isinstance(s, str) or len(s) < 7:
+        return None
+    try:
+        return int(s[:4]) * 12 + int(s[5:7])
+    except (ValueError, IndexError):
+        return None
+
+
 def _parse_ym_months(start_str: str, end_str: str | None) -> int | None:
-    """Parse two ``YYYY-MM`` strings and return the month difference.
+    """Parse two YYYY-MM strings → month delta, or None on error.
 
     If *end_str* is ``None`` the current month is used (open-ended role).
     Returns ``None`` on any parse error so callers can skip gracefully.
@@ -40,7 +87,7 @@ def _parse_ym_months(start_str: str, end_str: str | None) -> int | None:
 
 
 def _experience_months_fallback(experiences: list[Any]) -> int | None:
-    """Sum months from ``experience[].start``/``end`` as a fallback.
+    """Sum months from experience[].start/end strings as a fallback.
 
     hh.ru experience items carry ``start`` (``YYYY-MM``) and ``end``
     (``YYYY-MM`` or ``null`` for the current role) but no pre-computed
@@ -63,144 +110,314 @@ def _experience_months_fallback(experiences: list[Any]) -> int | None:
     return total if found else None
 
 
+def _insurance_experience_months(experiences: list[Any]) -> int:
+    """Sum months from experience entries that appear insurance-related.
+
+    An entry is considered insurance-related if any *_INSURANCE_STEMS* keyword
+    appears in the concatenated company name, position title, or description.
+    """
+    total = 0
+    for entry in experiences:
+        if not isinstance(entry, dict):
+            continue
+        text = " ".join(
+            filter(
+                None,
+                [
+                    entry.get("company", ""),
+                    entry.get("position", ""),
+                    entry.get("description", ""),
+                ],
+            )
+        ).lower()
+        if not any(stem in text for stem in _INSURANCE_STEMS):
+            continue
+        months = _parse_ym_months(entry.get("start", ""), entry.get("end"))
+        if months is not None:
+            total += max(0, months)
+    return total
+
+
+def _max_career_gap_months(experiences: list[Any]) -> int:
+    """Return the largest gap in months between consecutive experience entries.
+
+    Uses start/end dates; open-ended roles (end=None) use the current month.
+    Returns 0 if fewer than two parseable entries.
+    """
+    today = _today()
+    today_abs = today.year * 12 + today.month
+    dated: list[tuple[int, int]] = []  # (start_abs, end_abs)
+
+    for entry in experiences:
+        if not isinstance(entry, dict):
+            continue
+        start_abs = _parse_ym(entry.get("start"))
+        if start_abs is None:
+            continue
+        end_str = entry.get("end")
+        end_abs = _parse_ym(end_str) if end_str else today_abs
+        if end_abs is None:
+            end_abs = today_abs
+        dated.append((start_abs, max(start_abs, end_abs)))
+
+    if len(dated) < 2:
+        return 0
+
+    dated.sort(key=lambda x: x[0])  # oldest first
+    max_gap = 0
+    for i in range(len(dated) - 1):
+        gap = dated[i + 1][0] - dated[i][1]  # next_start - prev_end
+        if gap > max_gap:
+            max_gap = gap
+    return max(0, max_gap)
+
+
+def _latest_experience(experiences: list[Any]) -> dict[str, Any] | None:
+    """Return the most recent experience entry by start date, or None."""
+    best: dict[str, Any] | None = None
+    best_start = -1
+    for entry in experiences:
+        if not isinstance(entry, dict):
+            continue
+        start_abs = _parse_ym(entry.get("start"))
+        if start_abs is not None and start_abs > best_start:
+            best_start = start_abs
+            best = entry
+    return best
+
+
+def _region_match(area_name: str, regions: list[str]) -> bool:
+    """Return True if any portrait region string is a substring of *area_name*."""
+    area_lower = area_name.lower()
+    return bool(area_name) and any(r.lower() in area_lower for r in regions)
+
+
 # ── main scorer ───────────────────────────────────────────────────────────────
 
 
-def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, dict[str, int]]:
+def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, dict[str, Any]]:
     """Score a resume against a portrait.  Pure function — no side effects.
 
+    Scoring v2 (Lesnitskaya etalon v1):
+      1. Seven hard filters — any triggered returns (0, {"hard_reject_reason": reason}).
+      2. Six weighted criteria with a raw max of 45.
+      3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
+
     Returns:
-        (score, breakdown) where *score* is clamped to [0, 100] and
-        *breakdown* maps rule name → point delta.  Rules that cannot be
-        evaluated (missing data) are **omitted** from *breakdown* and
-        contribute 0 to the score.
+        ``(score, breakdown)`` where *score* is in ``[0, 100]``.
+
+        *breakdown* maps criterion name → int points. Hard-rejected resumes
+        additionally have ``breakdown["hard_reject_reason"]`` set to a string
+        reason code; callers detect hard rejection via::
+
+            reject_reason = breakdown.get("hard_reject_reason")
     """
-    breakdown: dict[str, int] = {}
-    score = 0
+    breakdown: dict[str, Any] = {}
+    resume_id: str = resume_payload.get("id") or resume_payload.get("hh_resume_id", "")
+    experiences: list[Any] = resume_payload.get("experience") or []
 
-    # ── Title match (+25) ─────────────────────────────────────────────────
-    title: str = (resume_payload.get("title") or "").lower()
-    breakdown["title_match"] = (
-        25 if any(kw.lower() in title for kw in portrait.title_keywords) else 0
-    )
-
-    # ── Experience keywords (+15) ─────────────────────────────────────────
-    exp_text = " ".join(
-        " ".join(
-            filter(
-                None,
-                [e.get("description", ""), e.get("position", "")],
-            )
-        )
-        for e in (resume_payload.get("experience") or [])
-    ).lower()
-    breakdown["experience_keywords"] = (
-        15 if any(kw.lower() in exp_text for kw in portrait.experience_keywords) else 0
-    )
-
-    # ── Total experience (+20 / +10 / -10 / skipped) ─────────────────────
-    #
-    # Primary source: total_experience.months (pre-computed by hh.ru).
-    # Fallback:       sum months from experience[].start/end (YYYY-MM strings).
-    # Skip:           if neither source is available — rule omitted from breakdown.
-    te_raw = resume_payload.get("total_experience")
-    months: int | None = None
-
-    if isinstance(te_raw, dict) and te_raw.get("months") is not None:
-        months = int(te_raw["months"])
-    else:
-        fallback = _experience_months_fallback(resume_payload.get("experience") or [])
-        if fallback is not None and fallback > 0:
-            months = fallback
-        else:
-            logger.debug("fit.total_experience.missing", resume_id=resume_payload.get("id"))
-
-    if months is not None:
-        if months >= portrait.preferred_total_months:
-            breakdown["total_experience"] = 20
-        elif months >= portrait.min_total_months:
-            breakdown["total_experience"] = 10
-        else:
-            breakdown["total_experience"] = -10
-
-    # ── Salary fit (+10 / -15 / skipped) ─────────────────────────────────
-    #
-    # Skip when salary is absent, currency is unknown, or currency ≠ RUR.
-    # We never convert foreign currencies (no exchange-rate calls in the PoC).
-    salary_raw = resume_payload.get("salary") or {}
-    salary_amount: int | None = salary_raw.get("amount") if isinstance(salary_raw, dict) else None
-    salary_currency: str | None = (
-        salary_raw.get("currency") if isinstance(salary_raw, dict) else None
-    )
-
-    if salary_amount is None or salary_currency != "RUR":
-        if salary_currency is not None and salary_currency != "RUR":
-            logger.debug(
-                "fit.salary.non_rur_skipped",
-                currency=salary_currency,
-                resume_id=resume_payload.get("id"),
-            )
-        # rule skipped — no key added to breakdown
-    else:
-        if portrait.max_salary is None or salary_amount <= portrait.max_salary:
-            breakdown["salary_fit"] = 10
-        else:
-            breakdown["salary_fit"] = -15
-
-    # ── Education (+5) ────────────────────────────────────────────────────
-    edu_level_id: str = ((resume_payload.get("education") or {}).get("level") or {}).get("id", "")
-    preferred_edu = portrait.preferred_education_levels
-    breakdown["education"] = 5 if (preferred_edu and edu_level_id in preferred_edu) else 0
-
-    # ── Area / region (+10 primary / +5 adjacent / 0 no-match / -∞ stop) ──────
-    #
-    # Payload format: area = {"id": str, "name": str, "url": str}.
-    # Match logic: portrait region entry is a substring of the payload area
-    # name (case-insensitive).  "Самарская область" matches "Самара,
-    # Самарская область" (portrait entry is a substring of the payload name).
-    #
-    # Priority: stop > primary > adjacent > no-match.
-    # Sources: filters.regions.* take priority; preferred_areas is a fallback
-    # for primary when filters.regions.primary is empty (legacy compat).
-    #
-    # Stop regions: breakdown["area"] = -(10**6) so the final score clamps to 0.
-    # Callers detect stop via: breakdown.get("area", 0) < 0
+    # ── Helpers shared across rules ───────────────────────────────────────────
     area_raw = resume_payload.get("area")
     area_name: str = ""
     if isinstance(area_raw, dict):
         area_name = area_raw.get("name") or ""
-    elif area_raw is not None:
-        logger.debug(
-            "fit.area.unexpected_type",
-            type=type(area_raw).__name__,
-            resume_id=resume_payload.get("id"),
-        )
+    elif isinstance(area_raw, str):
+        area_name = area_raw
 
-    def _region_match(regions: list[str]) -> bool:
-        return bool(area_name) and any(r.lower() in area_name.lower() for r in regions)
+    edu: dict[str, Any] = resume_payload.get("education") or {}
+    edu_level_id: str = (edu.get("level") or {}).get("id", "")
 
-    stop_regions = portrait.filters.regions.stop
-    primary_regions = portrait.filters.regions.primary or portrait.preferred_areas
-    adjacent_regions = portrait.filters.regions.adjacent
-    region_weight = portrait.weights.region  # default 10
+    # ── STEP 1: Hard filters ──────────────────────────────────────────────────
+    # Any triggered filter → return immediately with score=0.
 
-    if stop_regions and _region_match(stop_regions):
-        # Hard fail — score clamps to 0, LLM must be skipped by caller
-        breakdown["area"] = -(10**6)
-    elif primary_regions and _region_match(primary_regions):
-        breakdown["area"] = region_weight
-    elif adjacent_regions and _region_match(adjacent_regions):
-        breakdown["area"] = region_weight // 2
-    else:
-        breakdown["area"] = 0
-
-    # ── Age (+5) ──────────────────────────────────────────────────────────
+    # 1a. Age (only when both portrait and payload provide the value)
     age: int | None = resume_payload.get("age")
-    if portrait.age_range is not None and age is not None:
-        lo, hi = portrait.age_range
-        breakdown["age"] = 5 if lo <= age <= hi else 0
-    else:
-        breakdown["age"] = 0
+    if portrait.filters.age_range is not None and age is not None:
+        lo, hi = portrait.filters.age_range
+        if not (lo <= age <= hi):
+            breakdown["hard_reject_reason"] = "age"
+            logger.debug("fit.hard_reject.age", age=age, range=(lo, hi), resume_id=resume_id)
+            return 0, breakdown
 
-    score = sum(breakdown.values())
-    return max(0, min(100, score)), breakdown
+    # 1b. Higher education required
+    if portrait.higher_education_required and edu_level_id not in _HIGHER_EDU_IDS:
+        breakdown["hard_reject_reason"] = "education"
+        logger.debug("fit.hard_reject.education", edu_level=edu_level_id, resume_id=resume_id)
+        return 0, breakdown
+
+    # 1c. Stop region
+    if portrait.filters.regions.stop and _region_match(area_name, portrait.filters.regions.stop):
+        breakdown["hard_reject_reason"] = "stop_region"
+        logger.debug("fit.hard_reject.stop_region", area=area_name, resume_id=resume_id)
+        return 0, breakdown
+
+    # 1d. Forbidden industry — check ONLY the most recent experience entry
+    if portrait.forbidden_industries:
+        latest = _latest_experience(experiences)
+        if latest is not None:
+            latest_text = " ".join(
+                filter(
+                    None,
+                    [
+                        latest.get("company", ""),
+                        latest.get("position", ""),
+                        latest.get("description", ""),
+                    ],
+                )
+            ).lower()
+            for industry in portrait.forbidden_industries:
+                if industry.lower() in latest_text:
+                    breakdown["hard_reject_reason"] = "forbidden_industry"
+                    logger.debug(
+                        "fit.hard_reject.forbidden_industry",
+                        industry=industry,
+                        resume_id=resume_id,
+                    )
+                    return 0, breakdown
+
+    # 1e. Career gap
+    if portrait.max_career_gap_months > 0:
+        max_gap = _max_career_gap_months(experiences)
+        if max_gap > portrait.max_career_gap_months:
+            breakdown["hard_reject_reason"] = "career_gap"
+            logger.debug(
+                "fit.hard_reject.career_gap",
+                gap_months=max_gap,
+                max_allowed=portrait.max_career_gap_months,
+                resume_id=resume_id,
+            )
+            return 0, breakdown
+
+    # 1f. Total experience
+    te_raw = resume_payload.get("total_experience")
+    total_months: int | None = None
+    if isinstance(te_raw, dict) and te_raw.get("months") is not None:
+        total_months = int(te_raw["months"])
+    else:
+        total_months = _experience_months_fallback(experiences)
+
+    if (
+        portrait.min_total_months > 0
+        and total_months is not None
+        and total_months < portrait.min_total_months
+    ):
+        breakdown["hard_reject_reason"] = "total_experience"
+        logger.debug(
+            "fit.hard_reject.total_experience",
+            months=total_months,
+            required=portrait.min_total_months,
+            resume_id=resume_id,
+        )
+        return 0, breakdown
+
+    # 1g. Insurance-specific experience
+    if portrait.min_insurance_experience_months > 0:
+        ins_months = _insurance_experience_months(experiences)
+        if ins_months < portrait.min_insurance_experience_months:
+            breakdown["hard_reject_reason"] = "insurance_experience"
+            logger.debug(
+                "fit.hard_reject.insurance_experience",
+                months=ins_months,
+                required=portrait.min_insurance_experience_months,
+                resume_id=resume_id,
+            )
+            return 0, breakdown
+
+    # ── STEP 2: Weighted scored criteria ─────────────────────────────────────
+    # Build full searchable text from experience + key_skills
+    exp_parts: list[str] = []
+    for entry in experiences:
+        if isinstance(entry, dict):
+            exp_parts.extend(
+                filter(
+                    None,
+                    [
+                        entry.get("company", ""),
+                        entry.get("position", ""),
+                        entry.get("description", ""),
+                    ],
+                )
+            )
+    exp_text = " ".join(exp_parts).lower()
+
+    key_skills_raw = resume_payload.get("key_skills") or []
+    skills_text = " ".join(
+        s["name"] if isinstance(s, dict) else str(s) for s in key_skills_raw
+    ).lower()
+
+    full_text = f"{exp_text} {skills_text}"
+    w = portrait.weights
+
+    # 2a. Agent network experience (10 full / 5 partial)
+    if _RE_AGENT_FULL.search(full_text):
+        breakdown["agent_network_experience"] = w.agent_network_experience
+    elif _RE_AGENT_PARTIAL.search(full_text):
+        breakdown["agent_network_experience"] = w.agent_network_experience // 2
+    else:
+        breakdown["agent_network_experience"] = 0
+
+    # 2b. ОСАГО / КАСКО knowledge (9)
+    breakdown["osago_knowledge"] = (
+        w.osago_knowledge if ("осаго" in full_text or "каско" in full_text) else 0
+    )
+
+    # 2c. Region score — take max(primary, adjacent), never additive
+    primary_pts = (
+        w.target_region_primary if _region_match(area_name, portrait.filters.regions.primary) else 0
+    )
+    adjacent_pts = (
+        w.target_region_adjacent
+        if _region_match(area_name, portrait.filters.regions.adjacent)
+        else 0
+    )
+    breakdown["region"] = max(primary_pts, adjacent_pts)
+
+    # 2d. ИФЛ experience (7)
+    # Match "ифл" or "физических лиц" (covers both nominative "имущество физических лиц"
+    # and genitive "имущества физических лиц" common in Russian HR text).
+    breakdown["ifl_experience"] = (
+        w.ifl_experience if ("ифл" in full_text or "физических лиц" in full_text) else 0
+    )
+
+    # 2e. Top-4 competitor experience (6)
+    breakdown["top4_competitor_experience"] = (
+        w.top4_competitor_experience
+        if any(company.lower() in exp_text for company in portrait.bonus_companies)
+        else 0
+    )
+
+    # 2f. Higher education with relevant specialization (5)
+    has_higher_edu = edu_level_id in _HIGHER_EDU_IDS
+    primary_edu: list[Any] = edu.get("primary") or []
+    spec_text = (
+        primary_edu[0].get("name", "").lower()
+        if primary_edu and isinstance(primary_edu[0], dict)
+        else ""
+    )
+
+    # Stem-based match: use first max(5, len-2) chars to handle Russian inflection.
+    # "финансы" (7) → "финан" matches "финансовый"; "экономика" (9) → "экономи"
+    # matches "экономический"; etc.
+    def _field_stem(f: str) -> str:
+        return f.lower()[: max(5, len(f) - 2)]
+
+    has_spec_match = bool(portrait.preferred_education_fields) and any(
+        _field_stem(field) in spec_text for field in portrait.preferred_education_fields
+    )
+    breakdown["higher_specialized_education"] = (
+        w.higher_specialized_education if (has_higher_edu and has_spec_match) else 0
+    )
+
+    # ── STEP 3: Normalize to 0-100 ───────────────────────────────────────────
+    _MAX_RAW = 45  # achievable max (primary wins over adjacent; max 8, not 8+4)
+    scored_keys = {
+        "agent_network_experience",
+        "osago_knowledge",
+        "region",
+        "ifl_experience",
+        "top4_competitor_experience",
+        "higher_specialized_education",
+    }
+    total_raw = sum(int(breakdown[k]) for k in scored_keys)
+    fit_score = round(total_raw / _MAX_RAW * 100)
+    return max(0, min(100, fit_score)), breakdown

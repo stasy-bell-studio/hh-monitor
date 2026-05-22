@@ -384,14 +384,161 @@ def test_portrait_new_fields_round_trip(tmp_path: Path) -> None:
 
 
 def test_branch_director_yaml_has_production_fields() -> None:
-    """The shipped branch_director.yaml includes all required production fields."""
+    """The shipped branch_director.yaml (Lesnitskaya etalon v1) includes all required fields."""
     portraits = load_all_portraits()
     assert "branch_director" in portraits
     bd = portraits["branch_director"]
     assert bd.position_description  # non-empty
-    assert len(bd.evaluation_focus) >= 4
+    # evaluation_focus is intentionally empty — LLM derives criteria from position_description
+    assert bd.evaluation_focus == []
+    assert len(bd.filters.regions.primary) == 27
+    assert len(bd.filters.regions.adjacent) == 8
+    assert len(bd.filters.regions.stop) == 2
     assert any("банк" in w.lower() for w in bd.stop_words)
     assert any("агентская" in kw.lower() for kw in bd.must_have_keywords)
+    # New etalon fields
+    assert bd.min_total_months == 60
+    assert bd.min_insurance_experience_months == 36
+    assert bd.higher_education_required is True
+    assert bd.resume_freshness_days == 30
+    assert len(bd.bonus_companies) == 4
+    assert len(bd.forbidden_industries) >= 4
+    assert len(bd.position_synonyms) == 11
+
+
+# ── New mini-5.7 Portrait fields (Lesnitskaya etalon v1) ─────────────────────
+
+
+def test_portrait_position_synonyms_default_empty() -> None:
+    """position_synonyms defaults to empty list."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.position_synonyms == []
+
+
+def test_portrait_resume_freshness_days_default_zero() -> None:
+    """resume_freshness_days defaults to 0 (no filter)."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.resume_freshness_days == 0
+
+
+def test_portrait_min_insurance_experience_months_default_zero() -> None:
+    """min_insurance_experience_months defaults to 0."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.min_insurance_experience_months == 0
+
+
+def test_portrait_motor_experience_preferred_default_false() -> None:
+    """motor_experience_preferred defaults to False."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.motor_experience_preferred is False
+
+
+def test_portrait_min_tenure_last_job_months_default_zero() -> None:
+    """min_tenure_last_job_months defaults to 0."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.min_tenure_last_job_months == 0
+
+
+def test_portrait_max_career_gap_months_default_zero() -> None:
+    """max_career_gap_months defaults to 0 (no restriction)."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.max_career_gap_months == 0
+
+
+def test_portrait_higher_education_required_default_false() -> None:
+    """higher_education_required defaults to False."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.higher_education_required is False
+
+
+def test_portrait_preferred_education_fields_default_empty() -> None:
+    """preferred_education_fields defaults to empty list."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.preferred_education_fields == []
+
+
+def test_portrait_citizenship_default_none() -> None:
+    """citizenship defaults to None (no restriction)."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.citizenship is None
+
+
+def test_portrait_bonus_companies_default_empty() -> None:
+    """bonus_companies defaults to empty list."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.bonus_companies == []
+
+
+def test_portrait_forbidden_industries_default_empty() -> None:
+    """forbidden_industries defaults to empty list."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.forbidden_industries == []
+
+
+def test_portrait_new_etalon_weights_defaults() -> None:
+    """New Lesnitskaya-v1 weight fields have correct defaults (sum of max=45)."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    w = p.weights
+    assert w.agent_network_experience == 10
+    assert w.osago_knowledge == 9
+    assert w.target_region_primary == 8
+    assert w.target_region_adjacent == 4
+    assert w.ifl_experience == 7
+    assert w.top4_competitor_experience == 6
+    assert w.higher_specialized_education == 5
+    # Max achievable = sum excluding target_region_adjacent (we take max of primary/adjacent)
+    assert (
+        w.agent_network_experience
+        + w.osago_knowledge
+        + w.target_region_primary
+        + w.ifl_experience
+        + w.top4_competitor_experience
+        + w.higher_specialized_education
+        == 45
+    )
+
+
+def test_portrait_etalon_fields_round_trip(tmp_path: Path) -> None:
+    """All 12 new 5.7 fields survive a YAML round-trip."""
+    data = {
+        **MINIMAL_DATA,
+        "position_synonyms": ["Руководитель филиала", "Управляющий филиалом"],
+        "resume_freshness_days": 30,
+        "min_insurance_experience_months": 36,
+        "motor_experience_preferred": True,
+        "min_tenure_last_job_months": 12,
+        "max_career_gap_months": 36,
+        "higher_education_required": True,
+        "preferred_education_fields": ["экономика", "финансы"],
+        "citizenship": "РФ",
+        "bonus_companies": ["Ресо-Гарантия", "ВСК"],
+        "forbidden_industries": ["банк", "лизинг"],
+        "weights": {
+            "agent_network_experience": 10,
+            "osago_knowledge": 9,
+            "target_region_primary": 8,
+            "target_region_adjacent": 4,
+            "ifl_experience": 7,
+            "top4_competitor_experience": 6,
+            "higher_specialized_education": 5,
+        },
+    }
+    p = tmp_path / "etalon.yaml"
+    p.write_text(yaml.dump(data, allow_unicode=True), encoding="utf-8")
+    portrait = load_portrait(p)
+    assert portrait.position_synonyms == ["Руководитель филиала", "Управляющий филиалом"]
+    assert portrait.resume_freshness_days == 30
+    assert portrait.min_insurance_experience_months == 36
+    assert portrait.motor_experience_preferred is True
+    assert portrait.min_tenure_last_job_months == 12
+    assert portrait.max_career_gap_months == 36
+    assert portrait.higher_education_required is True
+    assert portrait.preferred_education_fields == ["экономика", "финансы"]
+    assert portrait.citizenship == "РФ"
+    assert portrait.bonus_companies == ["Ресо-Гарантия", "ВСК"]
+    assert portrait.forbidden_industries == ["банк", "лизинг"]
+    assert portrait.weights.agent_network_experience == 10
+    assert portrait.weights.ifl_experience == 7
 
 
 # ── GlobalContext loader ───────────────────────────────────────────────────────
@@ -402,7 +549,10 @@ def test_load_global_context_from_default_path() -> None:
     from hh_monitor.fit.portrait import load_global_context
 
     ctx = load_global_context()
-    assert "СОГАЗ" in ctx.target_companies
+    # 9 companies per Lesnitskaya etalon v1 (session 5.7); СОГАЗ removed
+    assert len(ctx.target_companies) == 9
+    assert "Ресо-Гарантия" in ctx.target_companies
+    assert "Ингосстрах" in ctx.target_companies
     assert len(ctx.stop_companies) >= 1
     assert ctx.market_context  # non-empty
 
