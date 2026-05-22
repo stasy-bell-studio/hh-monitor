@@ -1,0 +1,89 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# YAML Portrait schema — аннотированный шаблон с defaults
+#
+# Каждый файл в config/portraits/*.yaml (кроме _schema.yaml и prompt_template.j2)
+# описывает один целевой портрет.  Файл валидируется через Pydantic-модель Portrait.
+# Команда: poetry run hh-monitor portraits validate
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Обязательные поля ─────────────────────────────────────────────────────────
+
+position_code: example_position         # уникальный snake_case идентификатор
+position_name: "Пример должности"       # человекочитаемое название
+
+# ── Параметры поиска для hh.ru API (/resumes) ────────────────────────────────
+search_params:
+  text: "директор"                      # строка поиска
+  # area: ["113"]                       # список кодов регионов hh.ru (опционально)
+  # experience: between3And6            # moreThan6 / between3And6 / between1And3 / noExperience
+
+# ── Фильтры-критерии ─────────────────────────────────────────────────────────
+filters:
+  regions:
+    # primary: 27 целевых региона — за попадание +weights.region очков (default 10)
+    primary:
+      - "Самарская область"
+    # adjacent: 8 «соседних» — за попадание +weights.region//2 очков (default 5)
+    adjacent:
+      - "Ульяновская область"
+    # stop: 2 стоп-региона — fit_score=0 независимо от остальных правил; LLM не вызывается
+    stop: []
+
+  # age_range: [min, max] включительно; null → правило пропускается
+  age_range: [28, 55]
+
+  # salary_range: [min, max] в рублях; max используется для проверки salary_fit
+  salary_range: [100000, 500000]
+
+  # education_level: список допустимых уровней образования из hh.ru (id поля level.id)
+  #   higher / bachelor / master / candidate / doctor / secondary / special_secondary
+  education_level:
+    - "higher"
+    - "bachelor"
+    - "master"
+
+# ── Веса правил (все числа — прибавка к score, max sum = 100) ────────────────
+weights:
+  title_match:          25    # заголовок резюме содержит один из title_keywords
+  experience_keywords:  15    # опыт работы содержит один из experience_keywords
+  total_experience:     20    # правило стажа (≥preferred → 20, ≥min → 10, <min → -10)
+  salary_fit:           10    # зарплата ≤ filters.salary_range[1]  (+10) или > (+(-15))
+  education:             5    # education.level.id входит в filters.education_level
+  region:               10    # primary match (adjacent = region // 2 = 5)
+  age:                   5    # возраст в filters.age_range
+
+# ── Ключевые слова ───────────────────────────────────────────────────────────
+
+# title_keywords: один из них должен быть в title резюме для +25 (rule: title_match)
+title_keywords:
+  - "директор"
+  - "руководитель"
+
+# experience_keywords: хотя бы одно встречается в текстах опыта → +15
+experience_keywords:
+  - "страхование"
+  - "финансы"
+
+# Диапазон стажа в месяцах
+min_total_months: 36          # < min → -10
+preferred_total_months: 72    # ≥ preferred → +20, ≥ min → +10
+
+# stop_words: если одно из них встречается в title / опыте — поле не блокирует score,
+# но LLM получает их в промпт как red flags для учёта.
+stop_words:
+  - "студент"
+  - "ищу первую работу"
+
+# must_have_keywords: передаются в LLM-промпт как обязательные критерии
+must_have_keywords:
+  - "страхование"
+
+# nice_to_have_keywords: передаются в LLM-промпт как желательные
+nice_to_have_keywords:
+  - "MBA"
+  - "CFA"
+
+# ── Опциональные overrides для LLM-промпта ───────────────────────────────────
+# llm_prompt_overrides:
+#   system_role_addendum: |
+#     Дополнительный контекст для этой позиции...

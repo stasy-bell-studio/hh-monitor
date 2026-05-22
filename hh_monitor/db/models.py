@@ -56,9 +56,7 @@ class Resume(Base):
     llm_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     llm_red_flags: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     llm_real_role: Mapped[str | None] = mapped_column(Text, nullable=True)
-    llm_scored_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    llm_scored_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     # content_hash of the snapshot used for the last LLM call (for cache invalidation)
     llm_content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -67,9 +65,7 @@ class Resume(Base):
 
     # HR screening workflow
     screening_status: Mapped[str | None] = mapped_column(Text, nullable=True)
-    screened_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    screened_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     screened_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (Index("idx_resumes_last_seen", "last_seen_at"),)

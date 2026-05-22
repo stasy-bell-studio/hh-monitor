@@ -1,0 +1,65 @@
+position_code: branch_director
+position_name: "Директор филиала"
+
+search_params:
+  text: "директор филиала страхование"
+  experience: between3And6
+
+filters:
+  regions:
+    primary:
+      - "Самарская область"
+      - "Саратовская область"
+      - "Ульяновская область"
+    adjacent:
+      - "Оренбургская область"
+      - "Пензенская область"
+      - "Республика Татарстан"
+    stop: []  # заполнится из CSV Лесницкой
+
+  age_range: [30, 55]
+  salary_range: [120000, 450000]
+  education_level:
+    - "higher"
+    - "bachelor"
+    - "master"
+    - "candidate"
+
+weights:
+  title_match:          25
+  experience_keywords:  15
+  total_experience:     20
+  salary_fit:           10
+  education:             5
+  region:               10
+  age:                   5
+
+title_keywords:
+  - "директор филиала"
+  - "директор отделения"
+  - "руководитель филиала"
+
+experience_keywords:
+  - "страхование"
+  - "страховая"
+  - "банк"
+  - "финансы"
+  - "продажи"
+
+min_total_months: 36
+preferred_total_months: 72
+
+stop_words:
+  - "студент"
+  - "стажёр"
+  - "без опыта"
+  - "ищу первую работу"
+
+must_have_keywords:
+  - "страхование"
+  - "управление командой"
+
+nice_to_have_keywords:
+  - "CFA"
+  - "MBA"
+  - "финансовая грамотность"

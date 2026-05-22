@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     openrouter_title: str = "hh-monitor"
 
     llm_prompt_version: str = "v1"
-    # Кандидаты с fit_score ниже этого порога не отправляются в LLM
+    # Candidates with fit_score below this threshold are not sent to LLM
     score_fit_min_for_llm: int = Field(default=60, ge=0, le=100)
 
     # Telegram
