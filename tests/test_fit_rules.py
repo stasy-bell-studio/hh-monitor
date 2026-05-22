@@ -774,3 +774,186 @@ def test_hard_stop_candidate_scores_zero() -> None:
     score, bd = compute(payload, p)
     assert score == 0
     assert bd["hard_reject_reason"] == "stop_region"
+
+# ══ Hard filter: current_role_mismatch ════════════════════════════════════════
+#
+# Filter is active only when portrait.position_synonyms is non-empty.
+# Two pass paths: (a) synonym substring match, (b) group-A + group-B combo.
+
+
+def _role_filter_portrait() -> Portrait:
+    """Portrait with synonyms (activates current_role filter) and no other hard filters."""
+    return Portrait(
+        position_code="test_role",
+        position_name="Директор филиала",
+        position_synonyms=[
+            "Руководитель филиала",
+            "Региональный директор",
+            "Управляющий представительства",
+            "Директор представительства",
+            "Менеджер филиала",
+        ],
+        filters=Filters(regions=RegionFilters(primary=[], adjacent=[], stop=[])),
+    )
+
+
+def _role_resume(position: str) -> dict[str, Any]:
+    """Minimal resume payload where the most recent experience has *position* as title."""
+    return {
+        "id": "role_test",
+        "experience": [
+            {
+                "company": "Страховая компания",
+                "position": position,
+                "start": "2020-01",
+                "end": None,
+                "description": "",
+            }
+        ],
+    }
+
+
+# ── Passes (should NOT be rejected) ──────────────────────────────────────────
+
+
+def test_current_role_passes_position_name() -> None:
+    """Latest position == portrait.position_name → passes (path a, exact match)."""
+    p = _role_filter_portrait()
+    _, bd = compute(_role_resume("Директор филиала"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_current_role_passes_position_name_as_substring() -> None:
+    """position_name is a substring of the title → passes (path a)."""
+    p = _role_filter_portrait()
+    _, bd = compute(_role_resume("Директор филиала по продажам в регионе"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_current_role_passes_synonym_regional_director() -> None:
+    """'Региональный директор' is a synonym → passes (path a)."""
+    p = _role_filter_portrait()
+    _, bd = compute(_role_resume("Региональный директор"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_current_role_passes_combo_manager_branch() -> None:
+    """'Управляющий филиалом' — управляющ(A) + филиал(B) → passes (path b)."""
+    p = _role_filter_portrait()
+    _, bd = compute(_role_resume("Управляющий филиалом"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_current_role_passes_combo_director_representative() -> None:
+    """'Директор представительства' — директор(A) + представительств(B) → passes."""
+    p = _role_filter_portrait()
+    _, bd = compute(_role_resume("Директор представительства"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_current_role_passes_combo_head_office() -> None:
+    """'Руководитель офиса продаж' — руководитель(A) + офис(B) → passes (path b)."""
+    p = _role_filter_portrait()
+    _, bd = compute(_role_resume("Руководитель офиса продаж"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_current_role_passes_via_resume_title_fallback() -> None:
+    """When experience is empty, resume.title is used for the check."""
+    p = _role_filter_portrait()
+    payload = {"id": "title_test", "title": "Директор филиала"}  # no experience key
+    _, bd = compute(payload, p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+# ── Rejected — wrong current role ─────────────────────────────────────────────
+
+
+def test_current_role_rejects_product_manager() -> None:
+    """'Product Manager' — no Russian management+branch combo → mismatch."""
+    p = _role_filter_portrait()
+    score, bd = compute(_role_resume("Product Manager"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+def test_current_role_rejects_accountant() -> None:
+    """'Главный бухгалтер' — classic false-positive; no A+B → mismatch."""
+    p = _role_filter_portrait()
+    score, bd = compute(_role_resume("Главный бухгалтер"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+def test_current_role_rejects_director_marketing() -> None:
+    """'Директор по маркетингу' — директор(A) but no group-B word → mismatch."""
+    p = _role_filter_portrait()
+    score, bd = compute(_role_resume("Директор по маркетингу"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+def test_current_role_rejects_director_procurement() -> None:
+    """'Директор по закупкам' — директор(A) but 'закупки' ∉ group B → mismatch."""
+    p = _role_filter_portrait()
+    score, bd = compute(_role_resume("Директор по закупкам"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+def test_current_role_rejects_operational_director() -> None:
+    """'Операционный директор' — no group-B scope word → mismatch."""
+    p = _role_filter_portrait()
+    score, bd = compute(_role_resume("Операционный директор"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+def test_current_role_rejects_manager_no_branch_scope() -> None:
+    """'Менеджер по работе с агентской сетью' — менеджер(A) but no group-B → mismatch."""
+    p = _role_filter_portrait()
+    score, bd = compute(_role_resume("Менеджер по работе с агентской сетью"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+def test_current_role_rejects_lawyer() -> None:
+    """'Юрист' — neither A nor B → mismatch."""
+    p = _role_filter_portrait()
+    score, bd = compute(_role_resume("Юрист"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+def test_current_role_rejects_dispatcher() -> None:
+    """'Диспетчер-логист' — no management or branch word → mismatch."""
+    p = _role_filter_portrait()
+    score, bd = compute(_role_resume("Диспетчер-логист"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+# ── Edge cases ────────────────────────────────────────────────────────────────
+
+
+def test_current_role_unknown_when_no_experience_and_no_title() -> None:
+    """No experience + no resume.title → current_role_unknown (portrait has synonyms)."""
+    p = _role_filter_portrait()
+    score, bd = compute({"id": "empty_resume"}, p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_unknown"
+
+
+def test_current_role_filter_skipped_without_synonyms() -> None:
+    """Portrait with empty position_synonyms → filter inactive, 'Юрист' passes through."""
+    p = _portrait()  # position_synonyms=[] by default
+    _, bd = compute(_role_resume("Юрист"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_current_role_case_insensitive() -> None:
+    """Matching is case-insensitive for both synonym and combo paths."""
+    p = _role_filter_portrait()
+    # All-caps — should still match "директор филиала" (position_name)
+    _, bd = compute(_role_resume("ДИРЕКТОР ФИЛИАЛА"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")

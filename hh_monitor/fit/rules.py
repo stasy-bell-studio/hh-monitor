@@ -3,7 +3,7 @@
 Pure module — no I/O, no side effects except debug-level structlog calls.
 
 Scoring v2 (Lesnitskaya etalon v1, session 5.7):
-  1. Seven hard filters: any triggered → fit_score=0,
+  1. Eight hard filters: any triggered → fit_score=0,
      breakdown["hard_reject_reason"] is set to the reason string.
   2. Six weighted scored criteria; max achievable raw sum = 45.
   3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
@@ -13,13 +13,18 @@ Scoring v1 (legacy) — salary fit removed in 5.7 per Lesnitskaya etalon.
   longer computed; the new keys replace them.
 
 Hard reject reasons (breakdown["hard_reject_reason"]):
-  "age"                 — candidate age outside portrait.filters.age_range
-  "education"           — higher_education_required=True but no higher edu
-  "stop_region"         — candidate area in filters.regions.stop
-  "forbidden_industry"  — most recent job in portrait.forbidden_industries
-  "career_gap"          — longest gap > portrait.max_career_gap_months
-  "total_experience"    — total months < portrait.min_total_months
-  "insurance_experience"— insurance months < portrait.min_insurance_experience_months
+  "age"                   — candidate age outside portrait.filters.age_range
+  "education"             — higher_education_required=True but no higher edu
+  "stop_region"           — candidate area in filters.regions.stop
+  "forbidden_industry"    — most recent job in portrait.forbidden_industries
+  "current_role_unknown"  — portrait has synonyms but experience empty and no
+                            resume.title; we cannot determine current role
+  "current_role_mismatch" — latest position title does not match portrait
+                            synonyms or the manager+branch combo rule;
+                            activated only when portrait.position_synonyms ≠ []
+  "career_gap"            — longest gap > portrait.max_career_gap_months
+  "total_experience"      — total months < portrait.min_total_months
+  "insurance_experience"  — insurance months < portrait.min_insurance_experience_months
 """
 
 import re
@@ -48,6 +53,29 @@ _RE_AGENT_FULL = re.compile(r"агентск|руководство\s+филиа
 # covers агент, агенты, агентов, агентами, агентах, etc.
 # (когда есть "агентск", _RE_AGENT_FULL уже сработал; elif гарантирует no double-count)
 _RE_AGENT_PARTIAL = re.compile(r"\bагент", re.IGNORECASE)
+
+# ── current_role_mismatch filter — stem sets ─────────────────────────────────
+#
+# Activated only when portrait.position_synonyms is non-empty.
+# Two-path matching (see _matches_role):
+#   (a) portrait synonym / position_name is a substring of the current title
+#   (b) title contains one stem from group A AND one from group B
+#
+# Stems cover Russian inflection via plain substring:
+#   "управляющ"        → управляющий, управляющего, управляющим
+#   "руководитель"     → руководителя, руководителем
+#   "региональн"       → региональный, регионального
+#   "отделени"         → отделения, отделении, отделению
+#   "представительств" → представительства, представительстве
+
+# Group A — leadership / management role words
+_ROLE_GROUP_A: frozenset[str] = frozenset(
+    {"директор", "руководитель", "управляющ", "начальник", "региональн", "менеджер"}
+)
+# Group B — branch / office / subsidiary scope words
+_ROLE_GROUP_B: frozenset[str] = frozenset(
+    {"филиал", "отделени", "представительств", "офис"}
+)
 
 
 # ── date helpers ──────────────────────────────────────────────────────────────
@@ -186,6 +214,39 @@ def _latest_experience(experiences: list[Any]) -> dict[str, Any] | None:
     return best
 
 
+def _matches_role(title: str, portrait: Portrait) -> bool:
+    """Return True if *title* is compatible with the portrait's target role.
+
+    Two matching paths (either is sufficient):
+
+    (a) **Synonym check** — portrait.position_name or any entry in
+        portrait.position_synonyms is a case-insensitive substring of *title*.
+        Example: "Директор регионального офиса по продажам" matches the synonym
+        "Директор регионального офиса".
+
+    (b) **Combo check** — *title* (lowercased) contains at least one stem from
+        ``_ROLE_GROUP_A`` (management word) AND at least one from
+        ``_ROLE_GROUP_B`` (branch/office word).
+        Example: "Управляющий офисом" → "управляющ" ∈ A, "офис" ∈ B → True.
+
+    Russian inflection is handled by stem-based substring search, not regex,
+    keeping the implementation dependency-free and easy to extend.
+    """
+    title_lower = title.lower()
+
+    # Path (a): portrait position_name or any synonym is a substring of title
+    if portrait.position_name.lower() in title_lower:
+        return True
+    for syn in portrait.position_synonyms:
+        if syn.lower() in title_lower:
+            return True
+
+    # Path (b): combo — at least one management word + one scope word
+    has_a = any(stem in title_lower for stem in _ROLE_GROUP_A)
+    has_b = any(stem in title_lower for stem in _ROLE_GROUP_B)
+    return has_a and has_b
+
+
 def _region_match(area_name: str, regions: list[str]) -> bool:
     """Return True if any portrait region string is a substring of *area_name*."""
     area_lower = area_name.lower()
@@ -199,7 +260,7 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
     """Score a resume against a portrait.  Pure function — no side effects.
 
     Scoring v2 (Lesnitskaya etalon v1):
-      1. Seven hard filters — any triggered returns (0, {"hard_reject_reason": reason}).
+      1. Eight hard filters — any triggered returns (0, {"hard_reject_reason": reason}).
       2. Six weighted criteria with a raw max of 45.
       3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
 
@@ -275,7 +336,38 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
                     )
                     return 0, breakdown
 
-    # 1e. Career gap
+    # 1e. Current role mismatch
+    # Only active when portrait.position_synonyms is non-empty — that signals
+    # the portrait is configured for role-matching.  Skipped for generic/test
+    # portraits with no synonyms to preserve backward compatibility.
+    if portrait.position_synonyms:
+        _current_title: str | None = None
+        if experiences:
+            _latest_exp = _latest_experience(experiences)
+            if _latest_exp is not None:
+                _pos = _latest_exp.get("position")
+                if _pos:
+                    _current_title = str(_pos).strip() or None
+        if not _current_title:
+            _raw_title = resume_payload.get("title")
+            if _raw_title:
+                _current_title = str(_raw_title).strip() or None
+
+        if not _current_title:
+            breakdown["hard_reject_reason"] = "current_role_unknown"
+            logger.debug("fit.hard_reject.current_role_unknown", resume_id=resume_id)
+            return 0, breakdown
+
+        if not _matches_role(_current_title, portrait):
+            breakdown["hard_reject_reason"] = "current_role_mismatch"
+            logger.debug(
+                "fit.hard_reject.current_role_mismatch",
+                current_role=_current_title,
+                resume_id=resume_id,
+            )
+            return 0, breakdown
+
+    # 1f. Career gap  (was 1e before current_role filter was added)
     if portrait.max_career_gap_months > 0:
         max_gap = _max_career_gap_months(experiences)
         if max_gap > portrait.max_career_gap_months:
@@ -288,7 +380,7 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
             )
             return 0, breakdown
 
-    # 1f. Total experience
+    # 1g. Total experience
     te_raw = resume_payload.get("total_experience")
     total_months: int | None = None
     if isinstance(te_raw, dict) and te_raw.get("months") is not None:
@@ -310,7 +402,7 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
         )
         return 0, breakdown
 
-    # 1g. Insurance-specific experience
+    # 1h. Insurance-specific experience
     if portrait.min_insurance_experience_months > 0:
         ins_months = _insurance_experience_months(experiences)
         if ins_months < portrait.min_insurance_experience_months:
