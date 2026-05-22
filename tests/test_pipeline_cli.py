@@ -7,6 +7,7 @@ session so all DB changes roll back automatically.
 
 import hashlib
 import json
+import re
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock
@@ -129,10 +130,166 @@ async def test_pipeline_output_format(
     captured = capsys.readouterr()
     assert "hh.ru/resume/" in captured.out
     assert f"hh.ru/resume/{resume_id}" in captured.out
-    # The header must not contain a 'Name' column.
+    # The header must contain "Current role" and must NOT contain a 'Name' column.
     header_line = next(
-        (line for line in captured.out.splitlines() if "Title" in line and "#" in line),
+        (line for line in captured.out.splitlines() if "Current role" in line and "#" in line),
         None,
     )
-    assert header_line is not None, "header line not found in output"
+    assert header_line is not None, "header line with 'Current role' not found in output"
     assert "Name" not in header_line
+
+
+# ── Test 3: hard-rejected candidates excluded from top-N ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pipeline_excludes_hard_rejected_from_top_n(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Only candidates that passed all hard filters appear in the top-N table."""
+    portrait_with_synonyms: dict[str, Any] = {
+        "position_code": "branch_dir",
+        "position_name": "Директор филиала",
+        "position_synonyms": ["Руководитель филиала"],
+    }
+    s = Search(
+        position_code="branch_dir",
+        position_name="Директор филиала",
+        hh_params={"text": "директор"},
+        portrait=portrait_with_synonyms,
+    )
+    db_session.add(s)
+    await db_session.flush()
+    search_id: int = s.id
+
+    # Passing candidate — current position matches portrait
+    rid_pass = "pass000000000000"
+    db_session.add(Resume(hh_resume_id=rid_pass))
+    await db_session.flush()
+    payload_pass: dict[str, Any] = {
+        "id": rid_pass,
+        "title": "Директор",
+        "experience": [
+            {"company": "X", "position": "Директор филиала", "start": "2020-01", "end": None}
+        ],
+    }
+    db_session.add(
+        Snapshot(
+            hh_resume_id=rid_pass, payload=payload_pass, content_hash=_hash(payload_pass)
+        )
+    )
+    await db_session.flush()
+
+    # Hard-rejected candidate — current position is wrong role
+    rid_fail = "fail000000000000"
+    db_session.add(Resume(hh_resume_id=rid_fail))
+    await db_session.flush()
+    payload_fail: dict[str, Any] = {
+        "id": rid_fail,
+        "title": "Бухгалтер",
+        "experience": [
+            {"company": "Y", "position": "Главный бухгалтер", "start": "2021-01", "end": None}
+        ],
+    }
+    db_session.add(
+        Snapshot(
+            hh_resume_id=rid_fail, payload=payload_fail, content_hash=_hash(payload_fail)
+        )
+    )
+    await db_session.flush()
+
+    monkeypatch.setattr("hh_monitor.cli.async_session_factory", _make_session_factory(db_session))
+
+    await _pipeline_run(
+        search_id=search_id,
+        portrait_path=None,
+        top=10,
+        max_pages=5,
+        no_parse=True,
+    )
+
+    captured = capsys.readouterr()
+    # Table rows start with a rank number; collect them
+    table_rows = [ln for ln in captured.out.splitlines() if re.match(r"^\d{1,3}\s", ln)]
+    assert len(table_rows) == 1, f"Expected 1 row (1 passing), got {len(table_rows)}"
+    assert rid_pass[:8] in table_rows[0]
+    assert rid_fail[:8] not in table_rows[0]
+    # Summary must mention hard-reject count
+    assert "hard-rejected" in captured.out or "hard_rejected" in captured.out
+
+
+# ── Test 4: breakdown formatting is safe for string values ───────────────────
+
+
+def test_breakdown_format_skips_non_int_values() -> None:
+    """bd_str formula must skip string values such as hard_reject_reason."""
+    breakdown: dict[str, Any] = {
+        "agent_network_experience": 5,
+        "osago_knowledge": 0,
+        "hard_reject_reason": "current_role_mismatch",
+    }
+    bd_str = " ".join(
+        f"{k}:{v:+d}" for k, v in breakdown.items() if isinstance(v, int) and v != 0
+    )
+    assert bd_str == "agent_network_experience:+5"
+    assert "current_role_mismatch" not in bd_str
+    assert "hard_reject_reason" not in bd_str
+
+
+# ── Test 5: zero passing candidates — no crash ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pipeline_zero_passing_candidates_no_crash(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pipeline must not crash when all candidates fail hard filters."""
+    portrait_with_synonyms: dict[str, Any] = {
+        "position_code": "branch_dir2",
+        "position_name": "Директор филиала",
+        "position_synonyms": ["Руководитель филиала"],
+    }
+    s = Search(
+        position_code="branch_dir2",
+        position_name="Директор филиала",
+        hh_params={"text": "директор"},
+        portrait=portrait_with_synonyms,
+    )
+    db_session.add(s)
+    await db_session.flush()
+    search_id: int = s.id
+
+    # Only a hard-rejected candidate (wrong role)
+    rid = "zero000000000000"
+    db_session.add(Resume(hh_resume_id=rid))
+    await db_session.flush()
+    payload: dict[str, Any] = {
+        "id": rid,
+        "title": "Логист",
+        "experience": [
+            {"company": "Z", "position": "Диспетчер-логист", "start": "2019-01", "end": None}
+        ],
+    }
+    db_session.add(Snapshot(hh_resume_id=rid, payload=payload, content_hash=_hash(payload)))
+    await db_session.flush()
+
+    monkeypatch.setattr("hh_monitor.cli.async_session_factory", _make_session_factory(db_session))
+
+    # Must not raise
+    await _pipeline_run(
+        search_id=search_id,
+        portrait_path=None,
+        top=10,
+        max_pages=5,
+        no_parse=True,
+    )
+
+    captured = capsys.readouterr()
+    assert "0 " in captured.out or "no candidates" in captured.out.lower()
+    # No table rows (no passing candidates)
+    table_rows = [ln for ln in captured.out.splitlines() if re.match(r"^\d{1,3}\s", ln)]
+    assert len(table_rows) == 0

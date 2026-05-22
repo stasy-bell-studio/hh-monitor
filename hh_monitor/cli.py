@@ -454,19 +454,78 @@ async def _pipeline_run(
             score, breakdown = fit_compute(payload, portrait)
             scored.append((rid, payload, score, breakdown))
 
-        # ── Sort by score descending, print top-N ─────────────────────────
-        scored.sort(key=lambda x: x[2], reverse=True)
+        # ── Separate passing from hard-rejected ───────────────────────────
+        passing = [
+            (rid, payload, score, bd)
+            for rid, payload, score, bd in scored
+            if "hard_reject_reason" not in bd
+        ]
+        hard_rejected = [
+            (rid, payload, score, bd)
+            for rid, payload, score, bd in scored
+            if "hard_reject_reason" in bd
+        ]
+        passing.sort(key=lambda x: x[2], reverse=True)
 
-        typer.echo(f"Top-{min(top, len(scored))} candidates (portrait: {portrait.position_name}):")
-        typer.echo(f"{'#':<3} {'ID':<10} {'Title':<30} {'Score':>5}  {'URL':<55}  Breakdown")
+        # Rejection-reason tally for the summary line
+        reject_tally: dict[str, int] = {}
+        for _, _, _, bd in hard_rejected:
+            reason: str = bd.get("hard_reject_reason") or "unknown"
+            reject_tally[reason] = reject_tally.get(reason, 0) + 1
+
+        total_scored = len(scored)
+        n_passing = len(passing)
+        n_rejected = len(hard_rejected)
+
+        typer.echo(
+            f"\nScored {total_scored} resumes — "
+            f"{n_passing} passed all hard filters, "
+            f"{n_rejected} hard-rejected  (portrait: {portrait.position_name})"
+        )
+        if reject_tally:
+            tally_str = "  ".join(
+                f"{r}={c}"
+                for r, c in sorted(reject_tally.items(), key=lambda kv: -kv[1])
+            )
+            typer.echo(f"  Hard-reject reasons: {tally_str}")
+
+        if n_passing == 0:
+            typer.echo("\nNo candidates passed all hard filters.")
+            return
+
+        actual_top = min(top, n_passing)
+        if n_passing < top:
+            typer.echo(
+                f"\nShowing top {actual_top} candidates "
+                f"(only {n_passing} passed all hard filters out of {total_scored}):"
+            )
+        else:
+            typer.echo(f"\nTop-{actual_top} candidates:")
+
+        typer.echo(f"{'#':<3} {'ID':<10} {'Current role':<32} {'Score':>5}  {'URL':<55}  Breakdown")
         typer.echo("-" * 120)
 
-        for rank, (rid, payload, score, breakdown) in enumerate(scored[:top], start=1):
+        for rank, (rid, payload, score, breakdown) in enumerate(passing[:top], start=1):
             short_id = rid[:8]
-            title = (payload.get("title") or "")[:28]
+            # Current role: latest experience position, fallback to resume title
+            exp_list: list[dict[str, object]] = [
+                e for e in (payload.get("experience") or []) if isinstance(e, dict)
+            ]
+            current_role = ""
+            if exp_list:
+                latest_exp = max(exp_list, key=lambda e: str(e.get("start") or ""))
+                current_role = str(latest_exp.get("position") or "")
+            if not current_role:
+                current_role = str(payload.get("title") or "")
+            display_role = current_role[:30] or "(unknown)"
             url = f"{_HH_RESUME_BASE}/{rid}"
-            bd_str = " ".join(f"{k}:{v:+d}" for k, v in breakdown.items() if v != 0)
-            typer.echo(f"{rank:<3} {short_id:<10} {title:<30} {score:>5}  {url:<55}  {bd_str}")
+            # Bug-1 fix: skip non-int values (e.g. hard_reject_reason str)
+            bd_str = " ".join(
+                f"{k}:{v:+d}" for k, v in breakdown.items() if isinstance(v, int) and v != 0
+            )
+            typer.echo(
+                f"{rank:<3} {short_id:<10} {display_role:<32} {score:>5}  {url:<55}  {bd_str}"
+            )
 
 
 # ── portraits ─────────────────────────────────────────────────────────────────
