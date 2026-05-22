@@ -152,12 +152,19 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
     preferred_edu = portrait.preferred_education_levels
     breakdown["education"] = 5 if (preferred_edu and edu_level_id in preferred_edu) else 0
 
-    # ── Area (+10) ────────────────────────────────────────────────────────
+    # ── Area / region (+10 primary / +5 adjacent / 0 no-match / -∞ stop) ──────
     #
     # Payload format: area = {"id": str, "name": str, "url": str}.
-    # Match logic: any portrait.preferred_areas entry is a substring of the
-    # payload area name (case-insensitive).  "Санкт-Петербург" therefore
-    # matches "Санкт-Петербург и область".
+    # Match logic: portrait region entry is a substring of the payload area
+    # name (case-insensitive).  "Самарская область" matches "Самара,
+    # Самарская область" (portrait entry is a substring of the payload name).
+    #
+    # Priority: stop > primary > adjacent > no-match.
+    # Sources: filters.regions.* take priority; preferred_areas is a fallback
+    # for primary when filters.regions.primary is empty (legacy compat).
+    #
+    # Stop regions: breakdown["area"] = -(10**6) so the final score clamps to 0.
+    # Callers detect stop via: breakdown.get("area", 0) < 0
     area_raw = resume_payload.get("area")
     area_name: str = ""
     if isinstance(area_raw, dict):
@@ -169,12 +176,23 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
             resume_id=resume_payload.get("id"),
         )
 
-    area_matched = (
-        portrait.preferred_areas
-        and area_name
-        and any(pa.lower() in area_name.lower() for pa in portrait.preferred_areas)
-    )
-    breakdown["area"] = 10 if area_matched else 0
+    def _region_match(regions: list[str]) -> bool:
+        return bool(area_name) and any(r.lower() in area_name.lower() for r in regions)
+
+    stop_regions = portrait.filters.regions.stop
+    primary_regions = portrait.filters.regions.primary or portrait.preferred_areas
+    adjacent_regions = portrait.filters.regions.adjacent
+    region_weight = portrait.weights.region  # default 10
+
+    if stop_regions and _region_match(stop_regions):
+        # Hard fail — score clamps to 0, LLM must be skipped by caller
+        breakdown["area"] = -(10**6)
+    elif primary_regions and _region_match(primary_regions):
+        breakdown["area"] = region_weight
+    elif adjacent_regions and _region_match(adjacent_regions):
+        breakdown["area"] = region_weight // 2
+    else:
+        breakdown["area"] = 0
 
     # ── Age (+5) ──────────────────────────────────────────────────────────
     age: int | None = resume_payload.get("age")

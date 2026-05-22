@@ -357,3 +357,74 @@ def test_experience_fallback_invalid_start_skips_entry() -> None:
     }
     _, bd = compute(payload, EXP_PORTRAIT)
     assert "total_experience" not in bd
+
+
+# ── Geography: primary / adjacent / stop regions (filters.regions.*) ──────────
+
+
+def _geo_portrait(
+    primary: list[str],
+    adjacent: list[str],
+    stop: list[str],
+) -> Portrait:
+    """Build a minimal portrait with the given region filters."""
+    from hh_monitor.fit.portrait import Filters, RegionFilters
+
+    return Portrait(
+        position_code="geo_test",
+        position_name="Geo Test",
+        filters=Filters(regions=RegionFilters(primary=primary, adjacent=adjacent, stop=stop)),
+    )
+
+
+def _area_payload(area_name: str) -> dict:  # type: ignore[type-arg]
+    return {"area": {"id": "78", "name": area_name, "url": ""}}
+
+
+def test_region_primary_match_scores_full_weight() -> None:
+    """Candidate in a primary region receives the full region weight (+10)."""
+    portrait = _geo_portrait(primary=["Самарская область"], adjacent=[], stop=[])
+    score, bd = compute(_area_payload("г. Самара, Самарская область"), portrait)
+    assert bd["area"] == 10
+
+
+def test_region_adjacent_match_scores_half_weight() -> None:
+    """Candidate in an adjacent region receives region_weight // 2 (+5)."""
+    portrait = _geo_portrait(
+        primary=["Самарская область"],
+        adjacent=["Оренбургская область"],
+        stop=[],
+    )
+    score, bd = compute(_area_payload("г. Оренбург, Оренбургская область"), portrait)
+    assert bd["area"] == 5  # 10 // 2
+
+
+def test_region_stop_sets_huge_negative_and_clamps_to_zero() -> None:
+    """Candidate in a stop region gets breakdown area = -(10**6), score clamps to 0."""
+    portrait = _geo_portrait(
+        primary=["Самарская область"],
+        adjacent=[],
+        stop=["Москва"],
+    )
+    score, bd = compute(_area_payload("г. Москва"), portrait)
+    assert bd["area"] < 0
+    assert score == 0
+
+
+def test_region_stop_detected_by_caller_sentinel() -> None:
+    """Callers detect stop-region via breakdown.get('area', 0) < 0."""
+    portrait = _geo_portrait(primary=[], adjacent=[], stop=["Питер"])
+    _, bd = compute(_area_payload("г. Санкт-Петербург (Питер)"), portrait)
+    assert bd.get("area", 0) < 0
+
+
+def test_region_no_match_gives_zero() -> None:
+    """Candidate outside all known regions scores 0 for area (not negative)."""
+    portrait = _geo_portrait(
+        primary=["Самарская область"],
+        adjacent=["Оренбургская область"],
+        stop=["Москва"],
+    )
+    score, bd = compute(_area_payload("г. Новосибирск, Новосибирская область"), portrait)
+    assert bd["area"] == 0
+    assert score >= 0
