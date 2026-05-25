@@ -42,7 +42,11 @@ line-length = 100
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-"alembic/versions/*.py" = ["E501"]
+# Alembic autogenerate uses old-style Union/Sequence typing and may have unused imports.
+"alembic/versions/*.py" = ["E501", "UP007", "UP035", "I001", "F401"]
+# Russian UI strings (button labels, help text) — Cyrillic intentional.
+"hh_monitor/tg/cards.py" = ["RUF001"]
+"hh_monitor/tg/handlers.py" = ["RUF001"]
 # Russian-language LLM prompt constants — Cyrillic chars intentionally
 # look like Latin; long lines are deliberate (prose sent to the API).
 "hh_monitor/llm_enrich/prompt.py" = ["RUF001", "E501"]

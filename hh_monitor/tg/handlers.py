@@ -148,7 +148,7 @@ async def handle_digest(message: Message) -> None:
             await message.reply("Только для админов")
             return
         # run_weekly_digest imported lazily to avoid circular import
-        from hh_monitor.weekly_digest.run import (  # noqa: PLC0415
+        from hh_monitor.weekly_digest.run import (
             run_weekly_digest,
         )
 
@@ -184,8 +184,7 @@ async def handle_digest(message: Message) -> None:
         verdict = res.llm_verdict or ev.llm_verdict or "—"
         url = f"https://hh.ru/resume/{res.hh_resume_id}"
         lines.append(
-            f'{i}. <a href="{url}">{srch.position_name}</a> — '
-            f'score {res.score_total}, {verdict}'
+            f'{i}. <a href="{url}">{srch.position_name}</a> — score {res.score_total}, {verdict}'
         )
     await message.reply("\n".join(lines))
 

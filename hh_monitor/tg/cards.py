@@ -8,7 +8,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from hh_monitor.db.models import Event, Resume, Search
 
 
-def safe(value: Any, default: str = "") -> str:  # noqa: ANN401
+def safe(value: Any, default: str = "") -> str:
     if value is None or value == "":
         return default
     return html.escape(str(value))

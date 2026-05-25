@@ -52,9 +52,7 @@ async def _fetch_event_data(
     return event, resume, search, snap_payload
 
 
-async def send_new_candidate_card(
-    session: AsyncSession, bot: Bot, event_id: int
-) -> bool:
+async def send_new_candidate_card(session: AsyncSession, bot: Bot, event_id: int) -> bool:
     data = await _fetch_event_data(session, event_id)
     if data is None:
         logger.warning("tg_sender_event_not_found", event_id=event_id)
