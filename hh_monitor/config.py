@@ -30,9 +30,22 @@ class Settings(BaseSettings):
     # Candidates with fit_score below this threshold are not sent to LLM
     score_fit_min_for_llm: int = Field(default=60, ge=0, le=100)
 
-    # Telegram
+    # Telegram — bot credentials and targeting
     telegram_bot_token: str | None = None
-    telegram_hr_chat_id: str | None = None
+    telegram_hr_group_id: int = 0  # negative int for supergroup, e.g. -1001234567890
+    # comma-separated Telegram user IDs with admin privileges (e.g. "123456,789012")
+    telegram_admin_user_ids: str = ""
+    telegram_score_threshold: int = Field(default=60, ge=0, le=100)
+
+    # Weekly digest schedule (used as reference; actual scheduling via systemd timer in session 7)
+    weekly_digest_cron: str = "0 15 * * 5"  # Friday 15:00
+    weekly_digest_tz: str = "Europe/Moscow"
+
+    @property
+    def admin_user_ids(self) -> list[int]:
+        if not self.telegram_admin_user_ids:
+            return []
+        return [int(x.strip()) for x in self.telegram_admin_user_ids.split(",") if x.strip()]
 
     # Runtime
     env: str = "local"
