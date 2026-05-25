@@ -298,7 +298,9 @@ async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.Monk
         "interview_questions": ["Каков KPI?", "Где работали?"],
         "verdict": "Рекомендую.",
     }
-    await save_cached(db_session, "r001", content_hash, _settings.llm_prompt_version, cached_dossier)
+    await save_cached(
+        db_session, "r001", content_hash, _settings.llm_prompt_version, cached_dossier
+    )
     await db_session.flush()
 
     with patch(
