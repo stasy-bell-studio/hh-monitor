@@ -198,6 +198,30 @@ class DictionaryCache(Base):
     )
 
 
+class NotificationSent(Base):
+    __tablename__ = "notifications_sent"
+
+    event_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("events.id"), primary_key=True)
+    tg_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
+    )
+    screening_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screened_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    screened_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    screened_by_username: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AppConfig(Base):
+    __tablename__ = "app_config"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
+    )
+
+
 class LlmCache(Base):
     """Cache for LLM responses keyed by (hh_resume_id, content_hash, prompt_version).
 
