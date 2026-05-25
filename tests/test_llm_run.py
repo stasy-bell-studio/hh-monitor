@@ -57,26 +57,34 @@ def _global_ctx() -> GlobalContext:
     )
 
 
-def _ok_llm_response(score: int = 80, verdict: str = "подходит") -> dict[str, Any]:
-    """Build a v2-format mock OpenRouter response."""
+def _ok_llm_response(
+    verdict_text: str = "Рекомендую на следующий этап.",
+) -> dict[str, Any]:
+    """Build a dossier-format mock OpenRouter response (commit 9.3+)."""
     return {
         "choices": [
             {
                 "message": {
                     "content": json.dumps(
                         {
-                            "score": score,
-                            "verdict": verdict,
-                            "comment": "Good candidate",
-                            "red_flags": [],
-                            "real_role": "Director",
-                            "match_breakdown": {},
+                            "facts_confirmed": (
+                                "Кандидат работал директором филиала в СОГАЗ с 2019 по 2023 "
+                                "(4 года). Агентская сеть 120 человек."
+                            ),
+                            "weak_spots": "Нет данных о P&L. Последний год без работы не объяснён.",
+                            "red_flags": "Gap с 2023 года без объяснения.",
+                            "interview_questions": [
+                                "Каковы ваши конкретные KPI за последний год в СОГАЗ?",
+                                "Чем занимались с 2023 по 2024?",
+                                "Каков был реальный размер вашей агентской сети?",
+                            ],
+                            "verdict": verdict_text,
                         }
                     )
                 }
             }
         ],
-        "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+        "usage": {"prompt_tokens": 100, "completion_tokens": 150},
     }
 
 
@@ -147,7 +155,7 @@ async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPat
     with patch(
         "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
-        return_value=_ok_llm_response(score=90, verdict="подходит"),
+        return_value=_ok_llm_response(),
     ):
         result = await run_llm_enrichment(
             db_session,
@@ -161,15 +169,20 @@ async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPat
     assert result["enriched"] == 1
     assert result["skipped"] == 0
 
-    # Reload resume to verify persistence
-    await db_session.refresh(resume)
-    assert resume.llm_score == 90
-    assert resume.llm_verdict == "подходит"
-    assert resume.score_total == round(0.3 * 70 + 0.7 * 90)  # = 84
-
-    # Reload event
+    # Reload event — dossier fields must be written
     await db_session.refresh(event)
     assert event.llm_enriched is True
+    assert event.llm_facts_confirmed is not None
+    assert event.llm_weak_spots is not None
+    assert event.llm_red_flags is not None
+    assert isinstance(event.llm_interview_questions, list)
+    assert event.llm_verdict is not None
+
+    # Reload resume — backward-compat fields derived from dossier verdict
+    await db_session.refresh(resume)
+    assert resume.llm_score is not None  # derived from "Рекомендую" → 80
+    assert resume.llm_verdict == "подходит"  # derived class
+    assert resume.score_total == round(0.3 * 70 + 0.7 * 80)  # = 77
 
 
 @pytest.mark.asyncio
@@ -264,9 +277,9 @@ async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.Monk
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
-    # Pre-populate cache with the current prompt version (v2)
+    # Pre-populate cache with dossier-format dict (commit 9.3+)
+    from hh_monitor.config import settings as _settings
     from hh_monitor.llm_enrich.cache import save_cached
-    from hh_monitor.llm_enrich.prompt import LlmResponse
 
     payload = {
         "id": "r001",
@@ -278,10 +291,14 @@ async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.Monk
         "experience": [],
     }
     content_hash = _hash(payload)
-    cached_resp = LlmResponse(
-        score=85, verdict="подходит", comment="Cached", red_flags=[], real_role=""
-    )
-    await save_cached(db_session, "r001", content_hash, "v2", cached_resp)
+    cached_dossier = {
+        "facts_confirmed": "Кандидат работал в СОГАЗ 4 года.",
+        "weak_spots": "Нет P&L.",
+        "red_flags": "Gap 2023.",
+        "interview_questions": ["Каков KPI?", "Где работали?"],
+        "verdict": "Рекомендую.",
+    }
+    await save_cached(db_session, "r001", content_hash, _settings.llm_prompt_version, cached_dossier)
     await db_session.flush()
 
     with patch(
@@ -388,7 +405,8 @@ async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPa
     with patch(
         "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
-        return_value=_ok_llm_response(score=70, verdict="спорно"),
+        # "Нужно интервью" → derive_score=60, derive_class="спорно"
+        return_value=_ok_llm_response(verdict_text="Нужно интервью с проверкой."),
     ):
         await run_llm_enrichment(
             db_session,
@@ -399,7 +417,8 @@ async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPa
         )
 
     await db_session.refresh(resume)
-    expected = round(0.3 * 60 + 0.7 * 70)  # = 67
+    # fit_score=60, derived llm_score=60 → score_total = round(0.3*60 + 0.7*60) = 60
+    expected = round(0.3 * 60 + 0.7 * 60)
     assert resume.score_total == expected
 
 
@@ -481,3 +500,124 @@ async def test_multi_reject_persists_reasons_array(db_session: Any) -> None:
     assert "age" in reasons, f"'age' missing from {reasons}"
     assert "education" in reasons, f"'education' missing from {reasons}"
     assert len(reasons) >= 2, f"Expected ≥2 reasons, got {reasons}"
+
+
+# ── Commit 9.3: dossier persist + edge cases ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_persist_dossier_to_db(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """After enrichment, all 5 dossier fields are written to events."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=_ok_llm_response(),
+    ):
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=1,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+
+    assert result["enriched"] == 1
+
+    await db_session.refresh(event)
+    assert event.llm_enriched is True
+    assert event.llm_facts_confirmed is not None and len(event.llm_facts_confirmed) > 0
+    assert event.llm_weak_spots is not None and len(event.llm_weak_spots) > 0
+    assert event.llm_red_flags is not None and len(event.llm_red_flags) > 0
+    assert isinstance(event.llm_interview_questions, list)
+    assert len(event.llm_interview_questions) >= 1
+    assert event.llm_verdict is not None and len(event.llm_verdict) > 0
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_fallback(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When DeepSeek returns non-JSON, verdict=raw_text, other fields None."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, resume_id="r_badjson", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    bad_response = {
+        "choices": [{"message": {"content": "Это точно не JSON, просто текст."}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=bad_response,
+    ):
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=1,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+
+    assert result["enriched"] == 1
+
+    await db_session.refresh(event)
+    assert event.llm_verdict == "Это точно не JSON, просто текст."
+    assert event.llm_facts_confirmed is None
+    assert event.llm_weak_spots is None
+    assert event.llm_red_flags is None
+    assert event.llm_interview_questions is None
+
+
+@pytest.mark.asyncio
+async def test_interview_questions_as_string_splits(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """interview_questions returned as a numbered string → split into list[str]."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, resume_id="r_striq", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    import json as _json
+
+    str_iq_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": _json.dumps(
+                        {
+                            "facts_confirmed": "Факты.",
+                            "weak_spots": "Слабые.",
+                            "red_flags": "Флаги.",
+                            "interview_questions": "1. Вопрос один 2. Вопрос два",
+                            "verdict": "Рекомендую.",
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 30},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=str_iq_response,
+    ):
+        await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=1,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+
+    await db_session.refresh(event)
+    iq = event.llm_interview_questions
+    assert isinstance(iq, list), f"Expected list, got {type(iq)}"
+    assert len(iq) == 2, f"Expected 2 questions, got {iq}"
+    assert "Вопрос один" in iq[0]
+    assert "Вопрос два" in iq[1]

@@ -43,9 +43,11 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/versions/*.py" = ["E501"]
-# Russian-language LLM prompt constant — Cyrillic chars intentionally
+# Russian-language LLM prompt constants — Cyrillic chars intentionally
 # look like Latin; long lines are deliberate (prose sent to the API).
 "hh_monitor/llm_enrich/prompt.py" = ["RUF001", "E501"]
+"hh_monitor/llm_enrich/prompts.py" = ["RUF001", "RUF002", "E501"]
+"hh_monitor/llm_enrich/critic_lens_builder.py" = ["RUF001", "RUF002", "E501"]
 # Insurance keyword stems (ОСАГО/КАСКО/ИФЛ) in string literals and comments — Cyrillic intentional.
 "hh_monitor/fit/rules.py" = ["RUF001", "RUF003"]
 # Russian field comments in portrait model — Cyrillic in comments is intentional.

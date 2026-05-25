@@ -918,6 +918,64 @@ async def _llm_stats() -> None:
         )
 
 
+# ── search management ────────────────────────────────────────────────────────
+
+search_app = typer.Typer(help="Search management commands")
+app.add_typer(search_app, name="search")
+
+
+@search_app.command("rebuild-critic-lens")
+def search_rebuild_critic_lens(
+    search_code: str = typer.Option(..., "--search-code", help="search_code to rebuild lens for"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the generated lens without saving to DB"
+    ),
+) -> None:
+    """Generate (or regenerate) the LLM critic lens for a search via DeepSeek meta-prompt.
+
+    The generated text is printed to stdout for review.  Use --dry-run to skip
+    saving so you can iterate on the meta-prompt without touching the database.
+    """
+    try:
+        lens = asyncio.run(_rebuild_critic_lens(search_code, dry_run=dry_run))
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo("\n─── Generated critic lens ───\n")
+    typer.echo(lens)
+    if dry_run:
+        typer.echo("\n[DRY RUN — not saved to DB]")
+    else:
+        typer.echo(f"\nSaved to searches.llm_critic_prompt for search_code={search_code!r}")
+
+
+async def _rebuild_critic_lens(search_code: str, *, dry_run: bool) -> str:
+    from sqlalchemy import select, update
+
+    from hh_monitor.llm_enrich.critic_lens_builder import generate_critic_lens
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Search).where(Search.search_code == search_code, Search.active.is_(True))
+        )
+        search: Search | None = result.scalar_one_or_none()
+        if search is None:
+            raise SearchNotFoundError(f"No active search with search_code={search_code!r}")
+
+        lens = await generate_critic_lens(search)
+
+        if not dry_run:
+            await session.execute(
+                update(Search)
+                .where(Search.search_code == search_code)
+                .values(llm_critic_prompt=lens)
+            )
+            await session.commit()
+
+    return lens
+
+
 # ── digest ───────────────────────────────────────────────────────────────────
 
 from enum import Enum  # noqa: E402  (kept local to avoid polluting top-level namespace)
@@ -936,7 +994,7 @@ app.add_typer(digest_app, name="digest")
 def digest_export(
     search_code: str = typer.Option(..., "--search-code", help="search_code of the saved search"),
     min_score: int = typer.Option(60, "--min-score", help="Minimum score_total threshold"),
-    fmt: _OutputFormat = typer.Option(
+    fmt: _OutputFormat = typer.Option(  # noqa: B008
         _OutputFormat.xlsx, "--format", help="Output format: xlsx or pdf"
     ),
     output: Path | None = typer.Option(  # noqa: B008

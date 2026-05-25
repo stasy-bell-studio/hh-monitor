@@ -6,8 +6,9 @@ For each unenriched event:
   3. Check the hard-reject guard (stop region / forbidden industry / missing quals).
   4. Check the LLM cache.
   5. Call OpenRouter if no cache hit.
-  6. Compute score_total = round(0.3 * fit_score + 0.7 * llm_score).
-  7. Persist results to resumes and mark event.llm_enriched = True.
+  6. Parse 5-field dossier JSON → save to events.llm_* columns.
+  7. Derive llm_score / llm_verdict / score_total for resumes table (TG-bot backward compat).
+  8. Mark event.llm_enriched = True.
 
 Public API:
     run_llm_enrichment(session, search_id, *, limit, dry_run, portraits) -> dict
@@ -17,7 +18,6 @@ Public API:
 from __future__ import annotations
 
 import asyncio
-from decimal import Decimal
 from typing import Any
 
 import structlog
@@ -30,7 +30,14 @@ from hh_monitor.fit.portrait import GlobalContext, Portrait, load_all_portraits,
 from hh_monitor.fit.rules import compute as fit_compute
 from hh_monitor.llm_enrich import cache as llm_cache
 from hh_monitor.llm_enrich import client as llm_client
-from hh_monitor.llm_enrich.prompt import build_messages, parse_response
+from hh_monitor.llm_enrich.prompt import build_messages
+from hh_monitor.llm_enrich.prompts import (
+    build_full_prompt,
+    check_forbidden_phrases,
+    derive_score_from_verdict,
+    derive_verdict_class,
+    parse_dossier,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -64,6 +71,7 @@ async def _enrich_one(
     portrait: Portrait,
     global_ctx: GlobalContext,
     *,
+    critic_prompt: str = "",
     dry_run: bool,
 ) -> dict[str, Any]:
     """Enrich a single event's resume.  Returns a per-event result dict.
@@ -81,8 +89,7 @@ async def _enrich_one(
         return {"resume_id": resume_id, "status": "skipped", "reason": "no_snapshot"}
     payload, content_hash = snap
 
-    # 2. Compute fit score and check hard-reject guard (stop region, forbidden
-    # industry, missing qualifications, etc.)
+    # 2. Compute fit score and check hard-reject guard
     fit_score_val: int | None = event_fit_score
     if fit_score_val is None:
         fit_score_val, breakdown = fit_compute(payload, portrait)
@@ -92,9 +99,7 @@ async def _enrich_one(
     reject_reason: str | None = breakdown.get("hard_reject_reason")
     reject_reasons: list[str] = breakdown.get("hard_reject_reasons", [])
 
-    # Persist hard_reject_reasons whenever filters fired.
-    # Hard-rejected resumes return early (before the normal event update at the
-    # bottom of this function), so we must write and commit here.
+    # Persist hard_reject_reasons whenever filters fired (before early return).
     if reject_reasons:
         await session.execute(
             update(Event).where(Event.id == event_id).values(hard_reject_reasons=reject_reasons)
@@ -127,10 +132,7 @@ async def _enrich_one(
     prompt_version = settings.llm_prompt_version
     cached = await llm_cache.get_cached(session, resume_id, content_hash, prompt_version)
     if cached is not None:
-        llm_resp = cached
-        tokens_in: int | None = None
-        tokens_out: int | None = None
-        cost: Decimal | None = None
+        dossier = cached
         from_cache = True
     else:
         from_cache = False
@@ -142,45 +144,77 @@ async def _enrich_one(
                 "fit_score": fit_score_val,
             }
 
-        # 5. Call OpenRouter
+        # 5. Call OpenRouter — build messages, override system prompt with dossier prompt
         messages = build_messages(portrait, payload, global_ctx)
+        messages[0]["content"] = build_full_prompt(critic_prompt)
+
         log_ctx.info("llm_enrich.calling_api", fit_score=fit_score_val)
-        raw_resp = await llm_client.chat_completion_messages(messages)
+        raw_resp = await llm_client.chat_completion_messages(messages, max_tokens=1024)
         raw_text = llm_client.extract_text(raw_resp)
         tokens_in, tokens_out = llm_client.extract_usage(raw_resp)
-        cost = None  # OpenRouter usage cost not returned by default; leave None
 
-        llm_resp = parse_response(raw_text)
+        # 6. Parse dossier JSON
+        dossier = parse_dossier(raw_text)
 
-        # Save to cache (best-effort, don't fail enrichment on cache write error)
+        # Log forbidden phrase warnings (non-blocking)
+        full_text = " ".join(str(v) for v in dossier.values() if v)
+        check_forbidden_phrases(full_text, resume_id)
+
+        # Cache the raw dossier dict
         try:
             await llm_cache.save_cached(
                 session,
                 resume_id,
                 content_hash,
                 prompt_version,
-                llm_resp,
+                dossier,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
-                cost_usd=cost,
             )
         except Exception:
             log_ctx.warning("llm_enrich.cache_write_failed", exc_info=True)
 
-    # 6. Compute score_total
-    score_total = round(0.3 * fit_score_val + 0.7 * llm_resp.score)
+    # Derive numeric score + structured verdict class for backward compat (TG bot / digest)
+    verdict_text: str = dossier.get("verdict") or ""
+    llm_score = derive_score_from_verdict(verdict_text)
+    llm_verdict_class = derive_verdict_class(verdict_text)
+    score_total = round(0.3 * fit_score_val + 0.7 * llm_score)
 
     log_ctx.info(
         "llm_enrich.scored",
         fit_score=fit_score_val,
-        llm_score=llm_resp.score,
+        llm_score=llm_score,
         score_total=score_total,
-        verdict=llm_resp.verdict,
+        verdict_class=llm_verdict_class,
         from_cache=from_cache,
     )
 
-    # 7. Persist to Resume
-    db_fields = llm_resp.model_dump_for_db()
+    # Build a short TG-bot-friendly comment from dossier facts + verdict
+    facts = dossier.get("facts_confirmed") or ""
+    comment_parts: list[str] = []
+    if facts:
+        comment_parts.append(facts[:300])
+    if verdict_text:
+        comment_parts.append(f"Вердикт: {verdict_text[:150]}")
+    llm_comment = "\n\n".join(comment_parts)[:500]
+
+    # 7. Persist dossier fields to Event + backward-compat fields to Resume
+    await session.execute(
+        update(Event)
+        .where(Event.id == event_id)
+        .values(
+            llm_enriched=True,
+            llm_facts_confirmed=dossier.get("facts_confirmed"),
+            llm_weak_spots=dossier.get("weak_spots"),
+            llm_red_flags=dossier.get("red_flags"),
+            llm_interview_questions=dossier.get("interview_questions"),
+            llm_verdict=dossier.get("verdict"),
+        )
+    )
+
+    red_flags_raw = dossier.get("red_flags")
+    red_flags_list: list[str] = [red_flags_raw] if red_flags_raw else []
+
     await session.execute(
         update(Resume)
         .where(Resume.hh_resume_id == resume_id)
@@ -189,12 +223,12 @@ async def _enrich_one(
             llm_scored_at=func.now(),
             llm_content_hash=content_hash,
             score_total=score_total,
-            **db_fields,
+            llm_score=llm_score,
+            llm_verdict=llm_verdict_class,
+            llm_comment=llm_comment,
+            llm_red_flags=red_flags_list,
         )
     )
-
-    # 8. Mark event as enriched
-    await session.execute(update(Event).where(Event.id == event_id).values(llm_enriched=True))
 
     await session.commit()
 
@@ -203,9 +237,9 @@ async def _enrich_one(
         "status": "enriched",
         "from_cache": from_cache,
         "fit_score": fit_score_val,
-        "llm_score": llm_resp.score,
+        "llm_score": llm_score,
         "score_total": score_total,
-        "verdict": llm_resp.verdict,
+        "verdict_class": llm_verdict_class,
     }
 
 
@@ -274,19 +308,20 @@ async def run_llm_enrichment(
     """
     if portraits is None:
         portraits = load_all_portraits()
-    # Load global context ONCE per run, not per event
     if global_ctx is None:
         global_ctx = load_global_context()
 
-    # Resolve position_code for this search_id
     from hh_monitor.db.models import Search
 
     search_result = await session.execute(
-        select(Search.position_code).where(Search.id == search_id)
+        select(Search.position_code, Search.llm_critic_prompt).where(Search.id == search_id)
     )
-    position_code: str | None = search_result.scalar_one_or_none()
-    if position_code is None:
+    row = search_result.one_or_none()
+    if row is None:
         raise ValueError(f"Search id={search_id} not found")
+
+    position_code: str = row[0]
+    critic_prompt: str = row[1] or ""
 
     portrait = portraits.get(position_code)
     if portrait is None:
@@ -295,9 +330,6 @@ async def run_llm_enrichment(
         )
 
     # Fetch pending events as primitive tuples to avoid ORM expiry issues.
-    # session.commit() inside _enrich_one would expire ORM-loaded Event objects,
-    # causing MissingGreenlet errors on the next loop iteration.  Loading only
-    # the columns we need gives us plain Python values that survive a commit.
     events_result = await session.execute(
         select(Event.id, Event.hh_resume_id, Event.fit_score)
         .where(Event.search_id == search_id, Event.llm_enriched.is_(False))
@@ -329,6 +361,7 @@ async def run_llm_enrichment(
                 event_fit_score,
                 portrait,
                 global_ctx,
+                critic_prompt=critic_prompt,
                 dry_run=dry_run,
             )
         except Exception as exc:

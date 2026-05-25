@@ -42,6 +42,10 @@ class Search(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
     )
+    # Position-specific critic lens for LLM dossier prompt (generated once via meta-prompt)
+    llm_critic_prompt: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
 
 
 class Resume(Base):
@@ -127,6 +131,14 @@ class Event(Base):
     hard_reject_reasons: Mapped[list[str]] = mapped_column(
         ARRAY(Text()), nullable=False, server_default=sa.text("'{}'"), default=list
     )
+
+    # Structured dossier fields — populated by llm_enrich on enrichment (commit 9.3+).
+    # None = not yet enriched or enriched before 9.3 (fallback to resumes.llm_comment).
+    llm_facts_confirmed: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_weak_spots: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_red_flags: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_interview_questions: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    llm_verdict: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index(

@@ -1,19 +1,25 @@
 """Tests for hh_monitor.digest — query, xlsx export, pdf export.
 
-AC4 coverage for commit 9.2:
+Coverage for commits 9.2 and 9.3:
 
   test_fetch_candidates_returns_matching_rows
-    — Seeds Search + Resume + Snapshot + Event with a specific search_code,
-      calls fetch_candidates, asserts the seeded candidate appears in results.
+    — Seeds Search + Resume + Snapshot + Event, calls fetch_candidates,
+      asserts the seeded candidate appears in results.
 
   test_export_xlsx_creates_valid_workbook
-    — Builds CandidateRow objects in memory, calls export_xlsx, asserts the
-      output file exists, has the correct header row, and the right number of
-      data rows.
+    — Builds CandidateRow objects (with dossier fields), calls export_xlsx,
+      asserts the output has correct 19-column header + data rows.
+
+  test_export_xlsx_fallback_llm_comment
+    — CandidateRow without dossier → «Комментарий LLM» cell populated from
+      llm_comment; dossier columns empty.
 
   test_export_pdf_creates_non_empty_file
-    — Builds CandidateRow objects in memory, calls export_pdf, asserts the
-      output file exists and is non-empty.
+    — Creates PDF; checks file exists and is non-empty (skipped if WeasyPrint
+      system libs not available).
+
+  test_export_pdf_dossier_sections
+    — PDF HTML contains dossier section heading markers.
 """
 
 from __future__ import annotations
@@ -40,7 +46,23 @@ def _make_candidate(
     rid: str = "abc00000000000001",
     score_total: int = 75,
     llm_verdict: str = "подходит",
+    *,
+    with_dossier: bool = False,
 ) -> CandidateRow:
+    """Build an in-memory CandidateRow for unit tests."""
+    dossier_kwargs: dict[str, Any] = {}
+    if with_dossier:
+        dossier_kwargs = {
+            "dossier_facts_confirmed": "Кандидат работал в СОГАЗ 4 года (2019–2023).",
+            "dossier_weak_spots": "Нет данных о P&L. Gap с 2023 не объяснён.",
+            "dossier_red_flags": "Короткие сроки (<1.5 года) в двух предыдущих компаниях.",
+            "dossier_interview_questions": [
+                "Каков был реальный размер вашей агентской сети?",
+                "Чем занимались с 2023 по 2024?",
+            ],
+            "dossier_verdict": "Рекомендую на первый звонок.",
+        }
+
     return CandidateRow(
         hh_resume_id=rid,
         score_total=score_total,
@@ -65,6 +87,7 @@ def _make_candidate(
                 }
             ],
         },
+        **dossier_kwargs,
     )
 
 
@@ -74,7 +97,6 @@ def _make_candidate(
 @pytest.mark.asyncio
 async def test_fetch_candidates_returns_matching_rows(db_session: AsyncSession) -> None:
     """fetch_candidates returns the seeded candidate for the given search_code."""
-    # Arrange — seed search with known search_code
     sc = Search(
         search_code="digest_test_sc",
         position_code="branch_director",
@@ -107,7 +129,6 @@ async def test_fetch_candidates_returns_matching_rows(db_session: AsyncSession) 
     )
     await db_session.flush()
 
-    # Act
     candidates = await fetch_candidates(
         db_session,
         search_code="digest_test_sc",
@@ -115,7 +136,6 @@ async def test_fetch_candidates_returns_matching_rows(db_session: AsyncSession) 
         include_screened=False,
     )
 
-    # Assert
     assert len(candidates) >= 1, "Expected at least one candidate row"
     ids = [c.hh_resume_id for c in candidates]
     assert rid in ids, f"Seeded resume {rid!r} missing from results: {ids}"
@@ -151,18 +171,19 @@ async def test_fetch_candidates_respects_min_score(db_session: AsyncSession) -> 
     assert all(c.hh_resume_id != rid for c in candidates), "Resume below min_score must not appear"
 
 
-# ── AC4b: xlsx export ────────────────────────────────────────────────────────
+# ── AC4b: xlsx export ─────────────────────────────────────────────────────────
 
 
 def test_export_xlsx_creates_valid_workbook(tmp_path: Path) -> None:
-    """export_xlsx creates an .xlsx file with the correct headers and data rows."""
+    """export_xlsx creates .xlsx with 19-column header and correct rank values."""
     from openpyxl import load_workbook
 
     from hh_monitor.digest.export_xlsx import _COLUMNS, export_xlsx
 
+    # Use candidates with dossier fields to exercise new columns
     candidates = [
-        _make_candidate("r0000000000000001", 75),
-        _make_candidate("r0000000000000002", 65),
+        _make_candidate("r0000000000000001", 75, with_dossier=True),
+        _make_candidate("r0000000000000002", 65, with_dossier=True),
     ]
     out = tmp_path / "test_digest.xlsx"
 
@@ -172,23 +193,56 @@ def test_export_xlsx_creates_valid_workbook(tmp_path: Path) -> None:
     wb = load_workbook(str(out))
     ws = wb.active
 
-    # Header row has correct number of columns
+    # Header row: 19 columns
+    assert len(_COLUMNS) == 19, f"Expected 19 columns, got {len(_COLUMNS)}"
     headers = [ws.cell(row=1, column=i + 1).value for i in range(len(_COLUMNS))]
     expected_headers = [col[0] for col in _COLUMNS]
     assert headers == expected_headers, f"Headers mismatch: {headers}"
 
-    # Two data rows (one per candidate)
+    # Two data rows, rank column (col 1) = 1 and 2
     data_rows = [ws.cell(row=r, column=1).value for r in range(2, len(candidates) + 2)]
     assert len(data_rows) == 2, f"Expected 2 data rows, got {len(data_rows)}"
-    assert data_rows[0] == 1  # rank column
+    assert data_rows[0] == 1
     assert data_rows[1] == 2
 
+    # Dossier columns (15–19) should be populated
+    col_facts = ws.cell(row=2, column=15).value  # «Факты»
+    assert col_facts and "СОГАЗ" in col_facts, f"Expected facts text, got: {col_facts!r}"
 
-# ── AC4c: pdf export ─────────────────────────────────────────────────────────
+    col_verdict = ws.cell(row=2, column=19).value  # «Вердикт HR»
+    assert col_verdict and "Рекомендую" in col_verdict
+
+
+def test_export_xlsx_fallback_llm_comment(tmp_path: Path) -> None:
+    """When no dossier fields, xlsx uses llm_comment in col 12 (fallback)."""
+    from openpyxl import load_workbook
+
+    from hh_monitor.digest.export_xlsx import export_xlsx
+
+    # Candidate without dossier (legacy enriched record)
+    candidates = [_make_candidate("r_legacy_001", 70, with_dossier=False)]
+    out = tmp_path / "test_fallback.xlsx"
+    export_xlsx(candidates, out)
+
+    wb = load_workbook(str(out))
+    ws = wb.active
+
+    # «Комментарий LLM» is column 12 — should contain llm_comment
+    comment_cell = ws.cell(row=2, column=12).value
+    assert comment_cell == "Хороший кандидат", f"Expected fallback comment, got: {comment_cell!r}"
+
+    # Dossier columns 15–19 should be empty
+    for col in range(15, 20):
+        assert ws.cell(row=2, column=col).value in (None, ""), (
+            f"Expected empty dossier col {col}, got: {ws.cell(row=2, column=col).value!r}"
+        )
+
+
+# ── AC4c: pdf export ──────────────────────────────────────────────────────────
 
 
 def test_export_pdf_creates_non_empty_file(tmp_path: Path) -> None:
-    """export_pdf creates a non-empty .pdf file."""
+    """export_pdf creates a non-empty .pdf file (skipped if WeasyPrint not available)."""
     try:
         import weasyprint as _wp  # noqa: F401
     except OSError:
@@ -205,3 +259,49 @@ def test_export_pdf_creates_non_empty_file(tmp_path: Path) -> None:
     assert out.stat().st_size > 1024, (
         f"pdf file too small ({out.stat().st_size} bytes) — likely empty"
     )
+
+
+def test_export_pdf_dossier_sections(tmp_path: Path) -> None:
+    """When dossier fields present, rendered HTML contains dossier section markers."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    from hh_monitor.digest.export_pdf import _TEMPLATES_DIR
+
+    env = Environment(
+        loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+        autoescape=select_autoescape(["html"]),
+    )
+    template = env.get_template("card.html")
+
+    # Candidate with full dossier
+    candidate_with_dossier = _make_candidate("r_dos_001", 80, with_dossier=True)
+    html = template.render(candidates=[candidate_with_dossier], search_code="test")
+
+    assert 'class="dossier-facts"' in html, "Expected .dossier-facts div in HTML"
+    assert 'class="dossier-weak"' in html, "Expected .dossier-weak div in HTML"
+    assert 'class="dossier-flags"' in html, "Expected .dossier-flags div in HTML"
+    assert 'class="dossier-verdict"' in html, "Expected .dossier-verdict div in HTML"
+    # Dossier questions rendered as <li> items
+    assert 'class="dossier-questions"' in html or "Агентской сети" in html
+
+
+def test_export_pdf_fallback_to_llm_comment(tmp_path: Path) -> None:
+    """Without dossier fields, rendered HTML shows legacy llm_comment block."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    from hh_monitor.digest.export_pdf import _TEMPLATES_DIR
+
+    env = Environment(
+        loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+        autoescape=select_autoescape(["html"]),
+    )
+    template = env.get_template("card.html")
+
+    # Candidate WITHOUT dossier (legacy path)
+    legacy_candidate = _make_candidate("r_leg_001", 70, with_dossier=False)
+    html = template.render(candidates=[legacy_candidate], search_code="test")
+
+    assert "comment-box" in html, "Expected .comment-box in fallback HTML"
+    assert "Хороший кандидат" in html, "Expected llm_comment text in fallback"
+    # Should NOT render dossier-specific section *elements* (CSS class defs are always present)
+    assert 'class="dossier-facts"' not in html

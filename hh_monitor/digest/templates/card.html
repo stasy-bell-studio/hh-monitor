@@ -4,113 +4,52 @@
   <meta charset="UTF-8" />
   <title>Дайджест кандидатов — {{ search_code }}</title>
   <style>
-    @page {
-      size: A4;
-      margin: 15mm 15mm 15mm 15mm;
-    }
+    @page { size: A4; margin: 15mm 15mm 15mm 15mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 9pt; color: #222; }
-
-    .card {
-      page-break-after: always;
-      border: 1px solid #c0c0c0;
-      border-radius: 4px;
-      padding: 10px 12px;
-      margin-bottom: 10px;
-    }
+    .card { page-break-after: always; border: 1px solid #c0c0c0; border-radius: 4px; padding: 10px 12px; margin-bottom: 10px; }
     .card:last-child { page-break-after: auto; }
-
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      border-bottom: 2px solid #4472C4;
-      padding-bottom: 6px;
-      margin-bottom: 8px;
-    }
+    .card-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #4472C4; padding-bottom: 6px; margin-bottom: 8px; }
     .card-title { font-size: 11pt; font-weight: bold; color: #1a3a6b; }
     .card-id { font-size: 8pt; color: #888; }
     .card-url { font-size: 8pt; color: #0563C1; }
-
-    .scores {
-      display: flex;
-      gap: 16px;
-      margin-bottom: 8px;
-    }
-    .score-box {
-      text-align: center;
-      border: 1px solid #ddd;
-      border-radius: 3px;
-      padding: 4px 8px;
-      min-width: 60px;
-    }
+    .scores { display: flex; gap: 16px; margin-bottom: 8px; }
+    .score-box { text-align: center; border: 1px solid #ddd; border-radius: 3px; padding: 4px 8px; min-width: 60px; }
     .score-box .label { font-size: 7pt; color: #666; }
     .score-box .value { font-size: 13pt; font-weight: bold; }
     .score-green { background: #C6EFCE; border-color: #70AD47; }
     .score-yellow { background: #FFEB9C; border-color: #FFBF00; }
     .score-red { background: #FFC7CE; border-color: #C00000; }
     .score-neutral { background: #f5f5f5; }
-
-    .verdict-badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 10px;
-      font-size: 8pt;
-      font-weight: bold;
-    }
+    .verdict-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 8pt; font-weight: bold; }
     .verdict-подходит  { background: #C6EFCE; color: #375623; }
     .verdict-спорно    { background: #FFEB9C; color: #7d5a00; }
     .verdict-мимо      { background: #FFC7CE; color: #9C0006; }
     .verdict-стоп-сигнал { background: #C00000; color: #fff; }
-
     .meta { display: flex; gap: 16px; margin-bottom: 8px; font-size: 8.5pt; }
     .meta-item { color: #444; }
     .meta-item .label { color: #888; font-size: 7.5pt; }
-
-    .section-label {
-      font-size: 7.5pt;
-      font-weight: bold;
-      color: #4472C4;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 2px;
-    }
-    .comment-box {
-      background: #f8f8f8;
-      border-left: 3px solid #4472C4;
-      padding: 5px 8px;
-      font-size: 8.5pt;
-      margin-bottom: 6px;
-      white-space: pre-wrap;
-    }
-    .red-flags-box {
-      background: #FFF0F0;
-      border-left: 3px solid #C00000;
-      padding: 5px 8px;
-      font-size: 8pt;
-    }
+    .section-label { font-size: 7.5pt; font-weight: bold; color: #4472C4; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; margin-top: 6px; }
+    .dossier-section { margin-bottom: 6px; }
+    .dossier-label { font-size: 8pt; font-weight: bold; color: #1a3a6b; margin-bottom: 2px; }
+    .dossier-facts { background: #EBF3E8; border-left: 3px solid #70AD47; padding: 5px 8px; font-size: 8.5pt; white-space: pre-wrap; }
+    .dossier-weak { background: #FFF8E8; border-left: 3px solid #FFBF00; padding: 5px 8px; font-size: 8.5pt; white-space: pre-wrap; }
+    .dossier-flags { background: #FFF0F0; border-left: 3px solid #C00000; padding: 5px 8px; font-size: 8pt; white-space: pre-wrap; }
+    .dossier-questions { background: #F0F4FF; border-left: 3px solid #4472C4; padding: 5px 8px; font-size: 8pt; }
+    .dossier-questions ol { padding-left: 16px; }
+    .dossier-questions li { margin-bottom: 2px; }
+    .dossier-verdict { background: #F5F0FF; border-left: 3px solid #7B68EE; padding: 5px 8px; font-size: 8.5pt; font-weight: bold; white-space: pre-wrap; }
+    .comment-box { background: #f8f8f8; border-left: 3px solid #4472C4; padding: 5px 8px; font-size: 8.5pt; margin-bottom: 6px; white-space: pre-wrap; }
+    .red-flags-box { background: #FFF0F0; border-left: 3px solid #C00000; padding: 5px 8px; font-size: 8pt; }
     .red-flags-box ul { padding-left: 14px; }
     .red-flags-box li { margin-bottom: 2px; }
-
-    .footer {
-      margin-top: 6px;
-      font-size: 7.5pt;
-      color: #888;
-      text-align: right;
-    }
-    .status-badge {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 3px;
-      background: #e8e8e8;
-      font-size: 7.5pt;
-    }
+    .footer { margin-top: 6px; font-size: 7.5pt; color: #888; text-align: right; }
+    .status-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; background: #e8e8e8; font-size: 7.5pt; }
   </style>
 </head>
 <body>
 {% for c in candidates %}
 <div class="card">
-
   <div class="card-header">
     <div>
       <div class="card-title">{{ c.current_role or "(должность не указана)" }}</div>
@@ -154,11 +93,40 @@
     {% endif %}
   </div>
 
+  {% if c.has_dossier %}
+  <div class="dossier-section">
+    <div class="dossier-label">&#9989; Подтверждено фактами</div>
+    <div class="dossier-facts">{{ c.dossier_facts_confirmed }}</div>
+  </div>
+  <div class="dossier-section">
+    <div class="dossier-label">&#9888; Слабые места</div>
+    <div class="dossier-weak">{{ c.dossier_weak_spots }}</div>
+  </div>
+  <div class="dossier-section">
+    <div class="dossier-label">&#128681; Красные флаги</div>
+    <div class="dossier-flags">{{ c.dossier_red_flags }}</div>
+  </div>
+  {% if c.dossier_interview_questions %}
+  <div class="dossier-section">
+    <div class="dossier-label">&#10067; Вопросы для интервью</div>
+    <div class="dossier-questions">
+      <ol>
+      {% for q in c.dossier_interview_questions %}
+        <li>{{ q }}</li>
+      {% endfor %}
+      </ol>
+    </div>
+  </div>
+  {% endif %}
+  <div class="dossier-section">
+    <div class="dossier-label">&#128204; Вердикт</div>
+    <div class="dossier-verdict">{{ c.dossier_verdict }}</div>
+  </div>
+  {% else %}
   {% if c.llm_comment %}
   <div class="section-label">Комментарий LLM</div>
   <div class="comment-box">{{ c.llm_comment }}</div>
   {% endif %}
-
   {% if c.llm_red_flags %}
   <div class="section-label">Стоп-сигналы</div>
   <div class="red-flags-box">
@@ -168,6 +136,7 @@
     {% endfor %}
     </ul>
   </div>
+  {% endif %}
   {% endif %}
 
   <div class="footer">#{{ loop.index }} / {{ candidates|length }} — {{ search_code }}</div>
