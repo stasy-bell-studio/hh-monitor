@@ -1,0 +1,135 @@
+# Weekly Digest: архитектура и эксплуатация
+
+## Назначение
+
+Еженедельный PDF-отчёт отправляется в Telegram-группу HR + руководство.
+Содержит: сводную таблицу по позициям, топ-5 кандидатов per позиция, статистику парсера.
+
+## Расписание
+
+В сессии 7 (deployment) настраивается systemd timer:
+
+```ini
+# /etc/systemd/system/hh-digest.timer
+[Timer]
+OnCalendar=Fri *-*-* 15:00:00
+TimeZone=Europe/Moscow
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+```ini
+# /etc/systemd/system/hh-digest.service
+[Service]
+ExecStart=poetry run python -m hh_monitor.cli digest weekly
+WorkingDirectory=/opt/hh-monitor
+EnvironmentFile=/opt/hh-monitor/.env
+```
+
+Для ручного запуска:
+```bash
+TZ=Europe/Moscow poetry run python -m hh_monitor.cli digest now
+```
+
+Или прямо из Telegram-группы (только для админов):
+```
+/digest force
+```
+
+## Модули
+
+| Файл | Назначение |
+|------|-----------|
+| `hh_monitor/weekly_digest/run.py` | `run_weekly_digest(session, bot)`, `_collect_data()` |
+| `templates/weekly_digest.html.j2` | Jinja2 шаблон с inline CSS |
+
+## Поток выполнения
+
+```
+run_weekly_digest(session, bot)
+  ├─> _collect_data(session, date_from, date_to)
+  │     ├─> SELECT Event JOIN Resume JOIN Search WHERE llm_enriched=TRUE AND created_at IN [date_from, date_to]
+  │     ├─> Группировка по position_code, сортировка по score_total DESC, top_candidates[:5]
+  │     └─> SELECT ParserRun WHERE started_at >= date_from → stats
+  ├─> Jinja2 render → HTML string (in-memory)
+  ├─> WeasyPrint HTML(string=html).write_pdf() → bytes (in-memory, диск не используется)
+  └─> bot.send_document(chat_id=TELEGRAM_HR_GROUP_ID, document=BufferedInputFile(pdf_bytes), caption=...)
+```
+
+## Контекст шаблона
+
+```python
+{
+    "week_number": int,           # ISO week number
+    "date_from": "DD.MM.YYYY",
+    "date_to": "DD.MM.YYYY",
+    "generated_at": "DD.MM.YYYY HH:MM UTC",
+    "total_candidates": int,
+    "positions": [
+        {
+            "position_code": str,
+            "position_name": str,
+            "count": int,         # новых за неделю
+            "avg_score": int,     # средний score
+            "top_candidates": [   # max 5
+                {
+                    "hh_resume_id": str,
+                    "verdict": str,
+                    "real_role": str,
+                    "score_total": int | None,
+                    "comment": str,
+                    "url": "https://hh.ru/resume/{id}",
+                }
+            ],
+        }
+    ],
+    "parser_stats": {
+        "runs": int,
+        "snapshots_inserted": int,
+        "dedup_rate": int,   # процент дедупликации
+        "errors": int,
+    },
+}
+```
+
+## Статистика парсера
+
+Берётся из таблицы `parser_runs` за последние 7 дней:
+- `runs` — количество строк с `started_at >= date_from`
+- `snapshots_inserted` — сумма `snapshots_inserted`
+- `dedup_rate` — `round(skipped / (inserted + skipped) * 100)`
+- `errors` — количество строк с `status != 'ok'`
+
+## Изменение шаблона
+
+Шаблон: `templates/weekly_digest.html.j2`
+
+- Используется Jinja2 autoescape — HTML-инъекции из данных БД безопасны.
+- Inline CSS — WeasyPrint не поддерживает внешние стили.
+- После изменения шаблона: `poetry run python -m hh_monitor.cli digest now` → проверить PDF.
+
+## Локальное тестирование
+
+```bash
+# Полный дайджест сейчас (требует реального BOT_TOKEN и GROUP_ID в .env)
+poetry run python -m hh_monitor.cli digest now
+
+# Только smoke-тест (без реального TG)
+poetry run pytest tests/test_weekly_digest.py -v
+```
+
+## Конфигурация
+
+```env
+TELEGRAM_BOT_TOKEN=<bot token>
+TELEGRAM_HR_GROUP_ID=-100XXXXXXXXX
+WEEKLY_DIGEST_CRON=0 15 * * 5      # пятница 15:00 (только справочно, не используется в коде)
+WEEKLY_DIGEST_TZ=Europe/Moscow      # только справочно
+```
+
+## Известные ограничения
+
+- **PDF in-memory**: WeasyPrint держит весь PDF в RAM. При очень большом числе кандидатов (>500 за неделю) может потребовать много памяти. Это MVP-трейдоф, в сессии 7 можно добавить `--limit N` на `top_candidates`.
+- **WeasyPrint system libs**: требует `pango`, `cairo`, `gobject-introspection`. На сервере установить через `apt install python3-weasyprint` или собрать зависимости вручную.
