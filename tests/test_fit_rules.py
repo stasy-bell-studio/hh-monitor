@@ -775,6 +775,7 @@ def test_hard_stop_candidate_scores_zero() -> None:
     assert score == 0
     assert bd["hard_reject_reason"] == "stop_region"
 
+
 # ══ Hard filter: current_role_mismatch ════════════════════════════════════════
 #
 # Filter is active only when portrait.position_synonyms is non-empty.
@@ -957,3 +958,73 @@ def test_current_role_case_insensitive() -> None:
     # All-caps — should still match "директор филиала" (position_name)
     _, bd = compute(_role_resume("ДИРЕКТОР ФИЛИАЛА"), p)
     assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+# ── Commit 9: hard_reject_reasons array ───────────────────────────────────────
+
+
+def test_single_hard_reject_populates_reasons_array() -> None:
+    """A single triggered filter → hard_reject_reasons is a one-element list."""
+    # Portrait with only age filter active; resume fails only on age.
+    p = _portrait(age_range=(30, 60))
+    payload: dict[str, Any] = {"id": "r_age", "age": 20}
+    score, bd = compute(payload, p)
+
+    assert score == 0
+    assert "hard_reject_reasons" in bd, "hard_reject_reasons key must be present on rejection"
+    assert bd["hard_reject_reasons"] == ["age"], (
+        f"Expected ['age'], got {bd['hard_reject_reasons']}"
+    )
+
+
+def test_multiple_hard_rejects_returns_all_reasons() -> None:
+    """When multiple filters fire the reasons list contains all of them.
+
+    Portrait with age_range + min_total_months both active; the resume
+    fails both filters simultaneously.
+    """
+    p = _portrait(age_range=(30, 60), min_total_months=60)
+    payload: dict[str, Any] = {
+        "id": "r_multi",
+        "age": 20,  # fails age filter (30–60)
+        "total_experience": {"months": 10},  # fails total_experience filter (need ≥60)
+    }
+    score, bd = compute(payload, p)
+
+    assert score == 0
+    reasons: list[str] = bd.get("hard_reject_reasons", [])
+    assert "age" in reasons, f"'age' missing from {reasons}"
+    assert "total_experience" in reasons, f"'total_experience' missing from {reasons}"
+    assert len(reasons) >= 2, f"Expected ≥2 reasons, got {reasons}"
+
+
+def test_hard_reject_reason_is_backward_compat_alias() -> None:
+    """breakdown['hard_reject_reason'] must equal hard_reject_reasons[0] (first fired)."""
+    p = _portrait(age_range=(30, 60), min_total_months=60)
+    payload: dict[str, Any] = {
+        "id": "r_compat",
+        "age": 20,
+        "total_experience": {"months": 10},
+    }
+    _, bd = compute(payload, p)
+
+    reasons = bd.get("hard_reject_reasons", [])
+    assert reasons, "hard_reject_reasons must be non-empty"
+    assert bd.get("hard_reject_reason") == reasons[0], (
+        f"hard_reject_reason={bd.get('hard_reject_reason')!r} "
+        f"!= hard_reject_reasons[0]={reasons[0]!r}"
+    )
+
+
+def test_passing_candidate_has_no_hard_reject_reasons_key() -> None:
+    """A candidate that passes all hard filters must not have hard_reject_reasons in breakdown."""
+    # Minimal portrait with no hard constraints active → any resume passes.
+    p = _portrait()
+    payload: dict[str, Any] = {"id": "r_pass"}
+    score, bd = compute(payload, p)
+
+    # Score may be 0 (no bonus points) but no hard rejection.
+    assert "hard_reject_reasons" not in bd, (
+        f"Passing candidate must not have hard_reject_reasons; got {bd}"
+    )
+    assert "hard_reject_reason" not in bd

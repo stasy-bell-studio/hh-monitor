@@ -9,16 +9,16 @@ AC4 coverage for commit 8:
     — verifies that running the migration SQL a second time is a no-op
       (NOT EXISTS guard prevents UNIQUE violation and silent data corruption).
 
-Implementation note:
-  The Search ORM model does not yet have a separate ``search_code`` field
-  (scheduled for session 6.0 schema refactor).  Until then, the 21-Vek
-  search is identified by its position_name during the migration transition
-  period.  The tests exercise the migration SQL directly via the per-test
-  DB session so they run fully isolated without touching the production DB.
+Commit 9 coverage:
+  test_search_code_is_nullable
+    — Search row can be created without search_code (nullable column).
 
-  TODO (session 6.0): once ``search_code`` is added to the Search model,
-  replace the position_name-based lookup with:
-    select(Search).where(Search.search_code == 'branch_director_21vek')
+  test_search_code_enforces_uniqueness
+    — Two rows with the same non-NULL search_code raise IntegrityError.
+
+  test_position_code_allows_duplicates
+    — After migration, two rows with the same position_code can coexist
+      (unique constraint removed in commit 9).
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.db.models import Search
@@ -112,6 +113,79 @@ async def test_migration_sql_is_idempotent(db_session: AsyncSession) -> None:
     result = await db_session.execute(select(Search).where(Search.id == search_id))
     final = result.scalar_one()
     assert final.position_code == "branch_director", (
-        "Second migration run must not corrupt position_code: "
-        f"got '{final.position_code}'"
+        f"Second migration run must not corrupt position_code: got '{final.position_code}'"
     )
+
+
+# ── Commit 9: search_code column ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_search_code_is_nullable(db_session: AsyncSession) -> None:
+    """Search can be inserted without a search_code (nullable column)."""
+    s = Search(
+        position_code="any_code",
+        position_name="Any Position",
+        hh_params={"text": "any"},
+        portrait={"position_code": "any_code", "position_name": "Any Position"},
+    )
+    db_session.add(s)
+    await db_session.flush()
+    assert s.id is not None
+    assert s.search_code is None
+
+
+@pytest.mark.asyncio
+async def test_search_code_enforces_uniqueness(db_session: AsyncSession) -> None:
+    """Two rows with the same non-NULL search_code must raise IntegrityError."""
+    s1 = Search(
+        search_code="unique_code",
+        position_code="pos_a",
+        position_name="Position A",
+        hh_params={"text": "a"},
+        portrait={"position_code": "pos_a", "position_name": "Position A"},
+    )
+    s2 = Search(
+        search_code="unique_code",  # duplicate
+        position_code="pos_b",
+        position_name="Position B",
+        hh_params={"text": "b"},
+        portrait={"position_code": "pos_b", "position_name": "Position B"},
+    )
+    db_session.add(s1)
+    await db_session.flush()
+
+    db_session.add(s2)
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_position_code_allows_duplicates(db_session: AsyncSession) -> None:
+    """After migration, two rows may share the same position_code (constraint removed)."""
+    shared_code = "branch_director"
+    s1 = Search(
+        search_code="bd_north",
+        position_code=shared_code,
+        position_name="Директор филиала (Север)",
+        hh_params={"text": "директор", "area": [1]},
+        portrait={"position_code": shared_code, "position_name": "Директор филиала"},
+    )
+    s2 = Search(
+        search_code="bd_south",
+        position_code=shared_code,
+        position_name="Директор филиала (Юг)",
+        hh_params={"text": "директор", "area": [145]},
+        portrait={"position_code": shared_code, "position_name": "Директор филиала"},
+    )
+    db_session.add(s1)
+    db_session.add(s2)
+    # Must not raise IntegrityError — unique constraint on position_code was dropped
+    await db_session.flush()
+
+    rows = (
+        (await db_session.execute(select(Search).where(Search.position_code == shared_code)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 2, f"Expected 2 rows with position_code={shared_code!r}, got {len(rows)}"

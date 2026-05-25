@@ -2,6 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
@@ -13,7 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -25,7 +26,15 @@ class Search(Base):
     __tablename__ = "searches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    position_code: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    # search_code — stable semantic identifier for this search instance (e.g.
+    # 'branch_director_21vek').  Nullable so existing rows without a code are
+    # valid; UNIQUE so lookup by code is safe and unambiguous.  Unlike
+    # position_code it is not shared across search rows.
+    search_code: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
+    # position_code — portrait code shared with portrait YAML files (e.g.
+    # 'branch_director').  No longer UNIQUE at DB level: multiple searches may
+    # use the same portrait (e.g. regional splits).
+    position_code: Mapped[str] = mapped_column(Text, nullable=False)
     position_name: Mapped[str] = mapped_column(Text, nullable=False)
     hh_params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     portrait: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -113,6 +122,11 @@ class Event(Base):
     # Renamed from notion_synced — marks whether this event has been LLM-enriched
     llm_enriched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     telegram_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # All hard-filter reasons that fired for this event (populated by fit/rules.py ≥ v2).
+    # Deprecated single-string reason is kept in details->>'hard_reject_reason' for compat.
+    hard_reject_reasons: Mapped[list[str]] = mapped_column(
+        ARRAY(Text()), nullable=False, server_default=sa.text("'{}'"), default=list
+    )
 
     __table_args__ = (
         Index(

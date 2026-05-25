@@ -310,12 +310,21 @@ app.add_typer(parse_app, name="parse")
 
 @parse_app.command("run")
 def parse_run(
-    search_id: int = typer.Option(..., "--search-id", help="ID of the saved search to run"),
+    search_id: int | None = typer.Option(None, "--search-id", help="ID of the saved search to run"),
+    search_code: str | None = typer.Option(
+        None, "--search-code", help="search_code of the saved search (alt. to --search-id)"
+    ),
     max_pages: int = typer.Option(5, "--max-pages", help="Maximum pages to fetch"),
 ) -> None:
     """Fetch resumes from hh.ru and save snapshots to the database."""
+    if search_id is None and search_code is None:
+        typer.echo("Error: provide exactly one of --search-id or --search-code", err=True)
+        raise typer.Exit(1)
+    if search_id is not None and search_code is not None:
+        typer.echo("Error: --search-id and --search-code are mutually exclusive", err=True)
+        raise typer.Exit(1)
     try:
-        result = asyncio.run(_parse_run(search_id, max_pages))
+        result = asyncio.run(_parse_run(search_id, max_pages, search_code=search_code))
     except SearchNotFoundError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -335,10 +344,25 @@ def parse_run(
     )
 
 
-async def _parse_run(search_id: int, max_pages: int) -> dict:  # type: ignore[type-arg]
+async def _parse_run(
+    search_id: int | None,
+    max_pages: int,
+    search_code: str | None = None,
+) -> dict:  # type: ignore[type-arg]
+    from sqlalchemy import select
+
     from hh_monitor.parser.run import run_parser
 
     async with async_session_factory() as session:
+        if search_id is None:
+            result = await session.execute(
+                select(Search.id).where(Search.search_code == search_code, Search.active.is_(True))
+            )
+            resolved_id: int | None = result.scalar_one_or_none()
+            if resolved_id is None:
+                raise SearchNotFoundError(f"No active search with search_code={search_code!r}")
+            search_id = resolved_id
+
         client = HHClient(
             token_provider=lambda: get_valid_token(session),
             user_agent=settings.hh_user_agent,
@@ -354,7 +378,10 @@ app.add_typer(pipeline_app, name="pipeline")
 
 @pipeline_app.command("run")
 def pipeline_run(
-    search_id: int = typer.Option(..., "--search-id", help="ID of the saved search"),
+    search_id: int | None = typer.Option(None, "--search-id", help="ID of the saved search"),
+    search_code: str | None = typer.Option(
+        None, "--search-code", help="search_code of the saved search (alt. to --search-id)"
+    ),
     portrait_path: Path | None = typer.Option(  # noqa: B008
         None,
         "--portrait",
@@ -369,12 +396,20 @@ def pipeline_run(
 ) -> None:
     """Parse → detect → score → show top-N candidates.
 
+    Provide exactly one of --search-id or --search-code to identify the search.
+
     Use --no-parse to skip the hh.ru API fetch and re-score the snapshots
     already stored in the database.  Useful for iterating on portraits without
     burning quota.
     """
+    if search_id is None and search_code is None:
+        typer.echo("Error: provide exactly one of --search-id or --search-code", err=True)
+        raise typer.Exit(1)
+    if search_id is not None and search_code is not None:
+        typer.echo("Error: --search-id and --search-code are mutually exclusive", err=True)
+        raise typer.Exit(1)
     try:
-        asyncio.run(_pipeline_run(search_id, portrait_path, top, max_pages, no_parse))
+        asyncio.run(_pipeline_run(search_id, portrait_path, top, max_pages, no_parse, search_code))
     except SearchNotFoundError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -390,11 +425,12 @@ _HH_RESUME_BASE = "https://hh.ru/resume"
 
 
 async def _pipeline_run(
-    search_id: int,
+    search_id: int | None,
     portrait_path: Path | None,
     top: int,
     max_pages: int,
     no_parse: bool = False,
+    search_code: str | None = None,
 ) -> None:
     from sqlalchemy import select
 
@@ -402,6 +438,16 @@ async def _pipeline_run(
     from hh_monitor.parser.run import run_parser
 
     async with async_session_factory() as session:
+        # Resolve search_code → search_id when --search-code was used
+        if search_id is None:
+            result = await session.execute(
+                select(Search.id).where(Search.search_code == search_code, Search.active.is_(True))
+            )
+            resolved_id: int | None = result.scalar_one_or_none()
+            if resolved_id is None:
+                raise SearchNotFoundError(f"No active search with search_code={search_code!r}")
+            search_id = resolved_id
+
         # Load search to get stored portrait
         search = await session.get(Search, search_id)
         if search is None:
@@ -484,8 +530,7 @@ async def _pipeline_run(
         )
         if reject_tally:
             tally_str = "  ".join(
-                f"{r}={c}"
-                for r, c in sorted(reject_tally.items(), key=lambda kv: -kv[1])
+                f"{r}={c}" for r, c in sorted(reject_tally.items(), key=lambda kv: -kv[1])
             )
             typer.echo(f"  Hard-reject reasons: {tally_str}")
 
@@ -662,23 +707,45 @@ app.add_typer(llm_app, name="llm")
 @llm_app.command("score")
 def llm_score(
     hh_resume_id: str = typer.Argument(..., help="HH resume ID to score"),
-    search_id: int = typer.Option(..., "--search-id", help="Search ID (determines portrait)"),
+    search_id: int | None = typer.Option(None, "--search-id", help="Search ID (portrait source)"),
+    search_code: str | None = typer.Option(
+        None, "--search-code", help="search_code of the saved search (alt. to --search-id)"
+    ),
 ) -> None:
     """Show fit + LLM scores for a single resume (reads from DB, no API call)."""
+    if search_id is None and search_code is None:
+        typer.echo("Error: provide exactly one of --search-id or --search-code", err=True)
+        raise typer.Exit(1)
+    if search_id is not None and search_code is not None:
+        typer.echo("Error: --search-id and --search-code are mutually exclusive", err=True)
+        raise typer.Exit(1)
     try:
-        asyncio.run(_llm_score(hh_resume_id, search_id))
+        asyncio.run(_llm_score(hh_resume_id, search_id, search_code=search_code))
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc
 
 
-async def _llm_score(hh_resume_id: str, search_id: int) -> None:
+async def _llm_score(
+    hh_resume_id: str,
+    search_id: int | None,
+    search_code: str | None = None,
+) -> None:
     from sqlalchemy import select
 
     from hh_monitor.fit.portrait import load_all_portraits
     from hh_monitor.fit.rules import compute as fit_compute_fn
 
     async with async_session_factory() as session:
+        if search_id is None:
+            result = await session.execute(
+                select(Search.id).where(Search.search_code == search_code, Search.active.is_(True))
+            )
+            resolved_id: int | None = result.scalar_one_or_none()
+            if resolved_id is None:
+                raise SearchNotFoundError(f"No active search with search_code={search_code!r}")
+            search_id = resolved_id
+
         # Load search to get position_code
         s = await session.get(Search, search_id)
         if s is None:
@@ -729,15 +796,24 @@ async def _llm_score(hh_resume_id: str, search_id: int) -> None:
 
 @llm_app.command("run")
 def llm_run(
-    search_id: int = typer.Option(..., "--search-id", help="Search ID to enrich"),
+    search_id: int | None = typer.Option(None, "--search-id", help="Search ID to enrich"),
+    search_code: str | None = typer.Option(
+        None, "--search-code", help="search_code of the saved search (alt. to --search-id)"
+    ),
     limit: int = typer.Option(10, "--limit", "-n", help="Max events to process"),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Skip API calls; show what would be enriched"
     ),
 ) -> None:
     """Run LLM enrichment on unenriched events for a search."""
+    if search_id is None and search_code is None:
+        typer.echo("Error: provide exactly one of --search-id or --search-code", err=True)
+        raise typer.Exit(1)
+    if search_id is not None and search_code is not None:
+        typer.echo("Error: --search-id and --search-code are mutually exclusive", err=True)
+        raise typer.Exit(1)
     try:
-        result = asyncio.run(_llm_run(search_id, limit, dry_run))
+        result = asyncio.run(_llm_run(search_id, limit, dry_run, search_code=search_code))
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -751,10 +827,26 @@ def llm_run(
     )
 
 
-async def _llm_run(search_id: int, limit: int, dry_run: bool) -> dict:  # type: ignore[type-arg]
+async def _llm_run(
+    search_id: int | None,
+    limit: int,
+    dry_run: bool,
+    search_code: str | None = None,
+) -> dict:  # type: ignore[type-arg]
+    from sqlalchemy import select
+
     from hh_monitor.llm_enrich.run import run_llm_enrichment
 
     async with async_session_factory() as session:
+        if search_id is None:
+            result = await session.execute(
+                select(Search.id).where(Search.search_code == search_code, Search.active.is_(True))
+            )
+            resolved_id: int | None = result.scalar_one_or_none()
+            if resolved_id is None:
+                raise SearchNotFoundError(f"No active search with search_code={search_code!r}")
+            search_id = resolved_id
+
         return await run_llm_enrichment(session, search_id, limit=limit, dry_run=dry_run)
 
 

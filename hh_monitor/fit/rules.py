@@ -3,8 +3,10 @@
 Pure module — no I/O, no side effects except debug-level structlog calls.
 
 Scoring v2 (Lesnitskaya etalon v1, session 5.7):
-  1. Eight hard filters: any triggered → fit_score=0,
-     breakdown["hard_reject_reason"] is set to the reason string.
+  1. Eight hard filters run in full — ALL triggered reasons are collected
+     (no early return).  If any fire → fit_score=0.
+     breakdown["hard_reject_reasons"] — list of all triggered reason codes.
+     breakdown["hard_reject_reason"]  — first reason (backward-compatible alias).
   2. Six weighted scored criteria; max achievable raw sum = 45.
   3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
 
@@ -12,7 +14,7 @@ Scoring v1 (legacy) — salary fit removed in 5.7 per Lesnitskaya etalon.
   Legacy breakdown keys (title_match, experience_keywords, etc.) are no
   longer computed; the new keys replace them.
 
-Hard reject reasons (breakdown["hard_reject_reason"]):
+Hard reject reason codes (may appear in hard_reject_reasons list):
   "age"                   — candidate age outside portrait.filters.age_range
   "education"             — higher_education_required=True but no higher edu
   "stop_region"           — candidate area in filters.regions.stop
@@ -73,9 +75,7 @@ _ROLE_GROUP_A: frozenset[str] = frozenset(
     {"директор", "руководитель", "управляющ", "начальник", "региональн", "менеджер"}
 )
 # Group B — branch / office / subsidiary scope words
-_ROLE_GROUP_B: frozenset[str] = frozenset(
-    {"филиал", "отделени", "представительств", "офис"}
-)
+_ROLE_GROUP_B: frozenset[str] = frozenset({"филиал", "отделени", "представительств", "офис"})
 
 
 # ── date helpers ──────────────────────────────────────────────────────────────
@@ -260,7 +260,10 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
     """Score a resume against a portrait.  Pure function — no side effects.
 
     Scoring v2 (Lesnitskaya etalon v1):
-      1. Eight hard filters — any triggered returns (0, {"hard_reject_reason": reason}).
+      1. All eight hard filters run — ALL triggered reasons are collected into
+         ``breakdown["hard_reject_reasons"]`` (list).  If any fired → score=0.
+         ``breakdown["hard_reject_reason"]`` contains the first reason string
+         for backward compatibility with callers that check that key.
       2. Six weighted criteria with a raw max of 45.
       3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
 
@@ -268,10 +271,9 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
         ``(score, breakdown)`` where *score* is in ``[0, 100]``.
 
         *breakdown* maps criterion name → int points. Hard-rejected resumes
-        additionally have ``breakdown["hard_reject_reason"]`` set to a string
-        reason code; callers detect hard rejection via::
-
-            reject_reason = breakdown.get("hard_reject_reason")
+        additionally have:
+          ``breakdown["hard_reject_reasons"]`` — list[str] of all triggered codes
+          ``breakdown["hard_reject_reason"]``  — str, first element (compat alias)
     """
     breakdown: dict[str, Any] = {}
     resume_id: str = resume_payload.get("id") or resume_payload.get("hh_resume_id", "")
@@ -288,29 +290,28 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
     edu: dict[str, Any] = resume_payload.get("education") or {}
     edu_level_id: str = (edu.get("level") or {}).get("id", "")
 
-    # ── STEP 1: Hard filters ──────────────────────────────────────────────────
-    # Any triggered filter → return immediately with score=0.
+    # ── STEP 1: Hard filters — collect ALL triggered reasons ──────────────────
+    # All eight filters run regardless of prior triggers; we collect every
+    # fired reason so callers can see the full picture in one pass.
+    hard_reject_reasons: list[str] = []
 
     # 1a. Age (only when both portrait and payload provide the value)
     age: int | None = resume_payload.get("age")
     if portrait.filters.age_range is not None and age is not None:
         lo, hi = portrait.filters.age_range
         if not (lo <= age <= hi):
-            breakdown["hard_reject_reason"] = "age"
+            hard_reject_reasons.append("age")
             logger.debug("fit.hard_reject.age", age=age, range=(lo, hi), resume_id=resume_id)
-            return 0, breakdown
 
     # 1b. Higher education required
     if portrait.higher_education_required and edu_level_id not in _HIGHER_EDU_IDS:
-        breakdown["hard_reject_reason"] = "education"
+        hard_reject_reasons.append("education")
         logger.debug("fit.hard_reject.education", edu_level=edu_level_id, resume_id=resume_id)
-        return 0, breakdown
 
     # 1c. Stop region
     if portrait.filters.regions.stop and _region_match(area_name, portrait.filters.regions.stop):
-        breakdown["hard_reject_reason"] = "stop_region"
+        hard_reject_reasons.append("stop_region")
         logger.debug("fit.hard_reject.stop_region", area=area_name, resume_id=resume_id)
-        return 0, breakdown
 
     # 1d. Forbidden industry — check ONLY the most recent experience entry
     if portrait.forbidden_industries:
@@ -328,13 +329,13 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
             ).lower()
             for industry in portrait.forbidden_industries:
                 if industry.lower() in latest_text:
-                    breakdown["hard_reject_reason"] = "forbidden_industry"
+                    hard_reject_reasons.append("forbidden_industry")
                     logger.debug(
                         "fit.hard_reject.forbidden_industry",
                         industry=industry,
                         resume_id=resume_id,
                     )
-                    return 0, breakdown
+                    break  # one match per resume is enough; avoid double-counting
 
     # 1e. Current role mismatch
     # Only active when portrait.position_synonyms is non-empty — that signals
@@ -354,31 +355,27 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
                 _current_title = str(_raw_title).strip() or None
 
         if not _current_title:
-            breakdown["hard_reject_reason"] = "current_role_unknown"
+            hard_reject_reasons.append("current_role_unknown")
             logger.debug("fit.hard_reject.current_role_unknown", resume_id=resume_id)
-            return 0, breakdown
-
-        if not _matches_role(_current_title, portrait):
-            breakdown["hard_reject_reason"] = "current_role_mismatch"
+        elif not _matches_role(_current_title, portrait):
+            hard_reject_reasons.append("current_role_mismatch")
             logger.debug(
                 "fit.hard_reject.current_role_mismatch",
                 current_role=_current_title,
                 resume_id=resume_id,
             )
-            return 0, breakdown
 
-    # 1f. Career gap  (was 1e before current_role filter was added)
+    # 1f. Career gap
     if portrait.max_career_gap_months > 0:
         max_gap = _max_career_gap_months(experiences)
         if max_gap > portrait.max_career_gap_months:
-            breakdown["hard_reject_reason"] = "career_gap"
+            hard_reject_reasons.append("career_gap")
             logger.debug(
                 "fit.hard_reject.career_gap",
                 gap_months=max_gap,
                 max_allowed=portrait.max_career_gap_months,
                 resume_id=resume_id,
             )
-            return 0, breakdown
 
     # 1g. Total experience
     te_raw = resume_payload.get("total_experience")
@@ -393,27 +390,31 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
         and total_months is not None
         and total_months < portrait.min_total_months
     ):
-        breakdown["hard_reject_reason"] = "total_experience"
+        hard_reject_reasons.append("total_experience")
         logger.debug(
             "fit.hard_reject.total_experience",
             months=total_months,
             required=portrait.min_total_months,
             resume_id=resume_id,
         )
-        return 0, breakdown
 
     # 1h. Insurance-specific experience
     if portrait.min_insurance_experience_months > 0:
         ins_months = _insurance_experience_months(experiences)
         if ins_months < portrait.min_insurance_experience_months:
-            breakdown["hard_reject_reason"] = "insurance_experience"
+            hard_reject_reasons.append("insurance_experience")
             logger.debug(
                 "fit.hard_reject.insurance_experience",
                 months=ins_months,
                 required=portrait.min_insurance_experience_months,
                 resume_id=resume_id,
             )
-            return 0, breakdown
+
+    # ── If any hard filter fired → return score=0 with full reasons list ──────
+    if hard_reject_reasons:
+        breakdown["hard_reject_reasons"] = hard_reject_reasons
+        breakdown["hard_reject_reason"] = hard_reject_reasons[0]  # backward-compat alias
+        return 0, breakdown
 
     # ── STEP 2: Weighted scored criteria ─────────────────────────────────────
     # Build full searchable text from experience + key_skills
