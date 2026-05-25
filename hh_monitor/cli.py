@@ -918,5 +918,92 @@ async def _llm_stats() -> None:
         )
 
 
+# ── digest ───────────────────────────────────────────────────────────────────
+
+from enum import Enum  # noqa: E402  (kept local to avoid polluting top-level namespace)
+
+
+class _OutputFormat(str, Enum):
+    xlsx = "xlsx"
+    pdf = "pdf"
+
+
+digest_app = typer.Typer(help="Candidate digest export commands")
+app.add_typer(digest_app, name="digest")
+
+
+@digest_app.command("export")
+def digest_export(
+    search_code: str = typer.Option(..., "--search-code", help="search_code of the saved search"),
+    min_score: int = typer.Option(60, "--min-score", help="Minimum score_total threshold"),
+    fmt: _OutputFormat = typer.Option(
+        _OutputFormat.xlsx, "--format", help="Output format: xlsx or pdf"
+    ),
+    output: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--output",
+        "-o",
+        help="Output file path (default: digests/<search_code>_<date>.<fmt>)",
+    ),
+    include_screened: bool = typer.Option(
+        False, "--include-screened", help="Include already-screened candidates"
+    ),
+) -> None:
+    """Export top candidates for a search to Excel or PDF.
+
+    Temporary panel for HR review until the Telegram bot is live.
+    """
+    from datetime import date
+
+    resolved_output = output or Path(
+        f"digests/{search_code}_{date.today().isoformat()}.{fmt.value}"
+    )
+
+    try:
+        count = asyncio.run(
+            _digest_export(search_code, min_score, fmt, resolved_output, include_screened)
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Exported {count} candidate(s) → {resolved_output}")
+
+
+async def _digest_export(
+    search_code: str,
+    min_score: int,
+    fmt: _OutputFormat,
+    output_path: Path,
+    include_screened: bool,
+) -> int:
+    from hh_monitor.digest.query import fetch_candidates
+
+    async with async_session_factory() as session:
+        candidates = await fetch_candidates(
+            session,
+            search_code=search_code,
+            min_score=min_score,
+            include_screened=include_screened,
+        )
+
+    if not candidates:
+        typer.echo(
+            f"No candidates found for search_code={search_code!r} with score_total ≥ {min_score}."
+        )
+        return 0
+
+    if fmt == _OutputFormat.xlsx:
+        from hh_monitor.digest.export_xlsx import export_xlsx
+
+        export_xlsx(candidates, output_path)
+    else:
+        from hh_monitor.digest.export_pdf import export_pdf
+
+        export_pdf(candidates, output_path, search_code=search_code)
+
+    return len(candidates)
+
+
 if __name__ == "__main__":
     app()

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Дайджест кандидатов — {{ search_code }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 15mm 15mm 15mm 15mm;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 9pt; color: #222; }
+
+    .card {
+      page-break-after: always;
+      border: 1px solid #c0c0c0;
+      border-radius: 4px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .card:last-child { page-break-after: auto; }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid #4472C4;
+      padding-bottom: 6px;
+      margin-bottom: 8px;
+    }
+    .card-title { font-size: 11pt; font-weight: bold; color: #1a3a6b; }
+    .card-id { font-size: 8pt; color: #888; }
+    .card-url { font-size: 8pt; color: #0563C1; }
+
+    .scores {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+    .score-box {
+      text-align: center;
+      border: 1px solid #ddd;
+      border-radius: 3px;
+      padding: 4px 8px;
+      min-width: 60px;
+    }
+    .score-box .label { font-size: 7pt; color: #666; }
+    .score-box .value { font-size: 13pt; font-weight: bold; }
+    .score-green { background: #C6EFCE; border-color: #70AD47; }
+    .score-yellow { background: #FFEB9C; border-color: #FFBF00; }
+    .score-red { background: #FFC7CE; border-color: #C00000; }
+    .score-neutral { background: #f5f5f5; }
+
+    .verdict-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 8pt;
+      font-weight: bold;
+    }
+    .verdict-подходит  { background: #C6EFCE; color: #375623; }
+    .verdict-спорно    { background: #FFEB9C; color: #7d5a00; }
+    .verdict-мимо      { background: #FFC7CE; color: #9C0006; }
+    .verdict-стоп-сигнал { background: #C00000; color: #fff; }
+
+    .meta { display: flex; gap: 16px; margin-bottom: 8px; font-size: 8.5pt; }
+    .meta-item { color: #444; }
+    .meta-item .label { color: #888; font-size: 7.5pt; }
+
+    .section-label {
+      font-size: 7.5pt;
+      font-weight: bold;
+      color: #4472C4;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+    .comment-box {
+      background: #f8f8f8;
+      border-left: 3px solid #4472C4;
+      padding: 5px 8px;
+      font-size: 8.5pt;
+      margin-bottom: 6px;
+      white-space: pre-wrap;
+    }
+    .red-flags-box {
+      background: #FFF0F0;
+      border-left: 3px solid #C00000;
+      padding: 5px 8px;
+      font-size: 8pt;
+    }
+    .red-flags-box ul { padding-left: 14px; }
+    .red-flags-box li { margin-bottom: 2px; }
+
+    .footer {
+      margin-top: 6px;
+      font-size: 7.5pt;
+      color: #888;
+      text-align: right;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: #e8e8e8;
+      font-size: 7.5pt;
+    }
+  </style>
+</head>
+<body>
+{% for c in candidates %}
+<div class="card">
+
+  <div class="card-header">
+    <div>
+      <div class="card-title">{{ c.current_role or "(должность не указана)" }}</div>
+      <div class="card-id">{{ c.hh_resume_id }}</div>
+      <div class="card-url">{{ c.url }}</div>
+    </div>
+    <div style="text-align:right">
+      {% if c.llm_verdict %}
+      <span class="verdict-badge verdict-{{ c.llm_verdict }}">{{ c.llm_verdict }}</span>
+      {% endif %}
+      {% if c.screening_status %}
+      <br/><span class="status-badge" style="margin-top:4px">{{ c.screening_status }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="scores">
+    <div class="score-box {% if c.score_total is not none %}{% if c.score_total >= 70 %}score-green{% elif c.score_total >= 60 %}score-yellow{% else %}score-red{% endif %}{% else %}score-neutral{% endif %}">
+      <div class="label">Score Total</div>
+      <div class="value">{{ c.score_total if c.score_total is not none else "—" }}</div>
+    </div>
+    <div class="score-box score-neutral">
+      <div class="label">Fit</div>
+      <div class="value">{{ c.fit_score if c.fit_score is not none else "—" }}</div>
+    </div>
+    <div class="score-box score-neutral">
+      <div class="label">LLM</div>
+      <div class="value">{{ c.llm_score if c.llm_score is not none else "—" }}</div>
+    </div>
+  </div>
+
+  <div class="meta">
+    {% if c.region %}
+    <div class="meta-item"><span class="label">Регион: </span>{{ c.region }}</div>
+    {% endif %}
+    {% if c.age is not none %}
+    <div class="meta-item"><span class="label">Возраст: </span>{{ c.age }} лет</div>
+    {% endif %}
+    {% if c.total_exp_months is not none %}
+    <div class="meta-item"><span class="label">Опыт: </span>{{ c.total_exp_months }} мес.</div>
+    {% endif %}
+  </div>
+
+  {% if c.llm_comment %}
+  <div class="section-label">Комментарий LLM</div>
+  <div class="comment-box">{{ c.llm_comment }}</div>
+  {% endif %}
+
+  {% if c.llm_red_flags %}
+  <div class="section-label">Стоп-сигналы</div>
+  <div class="red-flags-box">
+    <ul>
+    {% for flag in c.llm_red_flags %}
+      <li>{{ flag }}</li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="footer">#{{ loop.index }} / {{ candidates|length }} — {{ search_code }}</div>
+</div>
+{% endfor %}
+</body>
+</html>
