@@ -46,3 +46,10 @@ poetry run pytest -v
 Миграции на test-БД накатываются автоматически один раз за pytest-сессию (`alembic upgrade head`). Каждый тест работает в транзакции, которая откатывается после завершения — данные не накапливаются.
 
 Если `TEST_DATABASE_URL` не задан, все DB-тесты пропускаются с предупреждением в stderr.
+
+## CLI: примеры команд
+
+```bash
+# Пересобрать критическую линзу для позиции (сохраняется в searches.llm_critic_prompt)
+poetry run hh-monitor search rebuild-critic-lens --search-code branch_director_21vek
+```

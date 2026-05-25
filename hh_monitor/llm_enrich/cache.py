@@ -41,7 +41,15 @@ async def get_cached(
     if row is None:
         return None
     log.debug("llm_cache.hit", resume_id=hh_resume_id, key=key)
-    return dict(row.response)
+    response = dict(row.response)
+    if "facts_confirmed" not in response:
+        log.warning(
+            "llm_cache.legacy_format_skipped",
+            resume_id=hh_resume_id,
+            key=key,
+        )
+        return None
+    return response
 
 
 async def save_cached(

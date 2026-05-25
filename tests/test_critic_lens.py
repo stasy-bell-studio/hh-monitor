@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.db.models import Search
 
@@ -83,3 +84,46 @@ async def test_generate_critic_lens_uses_position_name() -> None:
     assert captured_messages, "Expected at least one message"
     user_content = captured_messages[0]["content"]
     assert "Директор агентства" in user_content
+
+
+@pytest.mark.asyncio
+async def test_cli_rebuild_critic_lens_persists_to_db(db_session: AsyncSession) -> None:
+    """_rebuild_critic_lens saves the generated lens to searches.llm_critic_prompt.
+
+    Tests via _rebuild_critic_lens (the async core) rather than CliRunner because
+    the CLI wrapper calls asyncio.run() which conflicts with the pytest-asyncio
+    event loop running in the same thread.
+    """
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy import select
+
+    from hh_monitor.cli import _rebuild_critic_lens
+
+    LENS_TEXT = "1. ЧТО ВЫИСКИВАТЬ — интеграционный тест"
+    SEARCH_CODE = "branch_director_21vek"
+
+    search = _make_search()
+    db_session.add(search)
+    await db_session.flush()
+
+    @asynccontextmanager  # type: ignore[misc]
+    async def _fake_factory():  # type: ignore[misc]
+        yield db_session
+
+    with (
+        patch("hh_monitor.cli.async_session_factory", new=_fake_factory),
+        patch(
+            "hh_monitor.llm_enrich.critic_lens_builder.llm_client.chat_completion_messages",
+            new_callable=AsyncMock,
+            return_value=_mock_openrouter_response(LENS_TEXT),
+        ),
+    ):
+        returned_lens = await _rebuild_critic_lens(SEARCH_CODE, dry_run=False)
+
+    assert returned_lens == LENS_TEXT
+
+    row = await db_session.execute(
+        select(Search.llm_critic_prompt).where(Search.search_code == SEARCH_CODE)
+    )
+    assert row.scalar_one() == LENS_TEXT
