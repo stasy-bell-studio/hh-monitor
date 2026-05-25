@@ -12,9 +12,10 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import select
 
 from hh_monitor.db.models import Event, Resume, Search, Snapshot
-from hh_monitor.fit.portrait import GlobalContext, Portrait
+from hh_monitor.fit.portrait import Filters, GlobalContext, Portrait, RegionFilters
 from hh_monitor.llm_enrich.run import run_llm_enrichment
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -400,3 +401,83 @@ async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPa
     await db_session.refresh(resume)
     expected = round(0.3 * 60 + 0.7 * 70)  # = 67
     assert resume.score_total == expected
+
+
+# ── Commit 9.1: hard_reject_reasons persist ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_multi_reject_persists_reasons_array(db_session: Any) -> None:
+    """Integration: two filters fire simultaneously → event.hard_reject_reasons has both.
+
+    Portrait has age_range=(30, 60) AND higher_education_required=True.
+    Resume has age=20 (fails age) and education.level.id='secondary' (fails education).
+    fit_compute returns hard_reject_reasons=['age', 'education'].
+    run_llm_enrichment must write that array to events.hard_reject_reasons
+    before returning early (hard-reject path, no LLM call needed).
+    """
+    # Portrait with two active hard filters
+    portrait = Portrait(
+        position_code="multi_reject_pos",
+        position_name="Multi Reject Test",
+        higher_education_required=True,
+        filters=Filters(
+            age_range=(30, 60),
+            regions=RegionFilters(primary=[], adjacent=[], stop=[]),
+        ),
+    )
+
+    # Resume that fails both: age=20 (< 30) and secondary education (not higher)
+    resume_id = "mr00000000000000"
+    payload: dict[str, Any] = {
+        "id": resume_id,
+        "age": 20,
+        "education": {"level": {"id": "secondary"}},
+        "title": "Специалист",
+        "total_experience": {"months": 36},
+    }
+
+    search = Search(
+        position_code="multi_reject_pos",
+        position_name="Multi Reject Test",
+        hh_params={},
+        portrait={},
+    )
+    db_session.add(search)
+    await db_session.flush()
+
+    db_session.add(Resume(hh_resume_id=resume_id))
+    await db_session.flush()
+
+    db_session.add(Snapshot(hh_resume_id=resume_id, payload=payload, content_hash=_hash(payload)))
+    await db_session.flush()
+
+    event = Event(
+        hh_resume_id=resume_id,
+        event_type="NEW",
+        search_id=search.id,
+        fit_score=None,
+        llm_enriched=False,
+    )
+    db_session.add(event)
+    await db_session.flush()
+    event_id: int = event.id
+
+    # Run enrichment — hard-reject fires before any LLM call (no mock needed)
+    result = await run_llm_enrichment(
+        db_session,
+        search.id,
+        limit=1,
+        portraits={"multi_reject_pos": portrait},
+        global_ctx=_global_ctx(),
+    )
+
+    assert result["total_processed"] == 1
+    assert result["skipped"] == 1  # hard-rejected → skipped
+
+    # Verify the array was persisted to the event row
+    row = (await db_session.execute(select(Event).where(Event.id == event_id))).scalar_one()
+    reasons: list[str] = row.hard_reject_reasons
+    assert "age" in reasons, f"'age' missing from {reasons}"
+    assert "education" in reasons, f"'education' missing from {reasons}"
+    assert len(reasons) >= 2, f"Expected ≥2 reasons, got {reasons}"

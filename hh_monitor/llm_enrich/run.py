@@ -90,6 +90,17 @@ async def _enrich_one(
         _, breakdown = fit_compute(payload, portrait)
 
     reject_reason: str | None = breakdown.get("hard_reject_reason")
+    reject_reasons: list[str] = breakdown.get("hard_reject_reasons", [])
+
+    # Persist hard_reject_reasons whenever filters fired.
+    # Hard-rejected resumes return early (before the normal event update at the
+    # bottom of this function), so we must write and commit here.
+    if reject_reasons:
+        await session.execute(
+            update(Event).where(Event.id == event_id).values(hard_reject_reasons=reject_reasons)
+        )
+        await session.commit()
+
     if reject_reason is not None:
         log_ctx.info(
             "llm_enrich.hard_reject_skip",
