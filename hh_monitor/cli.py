@@ -1063,5 +1063,77 @@ async def _digest_export(
     return len(candidates)
 
 
+# ── tg ───────────────────────────────────────────────────────────────────────
+
+tg_app = typer.Typer(help="Telegram bot commands")
+app.add_typer(tg_app, name="tg")
+
+
+@tg_app.command("run")
+def tg_run() -> None:
+    """Start the Telegram bot in long-polling mode."""
+    import asyncio as _asyncio
+
+    from hh_monitor.tg.client import make_bot, make_dispatcher
+    from hh_monitor.tg.handlers import router
+
+    async def _run() -> None:
+        bot = make_bot()
+        dp = make_dispatcher()
+        dp.include_router(router)
+        dp["session_factory"] = async_session_factory
+        await dp.start_polling(bot)
+
+    _asyncio.run(_run())
+
+
+@tg_app.command("send-pending")
+def tg_send_pending(
+    limit: int | None = typer.Option(None, "--limit", "-n", help="Max cards to send"),
+) -> None:
+    """Send pending candidate cards (score >= threshold, not yet sent)."""
+    import asyncio as _asyncio
+
+    from hh_monitor.tg.client import make_bot
+    from hh_monitor.tg.sender import send_pending_cards
+
+    async def _run() -> None:
+        bot = make_bot()
+        async with async_session_factory() as session:
+            stats = await send_pending_cards(session, bot, limit=limit)
+        typer.echo(
+            f"sent={stats['sent']} skipped_threshold={stats['skipped_threshold']} "
+            f"skipped_duplicate={stats['skipped_duplicate']} errors={stats['errors']}"
+        )
+
+    _asyncio.run(_run())
+
+
+# ── digest weekly / now ───────────────────────────────────────────────────────
+
+
+@digest_app.command("weekly")
+def digest_weekly() -> None:
+    """Send the weekly PDF digest to the HR Telegram group."""
+    import asyncio as _asyncio
+
+    from hh_monitor.tg.client import make_bot
+    from hh_monitor.weekly_digest.run import run_weekly_digest
+
+    async def _run() -> None:
+        bot = make_bot()
+        async with async_session_factory() as session:
+            await run_weekly_digest(session, bot)
+        typer.echo("Weekly digest sent.")
+
+    _asyncio.run(_run())
+
+
+@digest_app.command("now")
+def digest_now() -> None:
+    """Alias for 'digest weekly' — send the digest immediately."""
+    digest_weekly()
+
+
 if __name__ == "__main__":
     app()
