@@ -211,3 +211,4 @@ __marimo__/
 
 # Digest exports (generated files, not for VCS)
 digests/
+.DS_Store
