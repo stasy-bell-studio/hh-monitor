@@ -16,15 +16,28 @@ pipeline run
                     └─> back:{id}   → restore status keyboard
 ```
 
+## Топик-раскладка (сессия 8)
+
+Группа конвертирована в супергруппу с топиками. Каждый тип контента идёт в свой топик:
+
+| Топик | thread_id | Контент | Env var |
+|-------|-----------|---------|---------|
+| 📥 Кандидаты | 9 | Карточки кандидатов | `TELEGRAM_CARDS_TOPIC_ID=9` |
+| 📊 Дайджесты | 10 | Weekly digest (PDF и текст) | `TELEGRAM_DIGEST_TOPIC_ID=10` |
+| 🎛 Управление | 7 | Все admin-команды и ответы бота | `TELEGRAM_ADMIN_TOPIC_ID=7` |
+
+`thread_id=0` (значение по умолчанию) означает «без топика» — для обратной совместимости.
+
 ## Модули
 
 | Файл | Назначение |
 |------|-----------|
-| `hh_monitor/tg/client.py` | `make_bot()`, `is_admin()`, `send_card()` с retry/error handling |
+| `hh_monitor/tg/client.py` | `make_bot()`, `is_admin()`, `get_session_factory()`, `send_card()` с retry/error handling |
 | `hh_monitor/tg/cards.py` | `build_card_html()`, `build_inline_keyboard()` |
 | `hh_monitor/tg/sender.py` | `send_new_candidate_card()`, `send_pending_cards()`, `get_current_threshold()` |
 | `hh_monitor/tg/handlers.py` | aiogram Router: screen/reason/back callbacks, custom reply, /threshold, /digest, /help |
 | `hh_monitor/tg/reasons.py` | `STATUS_LABELS`, `PRESETS`, `build_reason_keyboard()`, `format_final_text()` |
+| `hh_monitor/tg/commands.py` | admin_router: /active /archive /stats /settings /help + все adm: callbacks |
 
 ## Таблицы БД
 
@@ -85,6 +98,8 @@ RETURNING event_id
 
 ## Команды бота
 
+### Общие (handlers.py, любой топик)
+
 | Команда | Доступ | Действие |
 |---------|--------|----------|
 | `/threshold` | Все | Показать текущий порог score |
@@ -93,13 +108,51 @@ RETURNING event_id
 | `/digest force` | Только админы | Запустить полный PDF-дайджест немедленно |
 | `/help` | Все | Список команд |
 
+### Админ-панель (commands.py, только топик 🎛 Управление)
+
+| Команда | Доступ | Действие |
+|---------|--------|----------|
+| `/active` | Только админы | Список активных и приостановленных поисков с метриками |
+| `/archive` | Только админы | Последние 20 архивных поисков (read-only) |
+| `/stats` | Только админы | Статистика за 24ч/7д/30д, гистограмма score, топ причин |
+| `/settings` | Только админы | Показать конфиг; изменить порог через ForceReply |
+| `/help` | Только админы | Справка по admin-командам |
+
+### Inline callbacks (adm:*)
+
+| Callback data | Действие |
+|--------------|----------|
+| `adm:stop:{id}` | Остановить поиск (`active=FALSE`) |
+| `adm:resume:{id}` | Возобновить поиск (`active=TRUE`) |
+| `adm:archive:{id}` | Запросить подтверждение архивации |
+| `adm:yes_arch:{id}` | Подтвердить архивацию (`archived_at=NOW()`) |
+| `adm:no_arch:{id}` | Отменить, вернуть карточку |
+| `adm:detail:{id}` | Подробная статистика (stub, Сессия 9) |
+| `adm:threshold` | ForceReply для ввода нового порога |
+| `adm:close` | Удалить сообщение бота |
+
+Все `adm:` callbacks принимаются только от пользователей из `TELEGRAM_ADMIN_USER_IDS`.
+Fail-soft: если `UPDATE ... RETURNING` возвращает пусто → `show_alert("⚠️ Состояние поиска изменилось, обнови /active")`.
+
+### Lifecycle поиска (searches)
+
+```
+active=TRUE, archived_at=NULL  →  [⏸ Остановить]  →  active=FALSE, archived_at=NULL
+active=FALSE, archived_at=NULL →  [🔄 Возобновить] →  active=TRUE, archived_at=NULL
+(любой active)                 →  [🗑 Архив] + confirm → active=FALSE, archived_at=NOW()  (безвозвратно)
+```
+
 ## Конфигурация (.env)
 
 ```env
 TELEGRAM_BOT_TOKEN=<bot token от @BotFather>
-TELEGRAM_HR_GROUP_ID=-100XXXXXXXXX    # отрицательный для супергруппы
+TELEGRAM_HR_GROUP_ID=-100XXXXXXXXX      # отрицательный для супергруппы
 TELEGRAM_ADMIN_USER_IDS=123456789,987654321   # comma-separated
-TELEGRAM_SCORE_THRESHOLD=60           # дефолт; перезаписывается через /threshold N
+TELEGRAM_SCORE_THRESHOLD=60             # дефолт; перезаписывается через /settings
+# Топики (сессия 8)
+TELEGRAM_CARDS_TOPIC_ID=9              # thread_id топика «📥 Кандидаты»
+TELEGRAM_DIGEST_TOPIC_ID=10            # thread_id топика «📊 Дайджесты»
+TELEGRAM_ADMIN_TOPIC_ID=7              # thread_id топика «🎛 Управление»
 ```
 
 ## Права бота в группе

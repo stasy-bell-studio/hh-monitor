@@ -53,11 +53,16 @@ run_weekly_digest(session, bot)
   │     ├─> SELECT Event JOIN Resume JOIN Search WHERE llm_enriched=TRUE AND created_at IN [date_from, date_to]
   │     ├─> Группировка по position_code, сортировка по score_total DESC, top_candidates[:5]
   │     └─> SELECT ParserRun WHERE started_at >= date_from → stats
-  ├─> [сессия 6.5] Если total_candidates == 0 → send_message (текст) → return
+  ├─> [сессия 6.5] Если total_candidates == 0
+  │     └─> bot.send_message(chat_id=HR_GROUP_ID, text=..., message_thread_id=DIGEST_TOPIC_ID) → return
   ├─> Jinja2 render → HTML string (in-memory)
   ├─> WeasyPrint HTML(string=html).write_pdf() → bytes (in-memory, диск не используется)
-  └─> bot.send_document(chat_id=TELEGRAM_HR_GROUP_ID, document=BufferedInputFile(pdf_bytes), caption=...)
+  └─> bot.send_document(chat_id=HR_GROUP_ID, document=BufferedInputFile(pdf_bytes),
+                        caption=..., message_thread_id=DIGEST_TOPIC_ID)
 ```
+
+Сессия 8: оба пути (text и PDF) передают `message_thread_id=TELEGRAM_DIGEST_TOPIC_ID` для
+роутинга в топик «📊 Дайджесты». При `TELEGRAM_DIGEST_TOPIC_ID=0` (дефолт) топик не указывается.
 
 ## Empty digest branch
 
@@ -140,6 +145,8 @@ TELEGRAM_BOT_TOKEN=<bot token>
 TELEGRAM_HR_GROUP_ID=-100XXXXXXXXX
 WEEKLY_DIGEST_CRON=0 15 * * 5      # пятница 15:00 (только справочно, не используется в коде)
 WEEKLY_DIGEST_TZ=Europe/Moscow      # только справочно
+# Сессия 8: топик-роутинг
+TELEGRAM_DIGEST_TOPIC_ID=10        # thread_id топика «📊 Дайджесты»; 0 = без топика
 ```
 
 ## Известные ограничения

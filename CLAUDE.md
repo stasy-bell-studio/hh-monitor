@@ -121,6 +121,8 @@
 
 ## Sprint state
 
-- Сессия 6.5 closed (2026-05-26): screening reasons + STOP_LIST + empty digest live.
-  - Новые файлы: `hh_monitor/tg/reasons.py`, миграция `20260526143651`.
-  - Следующая сессия: Сессия 7 — deployment (systemd, .env, server setup).
+- Сессия 8 closed (2026-05-26): TG Control Panel + Topic Routing live.
+  - Новые файлы: `hh_monitor/tg/commands.py`, `tests/tg/conftest.py`, `tests/tg/test_commands.py`, миграция `20260526130420`.
+  - Изменены: `config.py` (+3 topic ID), `db/models.py` (archived_at, created_by_tg_user_id), `tg/client.py` (get_session_factory, message_thread_id), `tg/handlers.py`, `weekly_digest/run.py`, `cli.py`.
+  - Тестов: 451 (было 419, +32).
+  - Следующая сессия: Сессия 7 — deployment (systemd, .env, server setup); или Сессия 9 — adm:detail подробная статистика.
