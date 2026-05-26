@@ -21,6 +21,7 @@ from hh_monitor.errors import (
     HHNotFound,
     HHQuotaExceeded,
     HHServiceNotActive,
+    HHViewLimitExceeded,
     SearchNotFoundError,
 )
 from hh_monitor.fit.portrait import Portrait
@@ -215,6 +216,7 @@ async def run_parser(
     errors = 0
     resume_ids: list[str] = []
     abort_exc: BaseException | None = None
+    view_limit_exit = False
 
     try:
         # ── 3. Paginate ───────────────────────────────────────────────────────
@@ -251,6 +253,17 @@ async def run_parser(
                     log.info("parser.resume_not_found", resume_id=resume_id)
                     payload = {"id": resume_id}
                     errors += 1
+                except HHViewLimitExceeded:
+                    log.warning(
+                        "parser.view_limit_exhausted",
+                        parser_run_id=run_id,
+                        resume_id=resume_id,
+                        snapshots_inserted=snapshots_inserted,
+                        snapshots_skipped=snapshots_skipped,
+                        errors=errors,
+                    )
+                    view_limit_exit = True
+                    break
                 except (HHQuotaExceeded, HHServiceNotActive) as exc:
                     log.warning(
                         "parser.abort_on_resume",
@@ -286,7 +299,7 @@ async def run_parser(
                 snapshots_inserted += 1
                 log.info("parser.resume_saved", resume_id=resume_id)
 
-            if abort_exc:
+            if abort_exc or view_limit_exit:
                 break
 
             await asyncio.sleep(_page_sleep)
@@ -298,7 +311,12 @@ async def run_parser(
         #
         # Core UPDATE (not ORM assignment) because parser_run is expired after
         # the early commit in step 2.
-        status = "quota_exceeded" if abort_exc else ("ok" if errors == 0 else "partial_errors")
+        if view_limit_exit:
+            status = "view_limit_exhausted"
+        elif abort_exc:
+            status = "quota_exceeded"
+        else:
+            status = "ok" if errors == 0 else "partial_errors"
 
         await session.execute(
             update(ParserRun)
@@ -390,4 +408,5 @@ async def run_parser(
         "errors": errors,
         "parser_run_id": run_id,
         "resume_ids": resume_ids,
+        "status": status,
     }

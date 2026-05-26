@@ -14,6 +14,7 @@ from hh_monitor.errors import (
     HHQuotaExceeded,
     HHRateLimit,
     HHServiceNotActive,
+    HHViewLimitExceeded,
 )
 
 logger = structlog.get_logger(__name__)
@@ -118,6 +119,19 @@ class HHClient:
         json: dict[str, Any] | None,
         resp: httpx.Response,
     ) -> Any:
+        # Detect daily view quota — no point retrying, quota resets at 00:00 MSK.
+        try:
+            _body_dict: dict[str, Any] = resp.json()
+            _errors: list[Any] = _body_dict.get("errors", [])
+            if any(
+                isinstance(e, dict) and e.get("value") == "view_limit_exceeded" for e in _errors
+            ):
+                raise HHViewLimitExceeded(429, _body_dict)
+        except HHViewLimitExceeded:
+            raise
+        except Exception:
+            pass  # non-JSON or unexpected body structure — fall through to retry
+
         for attempt in range(self._max_retries):
             retry_after_header = resp.headers.get("Retry-After")
             if retry_after_header is not None:

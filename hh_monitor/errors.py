@@ -28,6 +28,10 @@ class HHRateLimit(HHApiError):
         super().__init__(status_code, body)
 
 
+class HHViewLimitExceeded(HHApiError):
+    """Daily quota for resume views exhausted; resets at 00:00 MSK."""
+
+
 class SearchNotFoundError(Exception):
     """Raised when a Search row with the given id does not exist."""
 

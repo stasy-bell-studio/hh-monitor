@@ -396,6 +396,63 @@ async def test_historical_hash_dedup(db_session: AsyncSession) -> None:
     assert pr.snapshots_inserted == 0
 
 
+# ── Test 9: view_limit_exceeded → graceful shutdown, partial state committed ──
+
+
+@pytest.mark.asyncio
+async def test_view_limit_graceful_shutdown(db_session: AsyncSession) -> None:
+    """429 view_limit_exceeded on 2nd resume → status='view_limit_exhausted', no re-raise.
+
+    1st resume snapshot must be committed; finished_at must be set.
+    """
+    search_id = await _add_search(db_session)
+
+    ids = ["r001", "r002"]
+    call_count = 0
+
+    def _single_page(request: Request) -> Response:
+        return Response(
+            200,
+            json={
+                "items": [{"id": rid} for rid in ids],
+                "found": 2,
+                "pages": 1,
+                "page": 0,
+                "per_page": 50,
+            },
+        )
+
+    def _view_limit_on_second(request: Request) -> Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            return Response(
+                429,
+                json={
+                    "description": "Resumes view limit reached",
+                    "errors": [{"value": "view_limit_exceeded", "type": "resumes"}],
+                },
+            )
+        rid = request.url.path.rstrip("/").split("/")[-1]
+        return Response(200, json=_make_resume_payload(rid))
+
+    async with respx.mock:
+        respx.get(f"{_BASE}/resumes").mock(side_effect=_single_page)
+        respx.get(_RESUME_URL_RE).mock(side_effect=_view_limit_on_second)
+
+        result = await run_parser(db_session, _client(), search_id, max_pages=5, _sleep=0)
+
+    assert result["status"] == "view_limit_exhausted"
+    assert result["snapshots_inserted"] == 1
+
+    pr = (
+        await db_session.execute(select(ParserRun).where(ParserRun.id == result["parser_run_id"]))
+    ).scalar_one()
+    assert pr.status == "view_limit_exhausted"
+    assert pr.snapshots_inserted == 1
+    assert pr.finished_at is not None
+
+
 # ── Test 8: unexpected exception → parser_run marked 'failed' ────────────────
 
 

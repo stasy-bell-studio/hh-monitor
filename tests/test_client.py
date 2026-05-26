@@ -13,6 +13,7 @@ from hh_monitor.errors import (
     HHQuotaExceeded,
     HHRateLimit,
     HHServiceNotActive,
+    HHViewLimitExceeded,
 )
 from hh_monitor.hh.client import HHClient
 
@@ -90,9 +91,11 @@ async def test_429_with_retry_after() -> None:
         ]
     )
     sleep_mock = AsyncMock()
-    with patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock), patch(
-        "hh_monitor.hh.client.random.uniform", return_value=1.0
-    ), pytest.raises(HHRateLimit):
+    with (
+        patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock),
+        patch("hh_monitor.hh.client.random.uniform", return_value=1.0),
+        pytest.raises(HHRateLimit),
+    ):
         await client.get("/me")
 
 
@@ -110,8 +113,9 @@ async def test_429_retry_after_header_respected() -> None:
         ]
     )
     sleep_mock = AsyncMock()
-    with patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock), patch(
-        "hh_monitor.hh.client.random.uniform", return_value=1.0
+    with (
+        patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock),
+        patch("hh_monitor.hh.client.random.uniform", return_value=1.0),
     ):
         result = await client.get("/me")
 
@@ -136,8 +140,9 @@ async def test_429_exponential_backoff_no_header() -> None:
         ]
     )
     sleep_mock = AsyncMock()
-    with patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock), patch(
-        "hh_monitor.hh.client.random.uniform", return_value=1.0
+    with (
+        patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock),
+        patch("hh_monitor.hh.client.random.uniform", return_value=1.0),
     ):
         result = await client.get("/me")
 
@@ -158,9 +163,11 @@ async def test_429_exhausts_six_retries_then_raises() -> None:
         side_effect=[Response(429)] * 7  # 1 initial + 6 retries
     )
     sleep_mock = AsyncMock()
-    with patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock), patch(
-        "hh_monitor.hh.client.random.uniform", return_value=1.0
-    ), pytest.raises(HHRateLimit):
+    with (
+        patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock),
+        patch("hh_monitor.hh.client.random.uniform", return_value=1.0),
+        pytest.raises(HHRateLimit),
+    ):
         await client.get("/me")
 
     assert sleep_mock.call_count == 6
@@ -195,6 +202,49 @@ async def test_404_raises_not_found() -> None:
     respx.get(f"{_BASE}/resumes/gone").mock(return_value=Response(404))
     with pytest.raises(HHNotFound):
         await client.get("/resumes/gone")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_429_view_limit_raises_immediately() -> None:
+    """429 with view_limit_exceeded body → HHViewLimitExceeded; exactly 1 request, no retry."""
+    client = _make_client()
+    route = respx.get(f"{_BASE}/resumes/abc").mock(
+        return_value=Response(
+            429,
+            json={
+                "description": "Resumes view limit reached",
+                "errors": [{"value": "view_limit_exceeded", "type": "resumes"}],
+            },
+        )
+    )
+    with pytest.raises(HHViewLimitExceeded):
+        await client.get("/resumes/abc")
+    assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_429_other_errors_value_retries() -> None:
+    """429 with non-view-limit body → normal retry logic; second request succeeds."""
+    client = HHClient(
+        token_provider=_make_client()._token_provider, user_agent="test/1.0", max_retries=3
+    )
+    route = respx.get(f"{_BASE}/me").mock(
+        side_effect=[
+            Response(429, json={"errors": [{"value": "too_many_requests"}]}),
+            Response(200, json={"ok": True}),
+        ]
+    )
+    sleep_mock = AsyncMock()
+    with (
+        patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock),
+        patch("hh_monitor.hh.client.random.uniform", return_value=1.0),
+    ):
+        result = await client.get("/me")
+    assert result == {"ok": True}
+    assert route.call_count == 2
+    assert sleep_mock.call_count == 1
 
 
 @respx.mock

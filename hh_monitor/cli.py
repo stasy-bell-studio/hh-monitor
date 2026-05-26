@@ -345,6 +345,12 @@ def parse_run(
         typer.echo(f"Error: HH API error {exc.status_code}", err=True)
         raise typer.Exit(1) from exc
 
+    if result.get("status") == "view_limit_exhausted":
+        typer.echo("⚠️  HH daily view quota exhausted.")
+        typer.echo(f"Snapshots inserted: {result['snapshots_inserted']}.")
+        typer.echo("Quota resets at 00:00 MSK.")
+        raise typer.Exit(0)
+
     typer.echo(
         f"Parser run id={result['parser_run_id']}  "
         f"seen={result['resumes_seen']}  "
@@ -481,6 +487,11 @@ async def _pipeline_run(
                 user_agent=settings.hh_user_agent,
             )
             parser_result = await run_parser(session, client, search_id, max_pages=max_pages)
+            if parser_result.get("status") == "view_limit_exhausted":
+                typer.echo("⚠️  HH daily view quota exhausted.")
+                typer.echo(f"Snapshots inserted: {parser_result['snapshots_inserted']}.")
+                typer.echo("Quota resets at 00:00 MSK.")
+                return
             resume_ids = parser_result["resume_ids"]
             typer.echo(
                 f"\nParser run id={parser_result['parser_run_id']}  "
