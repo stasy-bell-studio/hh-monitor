@@ -580,3 +580,21 @@ def test_load_global_context_custom_path(tmp_path: Path) -> None:
     assert ctx.target_companies == ["ТестСтрах"]
     assert ctx.stop_companies == ["ПлохойБанк"]
     assert ctx.market_context == "Тестовый контекст рынка."
+
+
+# ── underwriter_21vek portrait ────────────────────────────────────────────────
+
+_UNDERWRITER_YAML = Path("config/portraits/underwriter_21vek.yaml")
+
+
+def test_underwriter_portrait_loads() -> None:
+    """underwriter_21vek.yaml parses into Portrait without errors."""
+    p = load_portrait(_UNDERWRITER_YAML)
+    assert p.position_code == "underwriter"
+    assert p.filters.regions.primary  # non-empty
+
+
+def test_underwriter_portrait_has_motor_filter() -> None:
+    """underwriter_21vek portrait requires 24 months of motor experience."""
+    p = load_portrait(_UNDERWRITER_YAML)
+    assert p.min_motor_experience_months == 24
