@@ -22,6 +22,7 @@ from hh_monitor.fit.portrait import Filters, Portrait, RegionFilters, Weights
 from hh_monitor.fit.rules import (
     _insurance_experience_months,
     _max_career_gap_months,
+    _motor_experience_months,
     _parse_ym_months,
     compute,
 )
@@ -40,6 +41,8 @@ def _portrait(
     max_career_gap_months: int = 0,
     min_total_months: int = 0,
     min_insurance_experience_months: int = 0,
+    min_motor_experience_months: int = 0,
+    min_tenure_last_job_months: int = 0,
     bonus_companies: list[str] | None = None,
     preferred_education_fields: list[str] | None = None,
 ) -> Portrait:
@@ -50,6 +53,8 @@ def _portrait(
         max_career_gap_months=max_career_gap_months,
         min_total_months=min_total_months,
         min_insurance_experience_months=min_insurance_experience_months,
+        min_motor_experience_months=min_motor_experience_months,
+        min_tenure_last_job_months=min_tenure_last_job_months,
         bonus_companies=bonus_companies or [],
         preferred_education_fields=preferred_education_fields or [],
         forbidden_industries=forbidden_industries or [],
@@ -170,6 +175,63 @@ def test_insurance_months_mixed_entries() -> None:
         {"company": "Банк МФО", "start": "2018-01", "end": "2020-01"},  # 0
     ]
     assert _insurance_experience_months(exps) == 24
+
+
+# ── _motor_experience_months ──────────────────────────────────────────────────
+
+
+def test_motor_months_kasko_detected() -> None:
+    """Entry with 'КАСКО' in description counts as motor experience."""
+    exps = [
+        {
+            "company": "СК Ресо",
+            "position": "Андеррайтер",
+            "start": "2021-01",
+            "end": "2023-01",
+            "description": "Оценка рисков КАСКО",
+        }
+    ]
+    assert _motor_experience_months(exps) == 24
+
+
+def test_motor_months_osago_in_company() -> None:
+    """Entry with 'ОСАГО' in company name counts as motor experience."""
+    exps = [{"company": "Центр ОСАГО", "start": "2020-06", "end": "2022-06"}]
+    assert _motor_experience_months(exps) == 24
+
+
+def test_motor_months_non_motor_skipped() -> None:
+    """Entry without motor stems is not counted."""
+    exps = [
+        {
+            "company": "ДМС Клиника",
+            "position": "Специалист ДМС",
+            "start": "2019-01",
+            "end": "2022-01",
+            "description": "Работа со страхованием жизни",
+        }
+    ]
+    assert _motor_experience_months(exps) == 0
+
+
+def test_motor_months_keyword_variants() -> None:
+    """Stems автострахов, мтпл, моторн are detected."""
+    exps_auto = [{"company": "ООО Автострахование", "start": "2020-01", "end": "2021-01"}]
+    exps_mtpl = [
+        {
+            "company": "СК",
+            "position": "Эксперт",
+            "start": "2020-01",
+            "end": "2021-01",
+            "description": "Урегулирование убытков МТПЛ",
+        }
+    ]
+    exps_motor = [
+        {"company": "СК", "position": "Моторное страхование", "start": "2020-01", "end": "2021-01"}
+    ]
+    assert _motor_experience_months(exps_auto) == 12
+    assert _motor_experience_months(exps_mtpl) == 12
+    assert _motor_experience_months(exps_motor) == 12
 
 
 # ── _max_career_gap_months ────────────────────────────────────────────────────
@@ -1028,3 +1090,112 @@ def test_passing_candidate_has_no_hard_reject_reasons_key() -> None:
         f"Passing candidate must not have hard_reject_reasons; got {bd}"
     )
     assert "hard_reject_reason" not in bd
+
+
+# ── Hard filter 1i: motor_experience ─────────────────────────────────────────
+
+
+def test_hard_reject_motor_experience_below() -> None:
+    """Motor experience below minimum → hard rejected."""
+    p = _portrait(min_motor_experience_months=24)
+    payload = {
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Андеррайтер КАСКО",
+                "start": "2022-01",
+                "end": "2023-01",
+            },
+        ]
+    }
+    score, bd = compute(payload, p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "motor_experience"
+
+
+def test_hard_reject_motor_experience_passes() -> None:
+    """Motor experience above minimum → not hard rejected for this filter."""
+    p = _portrait(min_motor_experience_months=24)
+    payload = {
+        "experience": [
+            {
+                "company": "СК Ресо",
+                "position": "Андеррайтер",
+                "start": "2020-01",
+                "end": "2023-01",
+                "description": "КАСКО и ОСАГО",
+            },
+        ]
+    }
+    _, bd = compute(payload, p)
+    assert bd.get("hard_reject_reason") != "motor_experience"
+
+
+def test_hard_reject_motor_experience_disabled() -> None:
+    """min_motor_experience_months=0 → filter is skipped entirely."""
+    p = _portrait(min_motor_experience_months=0)
+    payload: dict[str, Any] = {}  # no experience at all
+    _, bd = compute(payload, p)
+    assert bd.get("hard_reject_reason") != "motor_experience"
+
+
+# ── Hard filter 1j: last_job_tenure ──────────────────────────────────────────
+
+
+def test_hard_reject_last_job_tenure_below() -> None:
+    """Last job tenure below minimum → hard rejected."""
+    p = _portrait(min_tenure_last_job_months=12)
+    payload = {
+        "experience": [
+            {"company": "СК Тест", "position": "Андеррайтер", "start": "2024-01", "end": "2024-07"},
+        ]
+    }
+    score, bd = compute(payload, p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "last_job_tenure"
+
+
+def test_hard_reject_last_job_tenure_passes() -> None:
+    """Last job tenure above minimum → not hard rejected for this filter."""
+    p = _portrait(min_tenure_last_job_months=12)
+    payload = {
+        "experience": [
+            {"company": "СК Тест", "position": "Андеррайтер", "start": "2022-01", "end": "2024-01"},
+        ]
+    }
+    _, bd = compute(payload, p)
+    assert bd.get("hard_reject_reason") != "last_job_tenure"
+
+
+def test_hard_reject_last_job_tenure_disabled() -> None:
+    """min_tenure_last_job_months=0 → filter is skipped entirely."""
+    p = _portrait(min_tenure_last_job_months=0)
+    payload = {
+        "experience": [
+            {"company": "СК Тест", "position": "Андеррайтер", "start": "2024-01", "end": "2024-02"},
+        ]
+    }
+    _, bd = compute(payload, p)
+    assert bd.get("hard_reject_reason") != "last_job_tenure"
+
+
+def test_hard_reject_last_job_tenure_current_position() -> None:
+    """Active position (end=None) uses current month for tenure calculation."""
+    today = date.today()
+    # Start 6 months ago: open-ended current role with only 6 months tenure
+    start_month = today.month - 6
+    start_year = today.year
+    if start_month <= 0:
+        start_month += 12
+        start_year -= 1
+    start_str = f"{start_year:04d}-{start_month:02d}"
+
+    p = _portrait(min_tenure_last_job_months=12)
+    payload = {
+        "experience": [
+            {"company": "СК Тест", "position": "Андеррайтер", "start": start_str, "end": None},
+        ]
+    }
+    score, bd = compute(payload, p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "last_job_tenure"

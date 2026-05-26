@@ -48,6 +48,10 @@ _INSURANCE_STEMS: frozenset[str] = frozenset(
     {"страхов", "insurance", "осаго", "каско", "дмс", "ифл"}
 )
 
+# Keyword stems for motor-insurance experience detection (subset of insurance)
+# Deliberately excludes "транспорт" (logistics) and "автомобил" (auto dealers).
+_MOTOR_STEMS: frozenset[str] = frozenset({"осаго", "каско", "моторн", "автострахов", "мтпл"})
+
 # Regex for agent-network FULL match: covers all inflections of "агентская сеть"
 # and "руководство филиалом".  "агентск" matches агентской, агентскую, etc.
 _RE_AGENT_FULL = re.compile(r"агентск|руководство\s+филиал", re.IGNORECASE)
@@ -159,6 +163,34 @@ def _insurance_experience_months(experiences: list[Any]) -> int:
             )
         ).lower()
         if not any(stem in text for stem in _INSURANCE_STEMS):
+            continue
+        months = _parse_ym_months(entry.get("start", ""), entry.get("end"))
+        if months is not None:
+            total += max(0, months)
+    return total
+
+
+def _motor_experience_months(experiences: list[Any]) -> int:
+    """Sum months from experience entries related to motor insurance (KASKO/OSAGO/MTPL).
+
+    An entry qualifies if any *_MOTOR_STEMS* keyword appears in the concatenated
+    company name, position title, or description.
+    """
+    total = 0
+    for entry in experiences:
+        if not isinstance(entry, dict):
+            continue
+        text = " ".join(
+            filter(
+                None,
+                [
+                    entry.get("company", ""),
+                    entry.get("position", ""),
+                    entry.get("description", ""),
+                ],
+            )
+        ).lower()
+        if not any(stem in text for stem in _MOTOR_STEMS):
             continue
         months = _parse_ym_months(entry.get("start", ""), entry.get("end"))
         if months is not None:
@@ -409,6 +441,32 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
                 required=portrait.min_insurance_experience_months,
                 resume_id=resume_id,
             )
+
+    # 1i. Motor insurance experience (КАСКО/ОСАГО/МТПЛ)
+    if portrait.min_motor_experience_months > 0:
+        motor_months = _motor_experience_months(experiences)
+        if motor_months < portrait.min_motor_experience_months:
+            hard_reject_reasons.append("motor_experience")
+            logger.debug(
+                "fit.hard_reject.motor_experience",
+                months=motor_months,
+                required=portrait.min_motor_experience_months,
+                resume_id=resume_id,
+            )
+
+    # 1j. Last job tenure
+    if portrait.min_tenure_last_job_months > 0:
+        latest = _latest_experience(experiences)
+        if latest is not None:
+            tenure = _parse_ym_months(latest.get("start", ""), latest.get("end"))
+            if tenure is not None and tenure < portrait.min_tenure_last_job_months:
+                hard_reject_reasons.append("last_job_tenure")
+                logger.debug(
+                    "fit.hard_reject.last_job_tenure",
+                    months=tenure,
+                    required=portrait.min_tenure_last_job_months,
+                    resume_id=resume_id,
+                )
 
     # ── If any hard filter fired → return score=0 with full reasons list ──────
     if hard_reject_reasons:

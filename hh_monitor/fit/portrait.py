@@ -123,6 +123,8 @@ class Portrait(BaseModel):
     # ── Experience requirements ──────────────────────────────────────────────
     # Minimum months of insurance-specific experience (separate from total_exp).
     min_insurance_experience_months: int = 0
+    # Minimum months of motor (КАСКО/ОСАГО/МТПЛ) insurance experience; 0 = disabled.
+    min_motor_experience_months: int = 0
     # Whether motor insurance (КАСКО/ОСАГО) experience is preferred (soft, not hard filter).
     motor_experience_preferred: bool = False
     # Minimum months at most recent job; fewer = red_flag for LLM.
