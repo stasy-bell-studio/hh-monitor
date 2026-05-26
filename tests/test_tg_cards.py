@@ -168,14 +168,15 @@ def test_card_html_comment_shown_when_verdict_not_mимо() -> None:
 # ── Tests: build_inline_keyboard() ───────────────────────────────────────────
 
 
-def test_keyboard_has_three_action_buttons() -> None:
+def test_keyboard_has_four_action_buttons() -> None:
     kb = build_inline_keyboard(42, "https://hh.ru/resume/abc")
     row0 = kb.inline_keyboard[0]
-    assert len(row0) == 3
+    assert len(row0) == 4
     cbs = [b.callback_data for b in row0]
     assert "screen:42:approve" in cbs
     assert "screen:42:reject" in cbs
     assert "screen:42:doubt" in cbs
+    assert "screen:42:stop_list" in cbs
 
 
 def test_keyboard_has_url_button() -> None:
@@ -185,7 +186,7 @@ def test_keyboard_has_url_button() -> None:
     assert row1[0].url == "https://hh.ru/resume/abc"
 
 
-@pytest.mark.parametrize("status", ["approve", "reject", "doubt"])
+@pytest.mark.parametrize("status", ["approve", "reject", "doubt", "stop_list"])
 def test_callback_data_fits_64_bytes(status: str) -> None:
     max_bigint = 9_223_372_036_854_775_807
     cb = f"screen:{max_bigint}:{status}"

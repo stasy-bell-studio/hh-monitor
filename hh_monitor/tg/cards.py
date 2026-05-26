@@ -124,12 +124,16 @@ def build_inline_keyboard(event_id: int, resume_url: str) -> InlineKeyboardMarku
                     callback_data=f"screen:{event_id}:approve",
                 ),
                 InlineKeyboardButton(
-                    text="❌ Не подходит",
+                    text="❌ Мимо",
                     callback_data=f"screen:{event_id}:reject",
                 ),
                 InlineKeyboardButton(
                     text="🤔 Спорно",
                     callback_data=f"screen:{event_id}:doubt",
+                ),
+                InlineKeyboardButton(
+                    text="🚫 Стоп",
+                    callback_data=f"screen:{event_id}:stop_list",
                 ),
             ],
             [
