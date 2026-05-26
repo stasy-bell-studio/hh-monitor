@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiogram.types import Message
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -30,64 +28,15 @@ from hh_monitor.tg.handlers import (
     handle_custom_reason_message,
     handle_reason_callback,
 )
-
-# ── Mock helpers ──────────────────────────────────────────────────────────────
-
-
-def _make_callback(
-    data: str,
-    user_id: int = 100,
-    username: str = "testuser",
-) -> MagicMock:
-    cb = MagicMock()
-    cb.data = data
-    cb.from_user = MagicMock()
-    cb.from_user.id = user_id
-    cb.from_user.username = username
-    cb.from_user.full_name = "Test User"
-    cb.bot = MagicMock()
-    cb.answer = AsyncMock()
-    cb.message = MagicMock()
-    # Make isinstance(cb.message, Message) → True without spec restrictions
-    cb.message.__class__ = Message
-    cb.message.message_id = 999
-    cb.message.chat.id = 1234
-    cb.message.text = "<b>Card</b>"
-    cb.message.caption = None
-    cb.message.edit_reply_markup = AsyncMock()
-    cb.message.edit_text = AsyncMock()
-    cb.message.answer = AsyncMock(return_value=MagicMock(message_id=888))
-    return cb
-
-
-def _make_message(
-    text_: str,
-    user_id: int = 100,
-    username: str = "testuser",
-    reply_to_id: int | None = None,
-) -> MagicMock:
-    msg = MagicMock()
-    msg.text = text_
-    msg.from_user = MagicMock()
-    msg.from_user.id = user_id
-    msg.from_user.username = username
-    msg.from_user.full_name = "Test User"
-    msg.bot = MagicMock()
-    msg.bot.edit_message_text = AsyncMock()
-    msg.bot.delete_message = AsyncMock()
-    msg.reply = AsyncMock()
-    msg.reply_to_message = MagicMock() if reply_to_id is not None else None
-    return msg
-
-
-def _session_factory_from(mock_session: AsyncMock) -> MagicMock:
-    @asynccontextmanager
-    async def _ctx() -> Any:
-        yield mock_session
-
-    factory = MagicMock(side_effect=lambda: _ctx())
-    return factory
-
+from tests.tg.conftest import (
+    make_callback as _make_callback,
+)
+from tests.tg.conftest import (
+    make_message as _make_message,
+)
+from tests.tg.conftest import (
+    session_factory_from as _session_factory_from,
+)
 
 # ── Unit tests (mocked) ───────────────────────────────────────────────────────
 
@@ -105,7 +54,7 @@ async def test_reason_callback_preset_inserts_and_edits_card() -> None:
     mock_session.commit = AsyncMock()
 
     with patch(
-        "hh_monitor.tg.handlers._get_factory",
+        "hh_monitor.tg.handlers.get_session_factory",
         return_value=_session_factory_from(mock_session),
     ):
         await handle_reason_callback(cb)
@@ -135,7 +84,7 @@ async def test_reason_callback_preset_race_conflict() -> None:
     mock_session.commit = AsyncMock()
 
     with patch(
-        "hh_monitor.tg.handlers._get_factory",
+        "hh_monitor.tg.handlers.get_session_factory",
         return_value=_session_factory_from(mock_session),
     ):
         await handle_reason_callback(cb)
@@ -153,7 +102,7 @@ async def test_reason_callback_custom_sends_forcereply() -> None:
     _custom_fsm.clear()
     cb = _make_callback("reason:7:approve:custom", user_id=42)
 
-    with patch("hh_monitor.tg.handlers._get_factory"):
+    with patch("hh_monitor.tg.handlers.get_session_factory"):
         await handle_reason_callback(cb)
 
     assert 42 in _custom_fsm
@@ -181,7 +130,7 @@ async def test_custom_reason_message_ttl_expired() -> None:
 
     msg = _make_message("Причина пользователя", user_id=user_id, reply_to_id=888)
 
-    with patch("hh_monitor.tg.handlers._get_factory"):
+    with patch("hh_monitor.tg.handlers.get_session_factory"):
         await handle_custom_reason_message(msg)
 
     msg.reply.assert_called_once()
@@ -215,7 +164,7 @@ async def test_custom_reason_message_happy_path() -> None:
     mock_session.commit = AsyncMock()
 
     with patch(
-        "hh_monitor.tg.handlers._get_factory",
+        "hh_monitor.tg.handlers.get_session_factory",
         return_value=_session_factory_from(mock_session),
     ):
         await handle_custom_reason_message(msg)
@@ -253,7 +202,7 @@ async def test_custom_reason_message_race_conflict() -> None:
     mock_session.commit = AsyncMock()
 
     with patch(
-        "hh_monitor.tg.handlers._get_factory",
+        "hh_monitor.tg.handlers.get_session_factory",
         return_value=_session_factory_from(mock_session),
     ):
         await handle_custom_reason_message(msg)
@@ -339,7 +288,7 @@ async def test_fsm_preset_happy_path_integration(test_engine: AsyncEngine) -> No
         def _factory_maker() -> Any:
             return factory
 
-        with patch("hh_monitor.tg.handlers._get_factory", side_effect=lambda _: factory):
+        with patch("hh_monitor.tg.handlers.get_session_factory", side_effect=lambda _: factory):
             # Wrap factory so it returns the real factory
             cb.bot["session_factory"] = factory
 

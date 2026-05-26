@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -28,44 +27,21 @@ from hh_monitor.tg.handlers import (
     handle_threshold,
 )
 
-# ── Mock factories ────────────────────────────────────────────────────────────
-
-
-def _make_callback(
-    data: str,
-    user_id: int = 100,
-    username: str = "testuser",
-) -> MagicMock:
-    cb = MagicMock()
-    cb.data = data
-    cb.from_user = MagicMock()
-    cb.from_user.id = user_id
-    cb.from_user.username = username
-    cb.from_user.full_name = "Test User"
-    cb.bot = MagicMock()
-    cb.answer = AsyncMock()
-    return cb
+# Test helpers (shared across tg tests)
+from tests.tg.conftest import (
+    make_callback as _make_callback,
+)
+from tests.tg.conftest import (
+    make_message as _make_message_base,
+)
+from tests.tg.conftest import (
+    session_factory_from as _session_factory_from,
+)
 
 
 def _make_message(text_: str, user_id: int = 100) -> MagicMock:
-    msg = MagicMock()
-    msg.text = text_
-    msg.from_user = MagicMock()
-    msg.from_user.id = user_id
-    msg.bot = MagicMock()
-    msg.reply = AsyncMock()
-    return msg
-
-
-def _session_factory_from(mock_session: AsyncMock) -> MagicMock:
-    """Return a factory mock whose __call__ yields mock_session each time."""
-
-    @asynccontextmanager
-    async def _ctx() -> Any:
-        yield mock_session
-
-    factory = MagicMock(side_effect=lambda: _ctx())
-    return factory
+    """Thin wrapper keeping test-local signature (no username/reply_to)."""
+    return _make_message_base(text_, user_id=user_id)
 
 
 # ── Tests: handle_screen_callback ────────────────────────────────────────────
@@ -125,7 +101,7 @@ async def test_callback_success_first_click() -> None:
     mock_session.commit = AsyncMock()
 
     with patch(
-        "hh_monitor.tg.handlers._get_factory",
+        "hh_monitor.tg.handlers.get_session_factory",
         return_value=_session_factory_from(mock_session),
     ):
         await handle_screen_callback(cb)  # type: ignore[arg-type]
@@ -155,7 +131,7 @@ async def test_callback_already_screened_shows_alert() -> None:
     mock_session.get = AsyncMock(return_value=prev_ns)
 
     with patch(
-        "hh_monitor.tg.handlers._get_factory",
+        "hh_monitor.tg.handlers.get_session_factory",
         return_value=_session_factory_from(mock_session),
     ):
         await handle_screen_callback(cb)  # type: ignore[arg-type]
@@ -262,7 +238,7 @@ async def test_threshold_no_arg_replies_current() -> None:
 
     with (
         patch("hh_monitor.tg.handlers.get_current_threshold", return_value=60),
-        patch("hh_monitor.tg.handlers._get_factory"),
+        patch("hh_monitor.tg.handlers.get_session_factory"),
     ):
         await handle_threshold(msg)  # type: ignore[arg-type]
 
@@ -290,7 +266,7 @@ async def test_threshold_set_admin_accepted() -> None:
         patch("hh_monitor.tg.handlers.get_current_threshold", return_value=60),
         patch("hh_monitor.tg.handlers.upsert_app_config", new_callable=AsyncMock) as mock_upsert,
         patch(
-            "hh_monitor.tg.handlers._get_factory",
+            "hh_monitor.tg.handlers.get_session_factory",
             return_value=_session_factory_from(AsyncMock(spec=AsyncSession)),
         ),
     ):
@@ -328,7 +304,7 @@ async def test_digest_no_candidates_replies_empty() -> None:
     mock_session.execute = AsyncMock(return_value=mock_result)
 
     with patch(
-        "hh_monitor.tg.handlers._get_factory",
+        "hh_monitor.tg.handlers.get_session_factory",
         return_value=_session_factory_from(mock_session),
     ):
         await handle_digest(msg)  # type: ignore[arg-type]

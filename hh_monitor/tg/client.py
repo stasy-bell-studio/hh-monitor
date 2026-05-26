@@ -13,6 +13,7 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
 )
 from aiogram.types import InlineKeyboardMarkup, Message
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from hh_monitor.config import settings
 
@@ -32,6 +33,16 @@ def make_dispatcher() -> Dispatcher:
 
 def is_admin(user_id: int) -> bool:
     return user_id in settings.admin_user_ids
+
+
+# Type alias for the session factory injected at startup
+SessionFactory = async_sessionmaker[AsyncSession]
+
+
+def get_session_factory(bot: Bot) -> SessionFactory:
+    """Retrieve the session factory from the bot's dispatcher context."""
+    factory: SessionFactory = bot["session_factory"]  # type: ignore[index]
+    return factory
 
 
 async def send_card(
