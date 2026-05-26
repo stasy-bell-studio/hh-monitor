@@ -1124,13 +1124,16 @@ def tg_run() -> None:
     import asyncio as _asyncio
 
     from hh_monitor.tg.client import make_bot, make_dispatcher
+    from hh_monitor.tg.commands import admin_router, register_admin_commands
     from hh_monitor.tg.handlers import router
 
     async def _run() -> None:
         bot = make_bot()
         dp = make_dispatcher()
         dp.include_router(router)
+        dp.include_router(admin_router)
         dp["session_factory"] = async_session_factory
+        await register_admin_commands(bot)
         await dp.start_polling(bot)
 
     _asyncio.run(_run())
