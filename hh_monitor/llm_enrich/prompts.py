@@ -39,7 +39,8 @@ UNIVERSAL_CRITIC_PROMPT = """\
 «зарекомендовал себя», «эффективно управлял» — без конкретной цифры/факта рядом. \
 Если использовал такую фразу без подтверждения — самопроверка перед выводом, замени или удали.
 
-Структура ответа: ровно JSON с 5 полями:
+Структура ответа: ровно JSON с 6 полями:
+  "real_role" — одной строкой реальная роль кандидата по совокупности опыта (должности, цифры, P&L, штат, число подчинённых), а не по заголовку резюме. Без воды, ≤120 символов.
   "facts_confirmed" — что подтверждено фактами из резюме (даты, должности, цифры, география).
   "weak_spots" — слабые места и что не подтверждено (пробелы, размытые формулировки, отсутствие KPI/P&L/штата/цифр).
   "red_flags" — красные флаги и несостыковки (сроки <1.5 года, понижения, разрывы, скачки индустрий).
@@ -47,7 +48,7 @@ UNIVERSAL_CRITIC_PROMPT = """\
   "verdict" — прямой вердикт. Внутри — гипотеза мотивации перехода одной строкой + итог: рекомендую / не рекомендую / нужно интервью с проверкой.
 
 Никакого предисловия, никакой обёртки в ```json блок, никаких пояснений после JSON.
-Объём: 200–350 слов суммарно по всем полям."""
+Объём: 200–400 слов суммарно по всем полям."""
 
 # Phrases that the prompt explicitly forbids — checked post-hoc for monitoring
 _FORBIDDEN_PHRASES = [
@@ -85,13 +86,13 @@ def _split_numbered_list(text: str) -> list[str]:
 
 
 def parse_dossier(raw: str) -> dict[str, Any]:
-    """Parse 5-field dossier JSON from LLM response.
+    """Parse 6-field dossier JSON from LLM response.
 
-    Returns a dict with keys: facts_confirmed, weak_spots, red_flags,
-    interview_questions (list[str]), verdict.
+    Returns a dict with keys: real_role (str), facts_confirmed, weak_spots,
+    red_flags, interview_questions (list[str]), verdict.
 
-    On JSONDecodeError: returns {"verdict": raw_text, ...rest None}.
-    On missing fields: populates None for each missing key.
+    On JSONDecodeError: returns {"verdict": raw_text, "real_role": "", ...rest None}.
+    On missing fields: real_role defaults to ""; other fields default to None.
     On interview_questions as string: splits by numbered markers.
     """
     raw = raw.strip()
@@ -108,6 +109,7 @@ def parse_dossier(raw: str) -> dict[str, Any]:
     if data is None:
         log.warning("llm_enrich.dossier_json_decode_error", raw_preview=raw[:200])
         return {
+            "real_role": "",
             "facts_confirmed": None,
             "weak_spots": None,
             "red_flags": None,
@@ -123,9 +125,12 @@ def parse_dossier(raw: str) -> dict[str, Any]:
     elif not isinstance(iq, list):
         data["interview_questions"] = None
 
-    # Ensure all 5 keys exist (fill missing with None)
+    # Ensure all 6 keys exist (real_role → "", others → None)
     for key in ("facts_confirmed", "weak_spots", "red_flags", "interview_questions", "verdict"):
         data.setdefault(key, None)
+    data.setdefault("real_role", "")
+    if not isinstance(data.get("real_role"), str):
+        data["real_role"] = ""
 
     return data
 

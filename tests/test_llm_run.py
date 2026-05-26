@@ -59,6 +59,7 @@ def _global_ctx() -> GlobalContext:
 
 def _ok_llm_response(
     verdict_text: str = "Рекомендую на следующий этап.",
+    real_role: str = "Директор регионального филиала, 120 агентов, страхование",
 ) -> dict[str, Any]:
     """Build a dossier-format mock OpenRouter response (commit 9.3+)."""
     return {
@@ -67,6 +68,7 @@ def _ok_llm_response(
                 "message": {
                     "content": json.dumps(
                         {
+                            "real_role": real_role,
                             "facts_confirmed": (
                                 "Кандидат работал директором филиала в СОГАЗ с 2019 по 2023 "
                                 "(4 года). Агентская сеть 120 человек."
@@ -292,6 +294,7 @@ async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.Monk
     }
     content_hash = _hash(payload)
     cached_dossier = {
+        "real_role": "Директор филиала, страхование",
         "facts_confirmed": "Кандидат работал в СОГАЗ 4 года.",
         "weak_spots": "Нет P&L.",
         "red_flags": "Gap 2023.",
@@ -623,3 +626,234 @@ async def test_interview_questions_as_string_splits(
     assert len(iq) == 2, f"Expected 2 questions, got {iq}"
     assert "Вопрос один" in iq[0]
     assert "Вопрос два" in iq[1]
+
+
+# ── force + resume_ids + real_role ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_force_ignores_valid_cache(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """force=True calls the API even when a valid dossier cache entry exists."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    from hh_monitor.config import settings as _settings
+    from hh_monitor.llm_enrich.cache import save_cached
+
+    payload = {
+        "id": "r001",
+        "title": "директор филиала страхование",
+        "total_experience": {"months": 48},
+        "salary": {"amount": 150000, "currency": "RUR"},
+        "education": {"level": {"id": "higher"}},
+        "area": {"id": "63", "name": "Самара, Самарская область"},
+        "experience": [],
+    }
+    content_hash = _hash(payload)
+    cached_dossier = {
+        "real_role": "Старая роль из кэша",
+        "facts_confirmed": "Кандидат работал в СОГАЗ 4 года.",
+        "weak_spots": "Нет P&L.",
+        "red_flags": "Gap 2023.",
+        "interview_questions": ["Каков KPI?"],
+        "verdict": "Не рекомендую.",
+    }
+    await save_cached(
+        db_session, "r001", content_hash, _settings.llm_prompt_version, cached_dossier
+    )
+    await db_session.flush()
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=_ok_llm_response(),
+    ) as mock_api:
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=5,
+            force=True,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+        mock_api.assert_called_once()
+
+    assert result["enriched"] == 1
+    assert result["results"][0]["from_cache"] is False
+
+
+@pytest.mark.asyncio
+async def test_resume_ids_narrows_selection(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """resume_ids limits processing to the specified hh_resume_ids."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, _r1, _e1 = await _seed_db(db_session, resume_id="target_r", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    # Seed a second event in the same search — must NOT be processed
+    resume2 = Resume(hh_resume_id="other_r")
+    db_session.add(resume2)
+    await db_session.flush()
+    payload2: dict[str, Any] = {
+        "id": "other_r",
+        "title": "директор",
+        "total_experience": {"months": 48},
+        "experience": [],
+    }
+    db_session.add(
+        Snapshot(hh_resume_id="other_r", payload=payload2, content_hash=_hash(payload2))
+    )
+    event2 = Event(
+        hh_resume_id="other_r",
+        event_type="NEW",
+        search_id=search.id,
+        fit_score=70,
+        llm_enriched=False,
+    )
+    db_session.add(event2)
+    await db_session.flush()
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=_ok_llm_response(),
+    ):
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=10,
+            resume_ids=["target_r"],
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+
+    assert result["total_processed"] == 1
+    assert result["results"][0]["resume_id"] == "target_r"
+    # other_r must remain un-enriched
+    await db_session.refresh(event2)
+    assert event2.llm_enriched is False
+
+
+@pytest.mark.asyncio
+async def test_force_reprocesses_enriched_event(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """force=True re-enriches events that already have llm_enriched=True."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    # Mark event as already enriched
+    event.llm_enriched = True
+    await db_session.flush()
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=_ok_llm_response(),
+    ) as mock_api:
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=5,
+            force=True,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+        mock_api.assert_called_once()
+
+    assert result["enriched"] == 1
+
+
+@pytest.mark.asyncio
+async def test_real_role_written_to_resume(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After enrichment, resume.llm_real_role is populated from the dossier."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    expected_role = "Директор регионального офиса, 120 агентов, СОГАЗ"
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=_ok_llm_response(real_role=expected_role),
+    ):
+        await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=5,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+
+    await db_session.refresh(resume)
+    assert resume.llm_real_role == expected_role
+
+
+@pytest.mark.asyncio
+async def test_non_force_uses_updated_cache(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After force+overwrite, a non-force run uses the updated cache (no extra API call)."""
+    from sqlalchemy import update as sa_update
+
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, fit_score=70)
+    # Capture primitive IDs before any commits so expire_on_commit doesn't bite.
+    search_id: int = search.id
+    event_id: int = event.id
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    new_role = "Руководитель дивизиона продаж, 200 агентов"
+    api_response = _ok_llm_response(
+        verdict_text="Рекомендую.",
+        real_role=new_role,
+    )
+
+    # First run: force=True → calls API, writes to cache with overwrite=True
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=api_response,
+    ) as mock_api:
+        await run_llm_enrichment(
+            db_session,
+            search_id,
+            limit=5,
+            force=True,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+        assert mock_api.call_count == 1
+
+    # Reset llm_enriched via SQL so non-force run picks the event up again.
+    await db_session.execute(
+        sa_update(Event).where(Event.id == event_id).values(llm_enriched=False)
+    )
+    await db_session.flush()
+
+    # Second run: no force → should hit updated cache, NOT call API again
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+    ) as mock_api2:
+        result2 = await run_llm_enrichment(
+            db_session,
+            search_id,
+            limit=5,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+        mock_api2.assert_not_called()
+
+    assert result2["enriched"] == 1
+    assert result2["results"][0]["from_cache"] is True
+
+    await db_session.refresh(resume)
+    assert resume.llm_real_role == new_role

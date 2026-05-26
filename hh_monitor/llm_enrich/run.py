@@ -72,6 +72,7 @@ async def _enrich_one(
     global_ctx: GlobalContext,
     *,
     critic_prompt: str = "",
+    force: bool = False,
     dry_run: bool,
 ) -> dict[str, Any]:
     """Enrich a single event's resume.  Returns a per-event result dict.
@@ -128,9 +129,13 @@ async def _enrich_one(
             "fit_score": fit_score_val,
         }
 
-    # 4. Check cache
+    # 4. Check cache (skip on --force)
     prompt_version = settings.llm_prompt_version
-    cached = await llm_cache.get_cached(session, resume_id, content_hash, prompt_version)
+    cached = (
+        await llm_cache.get_cached(session, resume_id, content_hash, prompt_version)
+        if not force
+        else None
+    )
     if cached is not None:
         dossier = cached
         from_cache = True
@@ -170,6 +175,7 @@ async def _enrich_one(
                 dossier,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
+                overwrite=force,
             )
         except Exception:
             log_ctx.warning("llm_enrich.cache_write_failed", exc_info=True)
@@ -227,6 +233,7 @@ async def _enrich_one(
             llm_verdict=llm_verdict_class,
             llm_comment=llm_comment,
             llm_red_flags=red_flags_list,
+            llm_real_role=(dossier.get("real_role") or ""),
         )
     )
 
@@ -290,6 +297,8 @@ async def run_llm_enrichment(
     *,
     limit: int = 10,
     dry_run: bool = False,
+    force: bool = False,
+    resume_ids: list[str] | None = None,
     portraits: dict[str, Portrait] | None = None,
     global_ctx: GlobalContext | None = None,
 ) -> dict[str, Any]:
@@ -300,6 +309,8 @@ async def run_llm_enrichment(
         search_id:  Only process events linked to this search.
         limit:      Maximum events to process in one run.
         dry_run:    If True, skip API calls (cache hits still applied).
+        force:      If True, re-process already-enriched events and refresh cache.
+        resume_ids: Restrict to these hh_resume_id values; None means all in search.
         portraits:  Pre-loaded portrait dict; loaded from disk if None.
         global_ctx: Pre-loaded global context; loaded from disk if None.
 
@@ -329,13 +340,18 @@ async def run_llm_enrichment(
             f"No portrait found for position_code={position_code!r}. Available: {sorted(portraits)}"
         )
 
-    # Fetch pending events as primitive tuples to avoid ORM expiry issues.
-    events_result = await session.execute(
+    # Fetch events to process; --force drops the llm_enriched=False filter.
+    event_stmt = (
         select(Event.id, Event.hh_resume_id, Event.fit_score)
-        .where(Event.search_id == search_id, Event.llm_enriched.is_(False))
+        .where(Event.search_id == search_id)
         .order_by(Event.created_at.asc())
         .limit(limit)
     )
+    if not force:
+        event_stmt = event_stmt.where(Event.llm_enriched.is_(False))
+    if resume_ids:
+        event_stmt = event_stmt.where(Event.hh_resume_id.in_(resume_ids))
+    events_result = await session.execute(event_stmt)
     event_rows: list[Any] = list(events_result.all())
 
     log.info(
@@ -345,6 +361,8 @@ async def run_llm_enrichment(
         events_found=len(event_rows),
         limit=limit,
         dry_run=dry_run,
+        force=force,
+        resume_ids=resume_ids,
     )
 
     enriched = 0
@@ -362,6 +380,7 @@ async def run_llm_enrichment(
                 portrait,
                 global_ctx,
                 critic_prompt=critic_prompt,
+                force=force,
                 dry_run=dry_run,
             )
         except Exception as exc:

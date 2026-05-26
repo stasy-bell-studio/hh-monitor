@@ -804,6 +804,12 @@ def llm_run(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Skip API calls; show what would be enriched"
     ),
+    force: bool = typer.Option(
+        False, "--force", help="Ignore cache; re-enrich already-enriched events"
+    ),
+    resume_ids: str | None = typer.Option(
+        None, "--resume-ids", help="Comma-separated hh_resume_id list to target"
+    ),
 ) -> None:
     """Run LLM enrichment on unenriched events for a search."""
     if search_id is None and search_code is None:
@@ -813,7 +819,16 @@ def llm_run(
         typer.echo("Error: --search-id and --search-code are mutually exclusive", err=True)
         raise typer.Exit(1)
     try:
-        result = asyncio.run(_llm_run(search_id, limit, dry_run, search_code=search_code))
+        result = asyncio.run(
+            _llm_run(
+                search_id,
+                limit,
+                dry_run,
+                search_code=search_code,
+                force=force,
+                resume_ids=resume_ids,
+            )
+        )
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -832,10 +847,16 @@ async def _llm_run(
     limit: int,
     dry_run: bool,
     search_code: str | None = None,
+    force: bool = False,
+    resume_ids: str | None = None,
 ) -> dict:  # type: ignore[type-arg]
     from sqlalchemy import select
 
     from hh_monitor.llm_enrich.run import run_llm_enrichment
+
+    resume_id_list: list[str] | None = None
+    if resume_ids:
+        resume_id_list = [r.strip() for r in resume_ids.split(",") if r.strip()]
 
     async with async_session_factory() as session:
         if search_id is None:
@@ -847,7 +868,14 @@ async def _llm_run(
                 raise SearchNotFoundError(f"No active search with search_code={search_code!r}")
             search_id = resolved_id
 
-        return await run_llm_enrichment(session, search_id, limit=limit, dry_run=dry_run)
+        return await run_llm_enrichment(
+            session,
+            search_id,
+            limit=limit,
+            dry_run=dry_run,
+            force=force,
+            resume_ids=resume_id_list,
+        )
 
 
 @llm_app.command("reset-cache")

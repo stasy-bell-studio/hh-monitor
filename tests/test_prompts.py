@@ -99,7 +99,7 @@ def test_parse_dossier_interview_questions_as_string() -> None:
 
 
 def test_parse_dossier_missing_fields_become_none() -> None:
-    """JSON with fewer than 5 fields: missing fields default to None."""
+    """JSON with fewer than 5 fields: missing fields default to None; real_role to ''."""
     import json
 
     raw = json.dumps({"verdict": "Не рекомендую."})
@@ -107,6 +107,40 @@ def test_parse_dossier_missing_fields_become_none() -> None:
     assert d["verdict"] == "Не рекомендую."
     assert d["facts_confirmed"] is None
     assert d["weak_spots"] is None
+    assert d["real_role"] == ""
+
+
+def test_parse_dossier_missing_real_role_defaults_to_empty() -> None:
+    """JSON with 5 dossier fields but no real_role → real_role == ''."""
+    import json
+
+    raw = json.dumps(
+        {
+            "facts_confirmed": "Факты.",
+            "weak_spots": "Слабые.",
+            "red_flags": "Флаги.",
+            "interview_questions": ["Q?"],
+            "verdict": "Рекомендую.",
+        }
+    )
+    d = parse_dossier(raw)
+    assert d["real_role"] == ""
+
+
+def test_parse_dossier_null_real_role_coerced_to_empty() -> None:
+    """JSON with real_role: null → coerced to empty string."""
+    import json
+
+    raw = json.dumps({"facts_confirmed": "Ф.", "verdict": "Рекомендую.", "real_role": None})
+    d = parse_dossier(raw)
+    assert d["real_role"] == ""
+
+
+def test_parse_dossier_invalid_json_real_role_empty() -> None:
+    """Non-JSON fallback always has real_role == ''."""
+    d = parse_dossier("Это точно не JSON.")
+    assert d["real_role"] == ""
+    assert d["verdict"] == "Это точно не JSON."
 
 
 def test_parse_dossier_extra_fields_ignored() -> None:

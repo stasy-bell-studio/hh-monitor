@@ -42,6 +42,7 @@ async def test_get_cached_new_format_returns_dict(db_session: AsyncSession) -> N
     await db_session.flush()
 
     dossier = {
+        "real_role": "Директор филиала, страхование",
         "facts_confirmed": "Директор с 2019.",
         "weak_spots": "Нет P&L.",
         "red_flags": "Gap 2023.",
@@ -56,3 +57,71 @@ async def test_get_cached_new_format_returns_dict(db_session: AsyncSession) -> N
     assert result is not None
     assert result["facts_confirmed"] == "Директор с 2019."
     assert result["verdict"] == "Рекомендую."
+    assert result["real_role"] == "Директор филиала, страхование"
+
+
+@pytest.mark.asyncio
+async def test_get_cached_missing_real_role_returns_none(db_session: AsyncSession) -> None:
+    """Dossier without real_role (pre-fix format) → cache miss + warning."""
+    from structlog.testing import capture_logs
+
+    db_session.add(Resume(hh_resume_id="rid3"))
+    await db_session.flush()
+
+    # Old dossier-format: has facts_confirmed but lacks real_role
+    old_dossier = {
+        "facts_confirmed": "Директор с 2019.",
+        "weak_spots": "Нет P&L.",
+        "red_flags": "Gap 2023.",
+        "interview_questions": ["Каковы KPI?"],
+        "verdict": "Рекомендую.",
+    }
+    row = LlmCache(
+        cache_key="rid3|hash3|v2",
+        hh_resume_id="rid3",
+        content_hash="hash3",
+        prompt_version="v2",
+        response=old_dossier,
+    )
+    db_session.add(row)
+    await db_session.flush()
+
+    with capture_logs() as cap:
+        result = await get_cached(db_session, "rid3", "hash3", "v2")
+
+    assert result is None
+    assert any(e["event"] == "llm_cache.legacy_format_skipped" for e in cap)
+
+
+@pytest.mark.asyncio
+async def test_save_cached_overwrite_updates_response(db_session: AsyncSession) -> None:
+    """overwrite=True replaces the existing cache row with a new response."""
+    db_session.add(Resume(hh_resume_id="rid4"))
+    await db_session.flush()
+
+    dossier_v1 = {
+        "real_role": "Продажник",
+        "facts_confirmed": "Старый факт.",
+        "weak_spots": None,
+        "red_flags": None,
+        "interview_questions": [],
+        "verdict": "Не рекомендую.",
+    }
+    await save_cached(db_session, "rid4", "hash4", "v2", dossier_v1)
+    await db_session.flush()
+
+    dossier_v2 = {
+        "real_role": "Директор регионального офиса, 50 агентов",
+        "facts_confirmed": "Новый факт — СОГАЗ 3 года.",
+        "weak_spots": "Нет P&L.",
+        "red_flags": None,
+        "interview_questions": ["Вопрос?"],
+        "verdict": "Рекомендую.",
+    }
+    await save_cached(db_session, "rid4", "hash4", "v2", dossier_v2, overwrite=True)
+    await db_session.flush()
+
+    result = await get_cached(db_session, "rid4", "hash4", "v2")
+    assert result is not None
+    assert result["verdict"] == "Рекомендую."
+    assert result["real_role"] == "Директор регионального офиса, 50 агентов"

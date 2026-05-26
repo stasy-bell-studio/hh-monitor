@@ -14,7 +14,7 @@ from decimal import Decimal
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,7 +42,7 @@ async def get_cached(
         return None
     log.debug("llm_cache.hit", resume_id=hh_resume_id, key=key)
     response = dict(row.response)
-    if "facts_confirmed" not in response:
+    if "facts_confirmed" not in response or "real_role" not in response:
         log.warning(
             "llm_cache.legacy_format_skipped",
             resume_id=hh_resume_id,
@@ -61,26 +61,38 @@ async def save_cached(
     tokens_in: int | None = None,
     tokens_out: int | None = None,
     cost_usd: Decimal | None = None,
+    overwrite: bool = False,
 ) -> None:
     """Upsert a dossier dict into the cache.
 
-    Uses PostgreSQL INSERT … ON CONFLICT DO NOTHING so that a concurrent
-    writer for the same key doesn't cause an error.
+    When *overwrite* is False (default), concurrent writes to the same key are
+    silently ignored (ON CONFLICT DO NOTHING).  When True, the existing row is
+    replaced (ON CONFLICT DO UPDATE) — used by --force runs to refresh stale
+    cache entries with the new dossier.
     """
     key = make_cache_key(hh_resume_id, content_hash, prompt_version)
-    stmt = (
-        pg_insert(LlmCache)
-        .values(
-            cache_key=key,
-            hh_resume_id=hh_resume_id,
-            content_hash=content_hash,
-            prompt_version=prompt_version,
-            response=response,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cost_usd=cost_usd,
-        )
-        .on_conflict_do_nothing(index_elements=["cache_key"])
+    insert_stmt = pg_insert(LlmCache).values(
+        cache_key=key,
+        hh_resume_id=hh_resume_id,
+        content_hash=content_hash,
+        prompt_version=prompt_version,
+        response=response,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cost_usd=cost_usd,
     )
+    if overwrite:
+        stmt = insert_stmt.on_conflict_do_update(
+            index_elements=["cache_key"],
+            set_={
+                "response": insert_stmt.excluded.response,
+                "tokens_in": insert_stmt.excluded.tokens_in,
+                "tokens_out": insert_stmt.excluded.tokens_out,
+                "cost_usd": insert_stmt.excluded.cost_usd,
+                "created_at": func.now(),
+            },
+        )
+    else:
+        stmt = insert_stmt.on_conflict_do_nothing(index_elements=["cache_key"])
     await session.execute(stmt)
-    log.debug("llm_cache.saved", resume_id=hh_resume_id, key=key)
+    log.debug("llm_cache.saved", resume_id=hh_resume_id, key=key, overwrite=overwrite)
