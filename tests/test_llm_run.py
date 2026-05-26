@@ -571,10 +571,11 @@ async def test_invalid_json_fallback(db_session: Any, monkeypatch: pytest.Monkey
 
     await db_session.refresh(event)
     assert event.llm_verdict == "Это точно не JSON, просто текст."
-    assert event.llm_facts_confirmed is None
-    assert event.llm_weak_spots is None
-    assert event.llm_red_flags is None
-    assert event.llm_interview_questions is None
+    # _coerce_text(None) → "" — Text columns receive empty string, not NULL
+    assert event.llm_facts_confirmed == ""
+    assert event.llm_weak_spots == ""
+    assert event.llm_red_flags == ""
+    assert event.llm_interview_questions is None  # JSONB — None stays None
 
 
 @pytest.mark.asyncio
@@ -857,3 +858,57 @@ async def test_non_force_uses_updated_cache(
 
     await db_session.refresh(resume)
     assert resume.llm_real_role == new_role
+
+
+@pytest.mark.asyncio
+async def test_coerce_list_fields_to_str(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LLM returns red_flags/weak_spots as lists → Event stores joined strings; None → ''."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, _resume, event = await _seed_db(db_session, resume_id="r_coerce", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    import json as _json
+
+    list_fields_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": _json.dumps(
+                        {
+                            "real_role": "Тест",
+                            "facts_confirmed": None,
+                            "weak_spots": ["x", "y"],
+                            "red_flags": ["a", "b", "c"],
+                            "interview_questions": ["Q1", "Q2"],
+                            "verdict": "Нужно интервью для проверки.",
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 30},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=list_fields_response,
+    ):
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=1,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+
+    assert result["enriched"] == 1
+
+    await db_session.refresh(event)
+    assert event.llm_red_flags == "a\nb\nc"
+    assert event.llm_weak_spots == "x\ny"
+    assert event.llm_facts_confirmed == ""  # None → ""
+    assert isinstance(event.llm_interview_questions, list)
+    assert event.llm_interview_questions == ["Q1", "Q2"]

@@ -45,6 +45,21 @@ log = structlog.get_logger(__name__)
 _INTER_CALL_DELAY = 0.5
 
 
+def _coerce_text(v: object) -> str:
+    """Coerce a dossier value to str for Text DB columns.
+
+    LLM may return any field as a JSON array; joining with newlines keeps content intact.
+    None → empty string (column never receives NULL from this path).
+    """
+    if v is None:
+        return ""
+    if isinstance(v, list):
+        return "\n".join(str(x) for x in v)
+    if isinstance(v, str):
+        return v
+    return str(v)
+
+
 async def _latest_snapshot(
     session: AsyncSession, hh_resume_id: str
 ) -> tuple[dict[str, Any], str] | None:
@@ -181,7 +196,7 @@ async def _enrich_one(
             log_ctx.warning("llm_enrich.cache_write_failed", exc_info=True)
 
     # Derive numeric score + structured verdict class for backward compat (TG bot / digest)
-    verdict_text: str = dossier.get("verdict") or ""
+    verdict_text: str = _coerce_text(dossier.get("verdict"))
     llm_score = derive_score_from_verdict(verdict_text)
     llm_verdict_class = derive_verdict_class(verdict_text)
     score_total = round(0.3 * fit_score_val + 0.7 * llm_score)
@@ -204,22 +219,25 @@ async def _enrich_one(
         comment_parts.append(f"Вердикт: {verdict_text[:150]}")
     llm_comment = "\n\n".join(comment_parts)[:500]
 
+    # Coerce all text dossier fields — LLM may return a JSON array for any field.
+    facts_text = _coerce_text(dossier.get("facts_confirmed"))
+    weak_text = _coerce_text(dossier.get("weak_spots"))
+    red_text = _coerce_text(dossier.get("red_flags"))
+    red_flags_list: list[str] = [red_text] if red_text else []
+
     # 7. Persist dossier fields to Event + backward-compat fields to Resume
     await session.execute(
         update(Event)
         .where(Event.id == event_id)
         .values(
             llm_enriched=True,
-            llm_facts_confirmed=dossier.get("facts_confirmed"),
-            llm_weak_spots=dossier.get("weak_spots"),
-            llm_red_flags=dossier.get("red_flags"),
+            llm_facts_confirmed=facts_text,
+            llm_weak_spots=weak_text,
+            llm_red_flags=red_text,
             llm_interview_questions=dossier.get("interview_questions"),
-            llm_verdict=dossier.get("verdict"),
+            llm_verdict=verdict_text,
         )
     )
-
-    red_flags_raw = dossier.get("red_flags")
-    red_flags_list: list[str] = [red_flags_raw] if red_flags_raw else []
 
     await session.execute(
         update(Resume)
