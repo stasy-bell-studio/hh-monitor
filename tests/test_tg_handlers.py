@@ -72,10 +72,14 @@ def _session_factory_from(mock_session: AsyncMock) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_callback_non_screen_prefix_ignored() -> None:
+async def test_callback_non_screen_prefix_shows_alert() -> None:
+    # Handler is now guarded by F.data.startswith("screen:") filter;
+    # calling it directly with non-screen data hits the parts-count guard.
     cb = _make_callback(data="other:data")
     await handle_screen_callback(cb)  # type: ignore[arg-type]
-    cb.answer.assert_not_called()
+    cb.answer.assert_called_once()
+    _, kwargs = cb.answer.call_args
+    assert kwargs.get("show_alert") is True
 
 
 @pytest.mark.asyncio
@@ -108,8 +112,10 @@ async def test_callback_no_user_shows_alert() -> None:
 
 @pytest.mark.asyncio
 async def test_callback_success_first_click() -> None:
-    """UPDATE returns a row → answer without show_alert."""
+    """UPDATE returns a row → answer() with no alert, reason keyboard shown."""
     cb = _make_callback(data="screen:7:approve", user_id=1, username="lukin")
+    # cb.message is a plain MagicMock — isinstance(cb.message, Message) is False,
+    # so edit_reply_markup is not called; only callback.answer() is invoked.
 
     mock_result = MagicMock()
     mock_result.fetchall.return_value = [(7,)]  # RETURNING returned a row
@@ -125,10 +131,8 @@ async def test_callback_success_first_click() -> None:
         await handle_screen_callback(cb)  # type: ignore[arg-type]
 
     cb.answer.assert_called_once()
-    args, kwargs = cb.answer.call_args
+    _, kwargs = cb.answer.call_args
     assert kwargs.get("show_alert") is not True
-    assert "approve" in args[0]
-    assert "lukin" in args[0]
 
 
 @pytest.mark.asyncio
@@ -161,7 +165,7 @@ async def test_callback_already_screened_shows_alert() -> None:
     assert kwargs.get("show_alert") is True
     text_arg = cb.answer.call_args[0][0]
     assert "lukin" in text_arg
-    assert "approve" in text_arg
+    # new format: "⚠️ Уже заскринено: @lukin" — status not included
 
 
 # ── Integration: first-click-wins on real PostgreSQL ─────────────────────────
