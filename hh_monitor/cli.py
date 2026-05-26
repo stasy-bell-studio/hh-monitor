@@ -193,6 +193,9 @@ def fit_score(
     typer.echo("")
     typer.echo("Breakdown:")
     for rule, delta in breakdown.items():
+        if not isinstance(delta, int | float):
+            typer.echo(f"  {rule:<25} {delta}")
+            continue
         sign = "+" if delta > 0 else ""
         typer.echo(f"  {rule:<25} {sign}{delta}")
 

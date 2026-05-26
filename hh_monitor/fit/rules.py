@@ -373,29 +373,53 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
     # Only active when portrait.position_synonyms is non-empty — that signals
     # the portrait is configured for role-matching.  Skipped for generic/test
     # portraits with no synonyms to preserve backward compatibility.
+    #
+    # Three-path matching:
+    #   (a)+(b) — via _matches_role() on the latest experience position title
+    #   (c)     — fallback: check resume.title against synonyms when the
+    #             experience position failed paths (a) and (b).  Covers cases
+    #             where the candidate lists a generic company role in experience
+    #             but their resume headline (title) names the target role.
     if portrait.position_synonyms:
-        _current_title: str | None = None
+        _exp_title: str | None = None
         if experiences:
             _latest_exp = _latest_experience(experiences)
             if _latest_exp is not None:
                 _pos = _latest_exp.get("position")
                 if _pos:
-                    _current_title = str(_pos).strip() or None
-        if not _current_title:
-            _raw_title = resume_payload.get("title")
-            if _raw_title:
-                _current_title = str(_raw_title).strip() or None
+                    _exp_title = str(_pos).strip() or None
+        _raw_title = resume_payload.get("title")
+        _resume_title: str | None = str(_raw_title).strip() if _raw_title else None
+
+        # Use experience position as primary signal; fall back to resume title
+        # only when experience is absent (original behaviour preserved).
+        _current_title: str | None = _exp_title or _resume_title
 
         if not _current_title:
             hard_reject_reasons.append("current_role_unknown")
             logger.debug("fit.hard_reject.current_role_unknown", resume_id=resume_id)
         elif not _matches_role(_current_title, portrait):
-            hard_reject_reasons.append("current_role_mismatch")
-            logger.debug(
-                "fit.hard_reject.current_role_mismatch",
-                current_role=_current_title,
-                resume_id=resume_id,
-            )
+            # Path (c): experience position failed — try resume.title vs synonyms.
+            _title_fallback_matched = False
+            if _exp_title and _resume_title and _resume_title != _exp_title:
+                _resume_title_lower = _resume_title.lower()
+                for _syn in portrait.position_synonyms:
+                    if _syn.lower() in _resume_title_lower:
+                        _title_fallback_matched = True
+                        logger.debug(
+                            "fit.current_role_match.title_fallback",
+                            title=_resume_title,
+                            matched_synonym=_syn,
+                            resume_id=resume_id,
+                        )
+                        break
+            if not _title_fallback_matched:
+                hard_reject_reasons.append("current_role_mismatch")
+                logger.debug(
+                    "fit.hard_reject.current_role_mismatch",
+                    current_role=_current_title,
+                    resume_id=resume_id,
+                )
 
     # 1f. Career gap
     if portrait.max_career_gap_months > 0:
@@ -443,7 +467,10 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
             )
 
     # 1i. Motor insurance experience (КАСКО/ОСАГО/МТПЛ)
-    if portrait.min_motor_experience_months > 0:
+    # When motor_experience_preferred=True the portrait treats motor background
+    # as a desired signal (soft), not a hard gate.  Soft credit flows through
+    # osago_knowledge and ifl_experience scoring weights; no hard reject fired.
+    if portrait.min_motor_experience_months > 0 and not portrait.motor_experience_preferred:
         motor_months = _motor_experience_months(experiences)
         if motor_months < portrait.min_motor_experience_months:
             hard_reject_reasons.append("motor_experience")

@@ -42,6 +42,7 @@ def _portrait(
     min_total_months: int = 0,
     min_insurance_experience_months: int = 0,
     min_motor_experience_months: int = 0,
+    motor_experience_preferred: bool = False,
     min_tenure_last_job_months: int = 0,
     bonus_companies: list[str] | None = None,
     preferred_education_fields: list[str] | None = None,
@@ -54,6 +55,7 @@ def _portrait(
         min_total_months=min_total_months,
         min_insurance_experience_months=min_insurance_experience_months,
         min_motor_experience_months=min_motor_experience_months,
+        motor_experience_preferred=motor_experience_preferred,
         min_tenure_last_job_months=min_tenure_last_job_months,
         bonus_companies=bonus_companies or [],
         preferred_education_fields=preferred_education_fields or [],
@@ -1199,3 +1201,102 @@ def test_hard_reject_last_job_tenure_current_position() -> None:
     score, bd = compute(payload, p)
     assert score == 0
     assert bd["hard_reject_reason"] == "last_job_tenure"
+
+
+# ── Path (c): current_role_mismatch title fallback ────────────────────────────
+
+
+def _underwriter_portrait() -> Portrait:
+    """Portrait with underwriter synonyms — mirrors underwriter_21vek subset."""
+    return Portrait(
+        position_code="uw_test",
+        position_name="Андеррайтер (тест)",
+        position_synonyms=[
+            "Андеррайтер",
+            "Ведущий андеррайтер",
+            "Андеррайтер моторных видов",
+            "Специалист по андеррайтингу",
+        ],
+        filters=Filters(regions=RegionFilters(primary=[], adjacent=[], stop=[])),
+    )
+
+
+def test_current_role_mismatch_title_fallback() -> None:
+    """Path (c): experience position doesn't match but resume title does → NOT rejected."""
+    p = _underwriter_portrait()
+    payload = {
+        "id": "uw_title_fallback",
+        "title": "Андеррайтер моторных видов",
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Старший специалист аналитики",
+                "start": "2020-01",
+                "end": None,
+                "description": "",
+            }
+        ],
+    }
+    _, bd = compute(payload, p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_current_role_mismatch_no_title_no_experience_match() -> None:
+    """Neither experience position nor resume title matches synonyms → rejected."""
+    p = _underwriter_portrait()
+    payload = {
+        "id": "uw_no_match",
+        "title": "Кредитный менеджер",
+        "experience": [
+            {
+                "company": "Банк ВТБ",
+                "position": "Кредитный аналитик",
+                "start": "2020-01",
+                "end": None,
+                "description": "",
+            }
+        ],
+    }
+    score, bd = compute(payload, p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+# ── motor_experience_preferred: soft vs hard ──────────────────────────────────
+
+
+def test_motor_experience_preferred_skipped() -> None:
+    """motor_experience_preferred=True: insufficient motor months → NOT hard rejected."""
+    p = _portrait(min_motor_experience_months=24, motor_experience_preferred=True)
+    payload: dict[str, Any] = {
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Андеррайтер",
+                "start": "2023-01",
+                "end": None,
+                "description": "Работа в страховании",
+            }
+        ]
+    }
+    _, bd = compute(payload, p)
+    assert bd.get("hard_reject_reason") != "motor_experience"
+
+
+def test_motor_experience_required_still_hard() -> None:
+    """motor_experience_preferred=False (default): insufficient motor months → hard rejected."""
+    p = _portrait(min_motor_experience_months=24, motor_experience_preferred=False)
+    payload: dict[str, Any] = {
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Андеррайтер",
+                "start": "2023-01",
+                "end": None,
+                "description": "Работа в страховании",
+            }
+        ]
+    }
+    score, bd = compute(payload, p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "motor_experience"
