@@ -22,6 +22,7 @@ def make_callback(
     cb.from_user.username = username
     cb.from_user.full_name = "Test User"
     cb.bot = MagicMock()
+    cb.bot.delete_message = AsyncMock()
     cb.answer = AsyncMock()
     cb.message = MagicMock()
     # Make isinstance(cb.message, Message) → True without spec restrictions
