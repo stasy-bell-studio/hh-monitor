@@ -118,3 +118,9 @@
 ## Если не уверен
 
 Пишу прямо: «Не уверен в X, причина — Y». Молчаливое «вроде ок» запрещено.
+
+## Sprint state
+
+- Сессия 6.5 closed (2026-05-26): screening reasons + STOP_LIST + empty digest live.
+  - Новые файлы: `hh_monitor/tg/reasons.py`, миграция `20260526143651`.
+  - Следующая сессия: Сессия 7 — deployment (systemd, .env, server setup).

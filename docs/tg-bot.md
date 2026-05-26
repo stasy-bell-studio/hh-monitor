@@ -7,8 +7,13 @@ pipeline run
   └─> events (llm_enriched=TRUE, score_total ≥ threshold)
         └─> tg send-pending
               ├─> notifications_sent (idempotency gate)
-              ├─> send_card → Telegram group (HTML + inline keyboard)
-              └─> callback clicks → UPDATE notifications_sent WHERE screening_status IS NULL RETURNING
+              ├─> send_card → Telegram group (HTML + 4-button inline keyboard)
+              └─> callback clicks
+                    ├─> screen:{id}:{status}  → first-click-wins UPDATE
+                    │         └─> reason menu (edit_reply_markup)
+                    ├─> reason:{id}:{status}:{code} → INSERT screening_reasons
+                    │         └─> card edit (edit_message_text)
+                    └─> back:{id}   → restore status keyboard
 ```
 
 ## Модули
@@ -18,7 +23,8 @@ pipeline run
 | `hh_monitor/tg/client.py` | `make_bot()`, `is_admin()`, `send_card()` с retry/error handling |
 | `hh_monitor/tg/cards.py` | `build_card_html()`, `build_inline_keyboard()` |
 | `hh_monitor/tg/sender.py` | `send_new_candidate_card()`, `send_pending_cards()`, `get_current_threshold()` |
-| `hh_monitor/tg/handlers.py` | aiogram Router: callback, /threshold, /digest, /help |
+| `hh_monitor/tg/handlers.py` | aiogram Router: screen/reason/back callbacks, custom reply, /threshold, /digest, /help |
+| `hh_monitor/tg/reasons.py` | `STATUS_LABELS`, `PRESETS`, `build_reason_keyboard()`, `format_final_text()` |
 
 ## Таблицы БД
 
@@ -29,10 +35,23 @@ pipeline run
 | `event_id` | BIGINT PK FK → events.id | Один ряд на отправленное событие |
 | `tg_message_id` | BIGINT NOT NULL | ID сообщения в Telegram |
 | `sent_at` | TIMESTAMPTZ | Время отправки |
-| `screening_status` | TEXT nullable | `approve` / `reject` / `doubt` |
+| `screening_status` | TEXT nullable | `approve` / `reject` / `doubt` / `stop_list` |
 | `screened_at` | TIMESTAMPTZ nullable | Время разметки |
 | `screened_by` | BIGINT nullable | Telegram user_id разметчика |
 | `screened_by_username` | TEXT nullable | @username разметчика |
+
+### `screening_reasons`
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| `id` | BIGSERIAL PK | |
+| `event_id` | BIGINT UNIQUE FK → notifications_sent(event_id) CASCADE | Одна причина на событие |
+| `status` | TEXT NOT NULL | Статус из `ScreeningStatus` |
+| `reason_code` | VARCHAR(64) nullable | Slug preset-причины; NULL для custom |
+| `reason_text` | TEXT NOT NULL | Текст причины (preset label или ввод пользователя) |
+| `screened_by` | BIGINT NOT NULL | Telegram user_id |
+| `screened_by_username` | TEXT nullable | @username |
+| `created_at` | TIMESTAMPTZ NOT NULL | |
 
 ### `app_config`
 
@@ -99,6 +118,70 @@ TELEGRAM_ADMIN_USER_IDS=111111111,222222222,333333333
 poetry run python -m hh_monitor.cli tg run
 ```
 
+## Inline-клавиатура (сессия 6.5)
+
+Первый шаг — статус:
+```
+screen:{event_id}:{status}
+```
+- `status` — `approve` | `reject` | `doubt` | `stop_list`
+
+Второй шаг — причина (меню после выбора статуса):
+```
+reason:{event_id}:{status}:{reason_code}   # preset
+reason:{event_id}:{status}:custom          # свободный ввод
+back:{event_id}                             # назад к статусам
+```
+
+- Все callback_data ≤ 64 байт (проверено тестом).
+
+## Двухшаговый FSM для сбора причин
+
+```
+[карточка] → клик статуса
+  → first-click-wins UPDATE notifications_sent WHERE screening_status IS NULL
+  → edit_reply_markup → меню причин
+    → клик preset → INSERT screening_reasons → edit_message_text карточки
+    → клик «✍️ Своя» → ForceReply prompt → пользователь отвечает
+      → handle_custom_reason_message → INSERT + edit карточки
+    → клик «← Назад» → восстановить исходную клавиатуру статусов
+```
+
+### Конкурентная защита
+
+- **Статус**: UPDATE WHERE IS NULL RETURNING — атомарно, первый захватывает.
+  Проигравший видит `⚠️ Уже заскринено: @X`.
+- **Причина**: INSERT ON CONFLICT (event_id) DO NOTHING RETURNING id.
+  Если `id = None` → `⚠️ Причина уже записана`.
+
+### Кнопка «← Назад»
+
+Доступна только автору захвата (`screened_by == user.id`) и только пока причина ещё не записана.
+
+### Custom ForceReply TTL
+
+In-memory FSM: `_custom_fsm: dict[int, _FsmState]`. TTL = 300 сек.
+Если пользователь ответил через >5 мин → `⌛ Сессия истекла, нажми кнопку статуса заново`.
+
+## Сбор причин (preset-каталог)
+
+| Статус | Preset-причины |
+|--------|---------------|
+| ✅ Подходит | Релевантный опыт / Точная должность / Нужный регион / Адекватные ожидания |
+| ❌ Мимо | Слабый опыт / Не тот регион / Завышенные ожидания / Стоп-индустрия |
+| 🤔 Спорно | Нужно обсудить / Пограничный опыт / Нестандартный профиль |
+| 🚫 Стоп-лист | Конкурент / Прошлый плохой опыт / Несовместимость по портрету |
+
+Для каждого статуса доступна «✍️ Своя» (свободный текст).
+
+После записи причины карточка перерисовывается:
+```
+{emoji} {status_label}: {reason_text} — @username
+
+<оригинальное тело карточки>
+```
+Inline-клавиатура удаляется.
+
 ## Формат callback_data
 
 ```
@@ -106,8 +189,8 @@ screen:{event_id}:{status}
 ```
 
 - `event_id` — BigInteger (max 19 цифр)
-- `status` — `approve` | `reject` | `doubt`
-- Максимальная длина: `7 + 19 + 1 + 6 = 33 байта` ≪ 64-байтный лимит Telegram
+- `status` — `approve` | `reject` | `doubt` | `stop_list`
+- Максимальная длина: `7 + 19 + 1 + 9 = 36 байт` ≪ 64-байтный лимит Telegram
 
 ## CLI-команды
 

@@ -53,9 +53,22 @@ run_weekly_digest(session, bot)
   │     ├─> SELECT Event JOIN Resume JOIN Search WHERE llm_enriched=TRUE AND created_at IN [date_from, date_to]
   │     ├─> Группировка по position_code, сортировка по score_total DESC, top_candidates[:5]
   │     └─> SELECT ParserRun WHERE started_at >= date_from → stats
+  ├─> [сессия 6.5] Если total_candidates == 0 → send_message (текст) → return
   ├─> Jinja2 render → HTML string (in-memory)
   ├─> WeasyPrint HTML(string=html).write_pdf() → bytes (in-memory, диск не используется)
   └─> bot.send_document(chat_id=TELEGRAM_HR_GROUP_ID, document=BufferedInputFile(pdf_bytes), caption=...)
+```
+
+## Empty digest branch
+
+Если за неделю не было ни одного кандидата с LLM-оценкой (`total_candidates == 0`),
+PDF не генерируется. Группа получает короткое text-сообщение:
+
+```
+📭 Weekly Digest DD.MM–DD.MM
+
+За неделю не было одобренных кандидатов (статус ✅ Подходит).
+Если что-то по работе — нажми на карточку в этой группе или напиши Лукину.
 ```
 
 ## Контекст шаблона
