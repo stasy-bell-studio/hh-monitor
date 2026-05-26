@@ -39,14 +39,22 @@ async def send_card(
     chat_id: int,
     html: str,
     keyboard: InlineKeyboardMarkup,
+    *,
+    message_thread_id: int | None = None,
 ) -> Message:
     try:
-        return await bot.send_message(chat_id=chat_id, text=html, reply_markup=keyboard)
+        return await bot.send_message(
+            chat_id=chat_id, text=html, reply_markup=keyboard,
+            message_thread_id=message_thread_id,
+        )
     except TelegramRetryAfter as e:
         logger.warning("tg_rate_limit", retry_after=e.retry_after)
         await asyncio.sleep(e.retry_after + 1)
         try:
-            return await bot.send_message(chat_id=chat_id, text=html, reply_markup=keyboard)
+            return await bot.send_message(
+                chat_id=chat_id, text=html, reply_markup=keyboard,
+                message_thread_id=message_thread_id,
+            )
         except TelegramRetryAfter:
             logger.warning("tg_rate_limit_second_attempt_failed", chat_id=chat_id)
             raise

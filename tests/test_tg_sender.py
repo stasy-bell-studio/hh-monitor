@@ -116,6 +116,8 @@ async def test_send_new_candidate_card_success(db_session: AsyncSession) -> None
         result = await send_new_candidate_card(db_session, bot, event_id)
 
     assert result is True
+    # Verify message_thread_id is passed for topic routing
+    assert "message_thread_id" in mock_send.call_args[1]
 
     ns = await db_session.get(NotificationSent, event_id)
     assert ns is not None

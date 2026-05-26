@@ -144,6 +144,7 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
         await bot.send_message(
             chat_id=settings.telegram_hr_group_id,
             text=_empty_digest_text(date_from, date_to),
+            message_thread_id=settings.telegram_digest_topic_id or None,
         )
         logger.info("weekly_digest_empty", week=week_num)
         return
@@ -165,5 +166,6 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
         chat_id=settings.telegram_hr_group_id,
         document=BufferedInputFile(pdf_bytes, filename=filename),
         caption=f"Еженедельный дайджест hh-monitor, неделя {week_num}",
+        message_thread_id=settings.telegram_digest_topic_id or None,
     )
     logger.info("weekly_digest_sent", week=week_num, filename=filename)
