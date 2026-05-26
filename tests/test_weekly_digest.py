@@ -184,7 +184,7 @@ async def test_run_weekly_digest_pdf_content() -> None:
 
     synthetic_data = {
         "positions": [],
-        "total_candidates": 0,
+        "total_candidates": 1,  # non-zero → PDF branch (not empty branch)
         "parser_stats": {
             "runs": 0,
             "snapshots_inserted": 0,

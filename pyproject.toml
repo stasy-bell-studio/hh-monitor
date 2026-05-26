@@ -48,6 +48,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 "hh_monitor/tg/cards.py" = ["RUF001"]
 "hh_monitor/tg/handlers.py" = ["RUF001"]
 "hh_monitor/tg/reasons.py" = ["RUF001"]
+"hh_monitor/weekly_digest/run.py" = ["RUF001"]
 # Russian-language LLM prompt constants — Cyrillic chars intentionally
 # look like Latin; long lines are deliberate (prose sent to the API).
 "hh_monitor/llm_enrich/prompt.py" = ["RUF001", "E501"]

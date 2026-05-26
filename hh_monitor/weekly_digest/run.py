@@ -122,6 +122,16 @@ async def _collect_data(
     }
 
 
+def _empty_digest_text(date_from: datetime, date_to: datetime) -> str:
+    d1 = date_from.strftime("%d.%m")
+    d2 = date_to.strftime("%d.%m")
+    return (
+        f"📭 Weekly Digest {d1}–{d2}\n\n"
+        "За неделю не было одобренных кандидатов (статус ✅ Подходит). "
+        "Если что-то по работе — нажми на карточку в этой группе или напиши Лукину."
+    )
+
+
 async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
     now = datetime.now(UTC)
     date_to = now
@@ -129,6 +139,14 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
     week_num = _week_number(now)
 
     data = await _collect_data(session, date_from, date_to)
+
+    if data["total_candidates"] == 0:
+        await bot.send_message(
+            chat_id=settings.telegram_hr_group_id,
+            text=_empty_digest_text(date_from, date_to),
+        )
+        logger.info("weekly_digest_empty", week=week_num)
+        return
 
     env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
     template = env.get_template("weekly_digest.html.j2")
