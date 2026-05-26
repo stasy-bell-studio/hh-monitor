@@ -48,6 +48,16 @@ class Search(Base):
         Text, nullable=False, default="", server_default=""
     )
 
+    # Session 8: search lifecycle management
+    archived_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_by_tg_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        Index("ix_searches_active_archived", "active", "archived_at"),
+    )
+
 
 class Resume(Base):
     __tablename__ = "resumes"

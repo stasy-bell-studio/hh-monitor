@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     telegram_admin_user_ids: str = ""
     telegram_score_threshold: int = Field(default=60, ge=0, le=100)
 
+    # Topic IDs for supergroup routing (0 = don't use topics)
+    telegram_cards_topic_id: int = 0
+    telegram_digest_topic_id: int = 0
+    telegram_admin_topic_id: int = 0
+
     # Weekly digest schedule (used as reference; actual scheduling via systemd timer in session 7)
     weekly_digest_cron: str = "0 15 * * 5"  # Friday 15:00
     weekly_digest_tz: str = "Europe/Moscow"
