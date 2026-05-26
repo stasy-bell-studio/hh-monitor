@@ -158,7 +158,8 @@ async def run_parser(
     hh_client: HHClient,
     search_id: int,
     max_pages: int = 5,
-    _sleep: float = 0.5,
+    _sleep: float = 1.5,
+    _page_sleep: float = 2.0,
 ) -> dict[str, Any]:
     """Fetch resume search results and persist snapshots.
 
@@ -168,7 +169,7 @@ async def run_parser(
          so it is durable before any snapshot work begins.
       3. Paginate GET /resumes (up to max_pages pages).
          For each resume in the result list:
-           - sleep(_sleep) for rate-limiting (2 req/sec at default 0.5 s).
+           - sleep(_sleep) for rate-limiting (~0.7 req/sec at default 1.5 s).
            - GET /resumes/{id} for the full payload.
            - On 404: store an empty snapshot {"id": resume_id} so the
              detector can emit REMOVED via diff_snapshots(prev=full, curr=empty).
@@ -287,6 +288,8 @@ async def run_parser(
 
             if abort_exc:
                 break
+
+            await asyncio.sleep(_page_sleep)
 
             if page >= total_pages - 1:
                 break

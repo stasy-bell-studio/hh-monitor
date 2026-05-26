@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import respx
@@ -88,8 +89,81 @@ async def test_429_with_retry_after() -> None:
             Response(429, headers={"Retry-After": "0"}),
         ]
     )
-    with pytest.raises(HHRateLimit):
+    sleep_mock = AsyncMock()
+    with patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock), patch(
+        "hh_monitor.hh.client.random.uniform", return_value=1.0
+    ), pytest.raises(HHRateLimit):
         await client.get("/me")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_429_retry_after_header_respected() -> None:
+    """Retry-After=2 → sleep clamped and multiplied by jitter."""
+    client = HHClient(
+        token_provider=_make_client()._token_provider, user_agent="test/1.0", max_retries=3
+    )
+    respx.get(f"{_BASE}/me").mock(
+        side_effect=[
+            Response(429, headers={"Retry-After": "2"}),
+            Response(200, json={"ok": True}),
+        ]
+    )
+    sleep_mock = AsyncMock()
+    with patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock), patch(
+        "hh_monitor.hh.client.random.uniform", return_value=1.0
+    ):
+        result = await client.get("/me")
+
+    assert result == {"ok": True}
+    assert sleep_mock.call_count == 1
+    assert sleep_mock.call_args[0][0] == pytest.approx(2.0)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_429_exponential_backoff_no_header() -> None:
+    """Without Retry-After, 3rd sleep (attempt index 2) uses 8s * jitter."""
+    client = HHClient(
+        token_provider=_make_client()._token_provider, user_agent="test/1.0", max_retries=6
+    )
+    respx.get(f"{_BASE}/me").mock(
+        side_effect=[
+            Response(429),
+            Response(429),
+            Response(429),
+            Response(200, json={"ok": True}),
+        ]
+    )
+    sleep_mock = AsyncMock()
+    with patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock), patch(
+        "hh_monitor.hh.client.random.uniform", return_value=1.0
+    ):
+        result = await client.get("/me")
+
+    assert result == {"ok": True}
+    assert sleep_mock.call_count == 3
+    # schedule: [2, 4, 8, 16, 30, 60]; 3rd call (index 2) → 8s
+    assert sleep_mock.call_args_list[2][0][0] == pytest.approx(8.0)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_429_exhausts_six_retries_then_raises() -> None:
+    """Six consecutive 429s consume all retries; 7th call raises HHRateLimit."""
+    client = HHClient(
+        token_provider=_make_client()._token_provider, user_agent="test/1.0", max_retries=6
+    )
+    respx.get(f"{_BASE}/me").mock(
+        side_effect=[Response(429)] * 7  # 1 initial + 6 retries
+    )
+    sleep_mock = AsyncMock()
+    with patch("hh_monitor.hh.client.asyncio.sleep", sleep_mock), patch(
+        "hh_monitor.hh.client.random.uniform", return_value=1.0
+    ), pytest.raises(HHRateLimit):
+        await client.get("/me")
+
+    assert sleep_mock.call_count == 6
 
 
 @respx.mock

@@ -1,4 +1,5 @@
 import asyncio
+import random
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -18,6 +19,7 @@ from hh_monitor.errors import (
 logger = structlog.get_logger(__name__)
 
 _BASE_URL = "https://api.hh.ru"
+_BACKOFF_SCHEDULE: list[int] = [2, 4, 8, 16, 30, 60]
 
 
 class HHClient:
@@ -26,12 +28,13 @@ class HHClient:
         token_provider: Callable[[], Awaitable[OAuthToken]],
         user_agent: str,
         base_url: str = _BASE_URL,
-        max_retries: int = 3,
+        max_retries: int = 6,
     ) -> None:
         self._token_provider = token_provider
         self._user_agent = user_agent
         self._base_url = base_url
         self._max_retries = max_retries
+        self._semaphore = asyncio.Semaphore(1)
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self._request("GET", path, params=params)
@@ -52,21 +55,24 @@ class HHClient:
         data: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
     ) -> Any:
-        url = f"{self._base_url}{path}"
-        token = await self._token_provider()
+        async with self._semaphore:
+            url = f"{self._base_url}{path}"
+            token = await self._token_provider()
 
-        async with httpx.AsyncClient() as http:
-            resp = await self._send(http, method, url, token, params, data, json)
-
-            # 401: refresh token once and retry
-            if resp.status_code == 401:
-                logger.info("Got 401, refreshing token and retrying", path=path)
-                token = await self._token_provider()
+            async with httpx.AsyncClient() as http:
                 resp = await self._send(http, method, url, token, params, data, json)
-                if resp.status_code == 401:
-                    raise HHOAuthError("Token invalid after refresh", 401, _body(resp))
 
-            return await self._handle_response(http, method, url, token, params, data, json, resp)
+                # 401: refresh token once and retry
+                if resp.status_code == 401:
+                    logger.info("Got 401, refreshing token and retrying", path=path)
+                    token = await self._token_provider()
+                    resp = await self._send(http, method, url, token, params, data, json)
+                    if resp.status_code == 401:
+                        raise HHOAuthError("Token invalid after refresh", 401, _body(resp))
+
+                return await self._handle_response(
+                    http, method, url, token, params, data, json, resp
+                )
 
     async def _handle_response(
         self,
@@ -113,20 +119,26 @@ class HHClient:
         resp: httpx.Response,
     ) -> Any:
         for attempt in range(self._max_retries):
-            retry_after = float(resp.headers.get("Retry-After", "1"))
+            retry_after_header = resp.headers.get("Retry-After")
+            if retry_after_header is not None:
+                base_wait = max(1.0, min(float(retry_after_header), 60.0))
+            else:
+                base_wait = float(_BACKOFF_SCHEDULE[min(attempt, len(_BACKOFF_SCHEDULE) - 1)])
+            total_wait = base_wait * random.uniform(0.8, 1.2)
             logger.warning(
                 "Rate limited, sleeping",
-                retry_after=retry_after,
+                total_wait_seconds=round(total_wait, 2),
                 attempt=attempt + 1,
                 max=self._max_retries,
             )
-            await asyncio.sleep(retry_after)
+            await asyncio.sleep(total_wait)
             resp = await self._send(http, method, url, token, params, data, json)
             if resp.status_code != 429:
                 return await self._handle_response(
                     http, method, url, token, params, data, json, resp
                 )
-        retry_after = float(resp.headers.get("Retry-After", "1"))
+        retry_after_raw = resp.headers.get("Retry-After")
+        retry_after = float(retry_after_raw) if retry_after_raw is not None else 0.0
         raise HHRateLimit(429, _body(resp), retry_after_seconds=retry_after)
 
     async def _handle_server_error(
