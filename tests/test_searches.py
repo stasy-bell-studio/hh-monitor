@@ -23,6 +23,7 @@ Commit 9 coverage:
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -30,6 +31,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hh_monitor.cli import _searches_add
 from hh_monitor.db.models import Search
 
 # ── The exact SQL used in migration ce22f1877924 ─────────────────────────────
@@ -189,3 +191,51 @@ async def test_position_code_allows_duplicates(db_session: AsyncSession) -> None
         .all()
     )
     assert len(rows) == 2, f"Expected 2 rows with position_code={shared_code!r}, got {len(rows)}"
+
+
+# ── Commit A2.2: --search-code option for searches add ───────────────────────
+
+
+def _make_session_factory(session: AsyncSession):  # type: ignore[no-untyped-def]
+    @asynccontextmanager
+    async def _cm() -> Any:
+        yield session
+
+    def _factory() -> Any:
+        return _cm()
+
+    return _factory
+
+
+_MINIMAL_PORTRAIT: dict[str, Any] = {
+    "position_code": "underwriter",
+    "position_name": "Андеррайтер",
+}
+
+
+@pytest.mark.asyncio
+async def test_searches_add_with_search_code(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_searches_add stores search_code when provided."""
+    monkeypatch.setattr("hh_monitor.cli.async_session_factory", _make_session_factory(db_session))
+    sid = await _searches_add(
+        "underwriter", "Андеррайтер", {}, _MINIMAL_PORTRAIT, "underwriter_21vek"
+    )
+    row = await db_session.get(Search, sid)
+    assert row is not None
+    assert row.search_code == "underwriter_21vek"
+
+
+@pytest.mark.asyncio
+async def test_searches_add_without_search_code(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_searches_add leaves search_code as None when not provided."""
+    monkeypatch.setattr("hh_monitor.cli.async_session_factory", _make_session_factory(db_session))
+    sid = await _searches_add("underwriter", "Андеррайтер", {}, _MINIMAL_PORTRAIT, None)
+    row = await db_session.get(Search, sid)
+    assert row is not None
+    assert row.search_code is None

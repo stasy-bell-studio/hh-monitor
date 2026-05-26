@@ -236,6 +236,9 @@ def searches_add(
         ..., "--portrait", "-p", help="Path to portrait JSON file"
     ),
     code: str | None = typer.Option(None, "--code", help="Unique position slug (auto from name)"),
+    search_code: str | None = typer.Option(
+        None, "--search-code", help="Semantic search identifier (e.g. underwriter_21vek)"
+    ),
 ) -> None:
     """Add a new saved search with its scoring portrait."""
     try:
@@ -253,7 +256,9 @@ def searches_add(
     position_code = code or _slugify(name)
     portrait_dict = portrait_obj.model_dump(mode="json")
 
-    search_id = asyncio.run(_searches_add(position_code, name, hh_params, portrait_dict))
+    search_id = asyncio.run(
+        _searches_add(position_code, name, hh_params, portrait_dict, search_code)
+    )
     typer.echo(f"Created search id={search_id} code={position_code}")
 
 
@@ -262,6 +267,7 @@ async def _searches_add(
     position_name: str,
     hh_params: dict,  # type: ignore[type-arg]
     portrait: dict,  # type: ignore[type-arg]
+    search_code: str | None = None,
 ) -> int:
     async with async_session_factory() as session:
         search = Search(
@@ -269,6 +275,7 @@ async def _searches_add(
             position_name=position_name,
             hh_params=hh_params,
             portrait=portrait,
+            search_code=search_code,
         )
         session.add(search)
         await session.flush()
