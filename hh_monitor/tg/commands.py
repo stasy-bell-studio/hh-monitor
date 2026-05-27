@@ -188,7 +188,6 @@ async def handle_admin_help(message: Message) -> None:
     await message.answer(
         help_text,
         reply_markup=_close_keyboard(),
-        message_thread_id=settings.telegram_admin_topic_id or None,
     )
 
 
@@ -224,8 +223,7 @@ async def handle_active(message: Message) -> None:
         await message.answer(
             "Нет активных или приостановленных поисков.",
             reply_markup=_close_keyboard(),
-            message_thread_id=settings.telegram_admin_topic_id or None,
-        )
+            )
         return
 
     for row in rows:
@@ -241,8 +239,7 @@ async def handle_active(message: Message) -> None:
         await message.answer(
             card_text,
             reply_markup=keyboard,
-            message_thread_id=settings.telegram_admin_topic_id or None,
-        )
+            )
         await asyncio.sleep(0.05)
 
 
@@ -274,8 +271,7 @@ async def handle_archive(message: Message) -> None:
         await message.answer(
             "Нет архивных поисков.",
             reply_markup=_close_keyboard(),
-            message_thread_id=settings.telegram_admin_topic_id or None,
-        )
+            )
         return
 
     for row in rows:
@@ -289,8 +285,7 @@ async def handle_archive(message: Message) -> None:
         await message.answer(
             card_text,
             reply_markup=keyboard,
-            message_thread_id=settings.telegram_admin_topic_id or None,
-        )
+            )
         await asyncio.sleep(0.05)
 
 
@@ -396,7 +391,6 @@ async def handle_stats(message: Message) -> None:
     await message.answer(
         stats_text,
         reply_markup=_close_keyboard(),
-        message_thread_id=settings.telegram_admin_topic_id or None,
     )
 
 
@@ -420,7 +414,6 @@ async def handle_settings(message: Message) -> None:
     await message.answer(
         settings_text,
         reply_markup=_settings_keyboard(),
-        message_thread_id=settings.telegram_admin_topic_id or None,
     )
 
 
