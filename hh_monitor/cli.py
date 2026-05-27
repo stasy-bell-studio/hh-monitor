@@ -521,6 +521,68 @@ def pipeline_run(
         raise typer.Exit(1) from exc
 
 
+@pipeline_app.command("run-all")
+def pipeline_run_all(
+    max_pages: int = typer.Option(5, "--max-pages", help="Maximum HH.ru pages to fetch per search"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="List searches that would run; perform no I/O"
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Process at most N searches this invocation"
+    ),
+    search_codes: str | None = typer.Option(
+        None,
+        "--search-codes",
+        help="Comma-separated allowlist of search_codes to run (default: all active)",
+    ),
+) -> None:
+    """Run parse→detect pipeline for all active searches, then flush pending TG cards.
+
+    Exit code: 0 if all searches succeeded (or no active searches); 1 if any failed.
+    """
+    from hh_monitor.pipeline.run_all import run_all
+
+    codes = (
+        [c.strip() for c in search_codes.split(",") if c.strip()]
+        if search_codes
+        else None
+    )
+    result = asyncio.run(
+        run_all(
+            async_session_factory,
+            max_pages=max_pages,
+            dry_run=dry_run,
+            limit=limit,
+            search_codes=codes,
+        )
+    )
+
+    if result.get("dry_run"):
+        if result["total"] == 0:
+            typer.echo("No active searches.")
+        else:
+            typer.echo(f"[dry-run] would process {result['total']} search(es):")
+            for sid, sc in result.get("would_run", []):
+                typer.echo(f"  id={sid} search_code={sc!r}")
+        raise typer.Exit(0)
+
+    if result["total"] == 0:
+        typer.echo("No active searches.")
+        raise typer.Exit(0)
+
+    typer.echo(
+        f"run-all done: total={result['total']} "
+        f"succeeded={result['succeeded']} failed={result['failed']} "
+        f"duration={result['duration_s']:.1f}s"
+    )
+    if result["skipped_codes"]:
+        typer.echo(f"Skipped (not found / inactive): {', '.join(result['skipped_codes'])}")
+    for f in result["failures"]:
+        typer.echo(f"  FAILED {f['search_code']}: {f['error']}", err=True)
+
+    raise typer.Exit(1 if result["failed"] > 0 else 0)
+
+
 _HH_RESUME_BASE = "https://hh.ru/resume"
 
 
