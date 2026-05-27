@@ -190,6 +190,8 @@ def derive_score_from_verdict(verdict: str) -> int:
 
 # Keywords that indicate a recognised verdict pattern (used to detect "truly unrecognised")
 _VERDICT_KEYWORDS = (
+    "стоп-сигнал",
+    "стоп сигнал",
     "мимо",
     "не рекомендую",
     "нужно интервью",
@@ -198,7 +200,12 @@ _VERDICT_KEYWORDS = (
     "рекомендую",
     "подходит",
 )
-_CLASS_TO_SCORE: dict[str, int] = {"мимо": 20, "спорно": 50, "подходит": 80}
+_CLASS_TO_SCORE: dict[str, int] = {
+    "мимо": 20,
+    "спорно": 50,
+    "подходит": 80,
+    "стоп-сигнал": 0,
+}
 
 
 def extract_llm_score(dossier: dict[str, Any], resume_id: str) -> int:
@@ -244,8 +251,10 @@ def extract_llm_score(dossier: dict[str, Any], resume_id: str) -> int:
 
 
 def derive_verdict_class(verdict: str) -> str:
-    """Map free-form verdict text → 'подходит' | 'спорно' | 'мимо'."""
+    """Map free-form verdict text → 'подходит' | 'спорно' | 'мимо' | 'стоп-сигнал'."""
     v = verdict.lower()
+    if "стоп-сигнал" in v or "стоп сигнал" in v:
+        return "стоп-сигнал"
     if "не рекомендую" in v or "мимо" in v:
         return "мимо"
     if "нужно интервью" in v or "нужна проверка" in v or "спорно" in v:

@@ -235,7 +235,15 @@ async def _enrich_one(
     # Derive numeric score + structured verdict class for backward compat (TG bot / digest)
     verdict_text: str = _coerce_text(dossier.get("verdict"))
     llm_score = extract_llm_score(dossier, resume_id)
-    llm_verdict_class = derive_verdict_class(verdict_text)
+
+    # Prefer the LLM's own verdict_class if it returned a valid enum value; otherwise derive.
+    _VALID_CLASSES = {"подходит", "спорно", "мимо", "стоп-сигнал"}
+    _raw_vc = dossier.get("verdict_class")
+    if isinstance(_raw_vc, str) and _raw_vc.lower().strip() in _VALID_CLASSES:
+        llm_verdict_class = _raw_vc.lower().strip()
+    else:
+        llm_verdict_class = derive_verdict_class(verdict_text)
+
     score_total = round(0.3 * fit_score_val + 0.7 * llm_score)
 
     log_ctx.info(
@@ -271,7 +279,8 @@ async def _enrich_one(
             llm_weak_spots=weak_text,
             llm_red_flags=red_text,
             llm_interview_questions=_safe_flat_list(dossier.get("interview_questions")),
-            llm_verdict=verdict_text,
+            llm_verdict=llm_verdict_class,       # enum only: подходит/спорно/мимо/стоп-сигнал
+            llm_verdict_text=verdict_text,        # full free-form LLM text
         )
     )
 

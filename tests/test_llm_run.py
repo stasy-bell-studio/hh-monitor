@@ -539,7 +539,74 @@ async def test_persist_dossier_to_db(db_session: Any, monkeypatch: pytest.Monkey
     assert event.llm_red_flags is not None and len(event.llm_red_flags) > 0
     assert isinstance(event.llm_interview_questions, list)
     assert len(event.llm_interview_questions) >= 1
-    assert event.llm_verdict is not None and len(event.llm_verdict) > 0
+    # llm_verdict must be enum only; full text is in llm_verdict_text
+    assert event.llm_verdict in ("подходит", "спорно", "мимо", "стоп-сигнал")
+    assert event.llm_verdict_text is not None and len(event.llm_verdict_text) > 0
+
+
+@pytest.mark.asyncio
+async def test_verdict_enum_and_full_text_split(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """events.llm_verdict = enum class; llm_verdict_text = full LLM verdict text.
+
+    Task requirement: LLM returns long verdict with 'не рекомендую' →
+      events.llm_verdict = "мимо"
+      events.llm_verdict_text = full text (длинный)
+    """
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, resume_id="r_vt", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    long_verdict = (
+        "Гипотеза мотивации: ищет более стабильную компанию после реструктуризации. "
+        "Не рекомендую — отсутствие ключевой экспертизы в андеррайтинге моторных видов."
+    )
+
+    import json as _json
+
+    response_with_long_verdict = {
+        "choices": [
+            {
+                "message": {
+                    "content": _json.dumps(
+                        {
+                            "real_role": "Специалист по ДМС без моторных видов",
+                            "facts_confirmed": "7 лет в ДМС.",
+                            "weak_spots": "Нет КАСКО/ОСАГО опыта.",
+                            "red_flags": "Только ДМС, нет моторных.",
+                            "interview_questions": ["Работали с КАСКО?"],
+                            "verdict": long_verdict,
+                            "score": 15,
+                            "verdict_class": "мимо",
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 80},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=response_with_long_verdict,
+    ):
+        result = await run_llm_enrichment(
+            db_session, search.id, limit=1, portraits=portraits, global_ctx=_global_ctx()
+        )
+
+    assert result["enriched"] == 1
+
+    await db_session.refresh(event)
+    # Enum stored in llm_verdict
+    assert event.llm_verdict == "мимо"
+    # Full text stored in llm_verdict_text
+    assert event.llm_verdict_text == long_verdict
+    # Score from JSON field
+    await db_session.refresh(resume)
+    assert resume.llm_score == 15
+    assert resume.llm_verdict == "мимо"
 
 
 @pytest.mark.asyncio
@@ -570,7 +637,10 @@ async def test_invalid_json_fallback(db_session: Any, monkeypatch: pytest.Monkey
     assert result["enriched"] == 1
 
     await db_session.refresh(event)
-    assert event.llm_verdict == "Это точно не JSON, просто текст."
+    # llm_verdict is now enum-only; non-JSON raw text → derive_verdict_class default → "спорно"
+    assert event.llm_verdict == "спорно"
+    # The raw text is preserved in llm_verdict_text
+    assert event.llm_verdict_text == "Это точно не JSON, просто текст."
     # _coerce_text(None) → "" — Text columns receive empty string, not NULL
     assert event.llm_facts_confirmed == ""
     assert event.llm_weak_spots == ""

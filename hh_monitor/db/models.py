@@ -150,6 +150,8 @@ class Event(Base):
     llm_red_flags: Mapped[str | None] = mapped_column(Text, nullable=True)
     llm_interview_questions: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     llm_verdict: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Full free-form LLM verdict text (session 8.5+). llm_verdict stores enum only.
+    llm_verdict_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index(
