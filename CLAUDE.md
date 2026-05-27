@@ -121,8 +121,9 @@
 
 ## Sprint state
 
-- Сессия 8 closed (2026-05-26): TG Control Panel + Topic Routing live.
-  - Новые файлы: `hh_monitor/tg/commands.py`, `tests/tg/conftest.py`, `tests/tg/test_commands.py`, миграция `20260526130420`.
-  - Изменены: `config.py` (+3 topic ID), `db/models.py` (archived_at, created_by_tg_user_id), `tg/client.py` (get_session_factory, message_thread_id), `tg/handlers.py`, `weekly_digest/run.py`, `cli.py`.
-  - Тестов: 451 (было 419, +32).
+- Сессия 8.1 closed (2026-05-27): hotfix TG Control Panel.
+  - Commits: de95ecf, 2e8e8e1, 3c0207b.
+  - Фиксы: bot subscript TypeError → module-level `_session_factory`; router order (admin_router first); `message_thread_id` duplicate kwarg в aiogram 3.28.
+  - Добавлен `register_tg_routers(dp)` в `client.py`.
+  - Тестов: 453 (было 451, +2).
   - Следующая сессия: Сессия 7 — deployment (systemd, .env, server setup); или Сессия 9 — adm:detail подробная статистика.
