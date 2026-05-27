@@ -906,3 +906,146 @@ async def test_coerce_list_fields_to_str(db_session: Any, monkeypatch: pytest.Mo
     assert event.llm_facts_confirmed == ""  # None → ""
     assert isinstance(event.llm_interview_questions, list)
     assert event.llm_interview_questions == ["Q1", "Q2"]
+
+
+@pytest.mark.asyncio
+async def test_nested_list_red_flags_does_not_crash(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """red_flags=[["nested","list"]] must not crash; flattened to a string."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, _resume, event = await _seed_db(db_session, resume_id="r_nested_rf", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    import json as _json
+
+    nested_rf_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": _json.dumps(
+                        {
+                            "real_role": "Тест",
+                            "facts_confirmed": "Факты.",
+                            "weak_spots": "Слабые.",
+                            "red_flags": [["nested", "list"]],
+                            "interview_questions": ["Вопрос?"],
+                            "verdict": "Рекомендую.",
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=nested_rf_response,
+    ):
+        result = await run_llm_enrichment(
+            db_session, search.id, limit=1, portraits=portraits, global_ctx=_global_ctx()
+        )
+
+    assert result["enriched"] == 1
+    await db_session.refresh(event)
+    # _coerce_text flattens via str(x): the nested list becomes a non-empty string
+    assert isinstance(event.llm_red_flags, str)
+    assert "nested" in event.llm_red_flags
+
+
+@pytest.mark.asyncio
+async def test_dict_weak_spots_does_not_crash(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """weak_spots={"a":"b"} must not crash; coerced to str."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, _resume, event = await _seed_db(db_session, resume_id="r_dict_ws", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    import json as _json
+
+    dict_ws_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": _json.dumps(
+                        {
+                            "real_role": "Тест",
+                            "facts_confirmed": "Факты.",
+                            "weak_spots": {"проблема": "нет опыта КАСКО"},
+                            "red_flags": "Смена работы.",
+                            "interview_questions": ["Вопрос?"],
+                            "verdict": "Не рекомендую.",
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=dict_ws_response,
+    ):
+        result = await run_llm_enrichment(
+            db_session, search.id, limit=1, portraits=portraits, global_ctx=_global_ctx()
+        )
+
+    assert result["enriched"] == 1
+    await db_session.refresh(event)
+    assert isinstance(event.llm_weak_spots, str)
+    assert "нет опыта" in event.llm_weak_spots
+
+
+@pytest.mark.asyncio
+async def test_nested_interview_questions_flattened(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """interview_questions=[["Q1","Q2"],"Q3"] is flattened to ["Q1 Q2","Q3"]."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, _resume, event = await _seed_db(db_session, resume_id="r_nested_iq", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    import json as _json
+
+    nested_iq_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": _json.dumps(
+                        {
+                            "real_role": "Тест",
+                            "facts_confirmed": "Факты.",
+                            "weak_spots": "Слабые.",
+                            "red_flags": "Флаги.",
+                            "interview_questions": [["Q1", "Q2"], "Q3"],
+                            "verdict": "Рекомендую.",
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=nested_iq_response,
+    ):
+        result = await run_llm_enrichment(
+            db_session, search.id, limit=1, portraits=portraits, global_ctx=_global_ctx()
+        )
+
+    assert result["enriched"] == 1
+    await db_session.refresh(event)
+    iq = event.llm_interview_questions
+    assert isinstance(iq, list), f"Expected list, got {type(iq)}"
+    # All elements must be strings after flattening
+    assert all(isinstance(x, str) for x in iq)
+    assert any("Q1" in x for x in iq)
+    assert "Q3" in iq

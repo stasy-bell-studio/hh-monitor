@@ -48,7 +48,7 @@ _INTER_CALL_DELAY = 0.5
 def _coerce_text(v: object) -> str:
     """Coerce a dossier value to str for Text DB columns.
 
-    LLM may return any field as a JSON array; joining with newlines keeps content intact.
+    LLM may return any field as list, list[list], or dict; all are coerced to str.
     None → empty string (column never receives NULL from this path).
     """
     if v is None:
@@ -58,6 +58,43 @@ def _coerce_text(v: object) -> str:
     if isinstance(v, str):
         return v
     return str(v)
+
+
+def _safe_flat_list(v: object) -> list[str] | None:
+    """Normalise any LLM-returned value to flat list[str] | None for JSONB storage.
+
+    Handles: None → None; str → [str]; list[str] → unchanged;
+    list[list] → inner list joined with space; dict → [str(dict)].
+    Non-str elements are coerced with a one-time warning per call.
+    """
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return [v] if v.strip() else None
+    if isinstance(v, dict):
+        log.warning("llm_enrich.flat_list_unexpected_dict", value_preview=str(v)[:80])
+        return [str(v)]
+    if isinstance(v, list):
+        flat: list[str] = []
+        warned = False
+        for item in v:
+            if isinstance(item, str):
+                flat.append(item)
+            else:
+                if not warned:
+                    log.warning(
+                        "llm_enrich.flat_list_nested_element",
+                        item_type=type(item).__name__,
+                    )
+                    warned = True
+                if isinstance(item, list):
+                    joined = " ".join(str(x) for x in item)
+                    if joined:
+                        flat.append(joined)
+                else:
+                    flat.append(str(item))
+        return flat or None
+    return [str(v)]
 
 
 async def _latest_snapshot(
@@ -210,20 +247,19 @@ async def _enrich_one(
         from_cache=from_cache,
     )
 
-    # Build a short TG-bot-friendly comment from dossier facts + verdict
-    facts = dossier.get("facts_confirmed") or ""
-    comment_parts: list[str] = []
-    if facts:
-        comment_parts.append(facts[:300])
-    if verdict_text:
-        comment_parts.append(f"Вердикт: {verdict_text[:150]}")
-    llm_comment = "\n\n".join(comment_parts)[:500]
-
-    # Coerce all text dossier fields — LLM may return a JSON array for any field.
+    # Coerce all text dossier fields — LLM may return list, list[list], or dict.
     facts_text = _coerce_text(dossier.get("facts_confirmed"))
     weak_text = _coerce_text(dossier.get("weak_spots"))
     red_text = _coerce_text(dossier.get("red_flags"))
     red_flags_list: list[str] = [red_text] if red_text else []
+
+    # Build a short TG-bot-friendly comment from dossier facts + verdict
+    comment_parts: list[str] = []
+    if facts_text:
+        comment_parts.append(facts_text[:300])
+    if verdict_text:
+        comment_parts.append(f"Вердикт: {verdict_text[:150]}")
+    llm_comment = "\n\n".join(comment_parts)[:500]
 
     # 7. Persist dossier fields to Event + backward-compat fields to Resume
     await session.execute(
@@ -234,7 +270,7 @@ async def _enrich_one(
             llm_facts_confirmed=facts_text,
             llm_weak_spots=weak_text,
             llm_red_flags=red_text,
-            llm_interview_questions=dossier.get("interview_questions"),
+            llm_interview_questions=_safe_flat_list(dossier.get("interview_questions")),
             llm_verdict=verdict_text,
         )
     )

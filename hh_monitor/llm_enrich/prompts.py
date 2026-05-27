@@ -6,7 +6,11 @@ Two-part system prompt:
             stored in searches.llm_critic_prompt.
 
 build_full_prompt(critic_lens) assembles the final system prompt.
-parse_dossier(raw) parses the 5-field JSON response from DeepSeek.
+parse_dossier(raw) parses the 8-field JSON response from DeepSeek (v3 schema).
+
+v3 schema adds two machine-readable fields to the 6 original:
+  score        — integer 0-100, explicit numeric rating.
+  verdict_class — one of "подходит" | "спорно" | "мимо" | "стоп-сигнал".
 """
 
 from __future__ import annotations
@@ -39,13 +43,15 @@ UNIVERSAL_CRITIC_PROMPT = """\
 «зарекомендовал себя», «эффективно управлял» — без конкретной цифры/факта рядом. \
 Если использовал такую фразу без подтверждения — самопроверка перед выводом, замени или удали.
 
-Структура ответа: ровно JSON с 6 полями:
+Структура ответа: ровно JSON с 8 полями:
   "real_role" — одной строкой реальная роль кандидата по совокупности опыта (должности, цифры, P&L, штат, число подчинённых), а не по заголовку резюме. Без воды, ≤120 символов.
   "facts_confirmed" — что подтверждено фактами из резюме (даты, должности, цифры, география).
   "weak_spots" — слабые места и что не подтверждено (пробелы, размытые формулировки, отсутствие KPI/P&L/штата/цифр).
   "red_flags" — красные флаги и несостыковки (сроки <1.5 года, понижения, разрывы, скачки индустрий).
-  "interview_questions" — массив из 3–5 точечных вопросов на разрыв красных флагов.
+  "interview_questions" — массив строк из 3–5 точечных вопросов на разрыв красных флагов.
   "verdict" — прямой вердикт. Внутри — гипотеза мотивации перехода одной строкой + итог: рекомендую / не рекомендую / нужно интервью с проверкой.
+  "score" — целое число от 0 до 100: числовая оценка кандидата. 0–29 = мимо, 30–59 = спорно, 60–79 = нужно интервью, 80–100 = рекомендую. Обязательное поле.
+  "verdict_class" — ровно одно значение из: "подходит", "спорно", "мимо", "стоп-сигнал". Обязательное поле.
 
 Никакого предисловия, никакой обёртки в ```json блок, никаких пояснений после JSON.
 Объём: 200–400 слов суммарно по всем полям."""
@@ -117,15 +123,34 @@ def parse_dossier(raw: str) -> dict[str, Any]:
             "verdict": raw,
         }
 
-    # Normalise interview_questions: accept string → split, or list
+    # Normalise interview_questions: accept string → split, list → flatten nested, else None.
     iq = data.get("interview_questions")
     if isinstance(iq, str):
         iq = _split_numbered_list(iq) or [iq]
-        data["interview_questions"] = iq
-    elif not isinstance(iq, list):
-        data["interview_questions"] = None
+    elif isinstance(iq, list):
+        flat_iq: list[str] = []
+        warned_iq = False
+        for item in iq:
+            if isinstance(item, str):
+                flat_iq.append(item)
+            else:
+                if not warned_iq:
+                    log.warning(
+                        "llm_enrich.interview_questions_nested",
+                        item_type=type(item).__name__,
+                    )
+                    warned_iq = True
+                if isinstance(item, list):
+                    flat_iq.extend(str(x) for x in item)
+                else:
+                    flat_iq.append(str(item))
+        iq = flat_iq or None
+    else:
+        iq = None
+    data["interview_questions"] = iq
 
-    # Ensure all 6 keys exist (real_role → "", others → None)
+    # Ensure all 6 core keys exist (real_role → "", others → None).
+    # score / verdict_class — kept as-is if LLM included them.
     for key in ("facts_confirmed", "weak_spots", "red_flags", "interview_questions", "verdict"):
         data.setdefault(key, None)
     data.setdefault("real_role", "")

@@ -57,3 +57,21 @@ def test_extract_score_verdict_class_field_takes_priority() -> None:
     """dossier.verdict_class field (if string) is used before verdict text."""
     dossier = {"verdict_class": "мимо", "verdict": "Рекомендую."}
     assert extract_llm_score(dossier, "r_vc") == 20
+
+
+def test_extract_score_string_coercion() -> None:
+    """score returned as string '65' is coerced to int 65."""
+    dossier = {"score": "65", "verdict": "рекомендую"}
+    assert extract_llm_score(dossier, "r_str") == 65
+
+
+def test_extract_score_verdict_class_sporno() -> None:
+    """No score, verdict_class='спорно' → 50."""
+    dossier = {"verdict_class": "спорно", "verdict": "нечто нейтральное"}
+    assert extract_llm_score(dossier, "r_sp2") == 50
+
+
+def test_extract_score_no_verdict_class_nujno_intervyu() -> None:
+    """No score, no verdict_class, verdict text 'нужно интервью' → 50."""
+    dossier = {"verdict": "Нужно интервью для проверки фактов."}
+    assert extract_llm_score(dossier, "r_nvc") == 50
