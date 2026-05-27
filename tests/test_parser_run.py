@@ -504,3 +504,45 @@ async def test_unexpected_exception_marks_failed(db_session: AsyncSession) -> No
     assert pr.snapshots_inserted == 2
     # All three items were returned from the search page before the per-item loop.
     assert pr.resumes_seen == 3
+
+
+# ── Test N: inactive / archived guard ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_parser_skips_inactive_search(db_session: AsyncSession) -> None:
+    """run_parser raises SearchNotFoundError when search.active=FALSE."""
+    s = Search(
+        position_code="inactive_pos",
+        position_name="Inactive",
+        hh_params={"text": "test"},
+        portrait=_PORTRAIT,
+        active=False,
+    )
+    db_session.add(s)
+    await db_session.flush()
+    search_id: int = s.id
+
+    with pytest.raises(SearchNotFoundError, match="inactive or archived"):
+        await run_parser(db_session, _client(), search_id=search_id, max_pages=1, _sleep=0)
+
+
+@pytest.mark.asyncio
+async def test_parser_skips_archived_search(db_session: AsyncSession) -> None:
+    """run_parser raises SearchNotFoundError when search.archived_at is set."""
+    from datetime import UTC, datetime
+
+    s = Search(
+        position_code="archived_pos",
+        position_name="Archived",
+        hh_params={"text": "test"},
+        portrait=_PORTRAIT,
+        active=False,
+        archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    db_session.add(s)
+    await db_session.flush()
+    search_id: int = s.id
+
+    with pytest.raises(SearchNotFoundError, match="inactive or archived"):
+        await run_parser(db_session, _client(), search_id=search_id, max_pages=1, _sleep=0)

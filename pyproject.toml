@@ -47,6 +47,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 # Russian UI strings (button labels, help text) — Cyrillic intentional.
 "hh_monitor/tg/cards.py" = ["RUF001"]
 "hh_monitor/tg/commands.py" = ["RUF001"]
+"hh_monitor/tg/control_panel.py" = ["RUF001"]
 "hh_monitor/tg/handlers.py" = ["RUF001"]
 "hh_monitor/tg/reasons.py" = ["RUF001"]
 "hh_monitor/weekly_digest/run.py" = ["RUF001"]

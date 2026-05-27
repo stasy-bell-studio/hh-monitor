@@ -192,6 +192,8 @@ async def run_parser(
     search = await session.get(Search, search_id)
     if search is None:
         raise SearchNotFoundError(f"Search id={search_id} not found")
+    if not search.active or search.archived_at is not None:
+        raise SearchNotFoundError(f"Search id={search_id} is inactive or archived")
 
     log = logger.bind(search_id=search_id)
     # Capture search params and portrait before the early commit expires the ORM object.

@@ -287,6 +287,90 @@ async def _searches_add(
         return search_id
 
 
+@searches_app.command("deactivate")
+def searches_deactivate(
+    search_id: int = typer.Argument(..., help="ID of the search to deactivate"),
+) -> None:
+    """Pause a search (sets active=FALSE). Parser will skip it on next run."""
+    asyncio.run(_searches_deactivate(search_id))
+
+
+async def _searches_deactivate(search_id: int) -> None:
+    from sqlalchemy import text
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(
+                "UPDATE searches SET active = FALSE"
+                " WHERE id = :id AND archived_at IS NULL RETURNING id"
+            ),
+            {"id": search_id},
+        )
+        rows = result.fetchall()
+        await session.commit()
+
+    if not rows:
+        typer.echo(f"Error: search id={search_id} not found or already archived", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Search id={search_id} deactivated.")
+
+
+@searches_app.command("activate")
+def searches_activate(
+    search_id: int = typer.Argument(..., help="ID of the search to activate"),
+) -> None:
+    """Resume a paused search (sets active=TRUE)."""
+    asyncio.run(_searches_activate(search_id))
+
+
+async def _searches_activate(search_id: int) -> None:
+    from sqlalchemy import text
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(
+                "UPDATE searches SET active = TRUE"
+                " WHERE id = :id AND archived_at IS NULL RETURNING id"
+            ),
+            {"id": search_id},
+        )
+        rows = result.fetchall()
+        await session.commit()
+
+    if not rows:
+        typer.echo(f"Error: search id={search_id} not found or already archived", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Search id={search_id} activated.")
+
+
+@searches_app.command("archive")
+def searches_archive(
+    search_id: int = typer.Argument(..., help="ID of the search to archive (irreversible)"),
+) -> None:
+    """Archive a search permanently (sets archived_at=NOW(), active=FALSE)."""
+    asyncio.run(_searches_archive(search_id))
+
+
+async def _searches_archive(search_id: int) -> None:
+    from sqlalchemy import text
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(
+                "UPDATE searches SET archived_at = NOW(), active = FALSE"
+                " WHERE id = :id AND archived_at IS NULL RETURNING id"
+            ),
+            {"id": search_id},
+        )
+        rows = result.fetchall()
+        await session.commit()
+
+    if not rows:
+        typer.echo(f"Error: search id={search_id} not found or already archived", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Search id={search_id} archived.")
+
+
 @searches_app.command("list")
 def searches_list() -> None:
     """List all saved searches."""

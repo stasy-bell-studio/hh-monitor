@@ -52,10 +52,17 @@ def get_session_factory() -> SessionFactory:
 
 
 def register_tg_routers(dp: Dispatcher) -> None:
-    """Include TG routers in the correct order. admin_router must come first."""
+    """Include TG routers in the correct order.
+
+    cp_router goes first (private-chat only, no interference with group routing).
+    admin_router must precede the general screening router.
+    """
     # Lazy imports to avoid circular dependency (commands/handlers import from client).
     from hh_monitor.tg.commands import admin_router
+    from hh_monitor.tg.control_panel import cp_router
     from hh_monitor.tg.handlers import router
+
+    dp.include_router(cp_router)
     dp.include_router(admin_router)
     dp.include_router(router)
 
@@ -70,7 +77,9 @@ async def send_card(
 ) -> Message:
     try:
         return await bot.send_message(
-            chat_id=chat_id, text=html, reply_markup=keyboard,
+            chat_id=chat_id,
+            text=html,
+            reply_markup=keyboard,
             message_thread_id=message_thread_id,
         )
     except TelegramRetryAfter as e:
@@ -78,7 +87,9 @@ async def send_card(
         await asyncio.sleep(e.retry_after + 1)
         try:
             return await bot.send_message(
-                chat_id=chat_id, text=html, reply_markup=keyboard,
+                chat_id=chat_id,
+                text=html,
+                reply_markup=keyboard,
                 message_thread_id=message_thread_id,
             )
         except TelegramRetryAfter:
