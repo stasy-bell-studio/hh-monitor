@@ -80,7 +80,7 @@ async def handle_screen_callback(callback: CallbackQuery) -> None:
     user_id = user.id
     username = user.username or user.full_name
 
-    factory = get_session_factory(callback.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(
             text(
@@ -148,7 +148,7 @@ async def handle_reason_callback(callback: CallbackQuery) -> None:
 
     user_id = user.id
     username = user.username or user.full_name
-    factory = get_session_factory(callback.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
 
     if reason_code == CUSTOM_CODE:
         # Transition to custom input via ForceReply
@@ -235,7 +235,7 @@ async def handle_back_callback(callback: CallbackQuery) -> None:
         await callback.answer("Не удалось определить пользователя", show_alert=True)
         return
 
-    factory = get_session_factory(callback.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
 
     async with factory() as session:
         ns = await session.get(NotificationSent, event_id)
@@ -302,7 +302,7 @@ async def handle_custom_reason_message(message: Message) -> None:
         return
 
     username = user.username or user.full_name
-    factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
 
     _INSERT_CUSTOM = (
         "INSERT INTO screening_reasons "
@@ -349,7 +349,7 @@ async def handle_custom_reason_message(message: Message) -> None:
 
 @router.message(Command("threshold"))
 async def handle_threshold(message: Message) -> None:
-    factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
     text_arg = (message.text or "").strip()
     parts = text_arg.split(maxsplit=1)
     arg = parts[1].strip() if len(parts) > 1 else ""
@@ -398,7 +398,7 @@ async def handle_digest(message: Message) -> None:
             run_weekly_digest,
         )
 
-        factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+        factory = get_session_factory()
         bot_obj: Bot = message.bot  # type: ignore[assignment]
         async with factory() as session:
             await run_weekly_digest(session, bot_obj)
@@ -407,7 +407,7 @@ async def handle_digest(message: Message) -> None:
 
     # quick digest: top-5 candidates in last 24h
     since = datetime.now(UTC) - timedelta(hours=24)
-    factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
     async with factory() as session:
         stmt = (
             select(Event, Resume, Search)

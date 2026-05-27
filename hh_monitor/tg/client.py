@@ -38,11 +38,26 @@ def is_admin(user_id: int) -> bool:
 # Type alias for the session factory injected at startup
 SessionFactory = async_sessionmaker[AsyncSession]
 
+_session_factory: SessionFactory | None = None
 
-def get_session_factory(bot: Bot) -> SessionFactory:
-    """Retrieve the session factory from the bot's dispatcher context."""
-    factory: SessionFactory = bot["session_factory"]  # type: ignore[index]
-    return factory
+
+def set_session_factory(factory: SessionFactory) -> None:
+    global _session_factory
+    _session_factory = factory
+
+
+def get_session_factory() -> SessionFactory:
+    assert _session_factory is not None, "set_session_factory() must be called before handlers run"
+    return _session_factory
+
+
+def register_tg_routers(dp: Dispatcher) -> None:
+    """Include TG routers in the correct order. admin_router must come first."""
+    # Lazy imports to avoid circular dependency (commands/handlers import from client).
+    from hh_monitor.tg.commands import admin_router
+    from hh_monitor.tg.handlers import router
+    dp.include_router(admin_router)
+    dp.include_router(router)
 
 
 async def send_card(

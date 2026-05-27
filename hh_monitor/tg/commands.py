@@ -216,7 +216,7 @@ _ACTIVE_SQL = """
 
 @admin_router.message(Command("active"))
 async def handle_active(message: Message) -> None:
-    factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
     async with factory() as session:
         rows = (await session.execute(text(_ACTIVE_SQL))).fetchall()
 
@@ -266,7 +266,7 @@ _ARCHIVE_SQL = """
 
 @admin_router.message(Command("archive"))
 async def handle_archive(message: Message) -> None:
-    factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
     async with factory() as session:
         rows = (await session.execute(text(_ARCHIVE_SQL))).fetchall()
 
@@ -347,7 +347,7 @@ _STATS_TOP_REASONS_SQL = """
 
 @admin_router.message(Command("stats"))
 async def handle_stats(message: Message) -> None:
-    factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
     async with factory() as session:
         periods = (await session.execute(text(_STATS_PERIODS_SQL))).fetchone()
         top_pos = (await session.execute(text(_STATS_TOP_POSITIONS_SQL))).fetchall()
@@ -405,7 +405,7 @@ async def handle_stats(message: Message) -> None:
 
 @admin_router.message(Command("settings"))
 async def handle_settings(message: Message) -> None:
-    factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
     async with factory() as session:
         threshold = await get_current_threshold(session)
 
@@ -470,7 +470,7 @@ async def handle_threshold_reply(message: Message) -> None:
         await message.reply("Порог должен быть числом от 0 до 100, попробуй ещё раз")
         return
 
-    factory = get_session_factory(message.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
     async with factory() as session:
         old_val = await get_current_threshold(session)
         await upsert_app_config(session, "telegram_score_threshold", str(new_val))
@@ -502,7 +502,7 @@ async def handle_stop(callback: CallbackQuery) -> None:
         return
 
     search_id = int((callback.data or "").split(":", 2)[2])
-    factory = get_session_factory(callback.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
 
     async with factory() as session:
         result = await session.execute(
@@ -545,7 +545,7 @@ async def handle_resume(callback: CallbackQuery) -> None:
         return
 
     search_id = int((callback.data or "").split(":", 2)[2])
-    factory = get_session_factory(callback.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
 
     async with factory() as session:
         result = await session.execute(
@@ -588,7 +588,7 @@ async def handle_archive_request(callback: CallbackQuery) -> None:
         return
 
     search_id = int((callback.data or "").split(":", 2)[2])
-    factory = get_session_factory(callback.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
 
     async with factory() as session:
         name_row = (
@@ -615,7 +615,7 @@ async def handle_confirm_archive(callback: CallbackQuery) -> None:
         return
 
     search_id = int((callback.data or "").split(":", 2)[2])
-    factory = get_session_factory(callback.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
 
     async with factory() as session:
         result = await session.execute(
@@ -649,7 +649,7 @@ async def handle_cancel_archive(callback: CallbackQuery) -> None:
         return
 
     search_id = int((callback.data or "").split(":", 2)[2])
-    factory = get_session_factory(callback.bot)  # type: ignore[arg-type]
+    factory = get_session_factory()
 
     async with factory() as session:
         row = await _fetch_active_row(session, search_id)

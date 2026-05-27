@@ -1123,16 +1123,19 @@ def tg_run() -> None:
     """Start the Telegram bot in long-polling mode."""
     import asyncio as _asyncio
 
-    from hh_monitor.tg.client import make_bot, make_dispatcher
-    from hh_monitor.tg.commands import admin_router, register_admin_commands
-    from hh_monitor.tg.handlers import router
+    from hh_monitor.tg.client import (
+        make_bot,
+        make_dispatcher,
+        register_tg_routers,
+        set_session_factory,
+    )
+    from hh_monitor.tg.commands import register_admin_commands
 
     async def _run() -> None:
         bot = make_bot()
         dp = make_dispatcher()
-        dp.include_router(router)
-        dp.include_router(admin_router)
-        dp["session_factory"] = async_session_factory
+        set_session_factory(async_session_factory)
+        register_tg_routers(dp)
         await register_admin_commands(bot)
         await dp.start_polling(bot)
 

@@ -250,7 +250,10 @@ async def test_threshold_no_arg_replies_current() -> None:
 async def test_threshold_set_non_admin_rejected() -> None:
     msg = _make_message("/threshold 75", user_id=999)
 
-    with patch("hh_monitor.tg.handlers.is_admin", return_value=False):
+    with (
+        patch("hh_monitor.tg.handlers.is_admin", return_value=False),
+        patch("hh_monitor.tg.handlers.get_session_factory"),
+    ):
         await handle_threshold(msg)  # type: ignore[arg-type]
 
     msg.reply.assert_called_once()
@@ -283,7 +286,10 @@ async def test_threshold_set_admin_accepted() -> None:
 async def test_threshold_set_out_of_range_rejected() -> None:
     msg = _make_message("/threshold 200", user_id=1)
 
-    with patch("hh_monitor.tg.handlers.is_admin", return_value=True):
+    with (
+        patch("hh_monitor.tg.handlers.is_admin", return_value=True),
+        patch("hh_monitor.tg.handlers.get_session_factory"),
+    ):
         await handle_threshold(msg)  # type: ignore[arg-type]
 
     msg.reply.assert_called_once()
