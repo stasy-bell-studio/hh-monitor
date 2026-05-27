@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiogram.types import Update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.tg.commands import (
@@ -712,3 +713,73 @@ async def test_threshold_reply_ttl_expired() -> None:
     assert user_id not in _threshold_fsm
     msg.reply.assert_called_once()
     assert "истекла" in msg.reply.call_args[0][0]
+
+
+# ── Router registration order regression tests ────────────────────────────────
+
+
+def test_admin_router_registered_first() -> None:
+    """Regression: swapping include_router order breaks admin /help routing.
+
+    Inspects the source of register_tg_routers to confirm admin_router is
+    included before router. No side effects on global router state.
+    """
+    import inspect
+
+    from hh_monitor.tg.client import register_tg_routers
+
+    src = inspect.getsource(register_tg_routers)
+    admin_call = "include_router(admin_router)"
+    general_call = "include_router(router)"
+
+    assert admin_call in src, f"'{admin_call}' not found in register_tg_routers"
+    assert general_call in src, f"'{general_call}' not found in register_tg_routers"
+    assert src.index(admin_call) < src.index(general_call), (
+        "admin_router must be included before router so /help in ADMIN_TOPIC "
+        "hits the new handler, not the old one in router"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_router_wins_help_in_admin_topic() -> None:
+    """admin_router first + AdminTopicFilter: /help in admin topic hits admin handler."""
+    from unittest.mock import patch as _patch
+
+    from aiogram import Dispatcher
+    from aiogram.types import Message
+
+    from hh_monitor.tg.client import register_tg_routers
+
+    _ADMIN_TOPIC_ID = 7
+
+    dp = Dispatcher()
+    register_tg_routers(dp)
+
+    bot = AsyncMock()
+    bot.id = 42
+
+    update = Update.model_validate({
+        "update_id": 1,
+        "message": {
+            "message_id": 1,
+            "from": {"id": 100, "is_bot": False, "first_name": "Admin"},
+            "chat": {"id": -1001, "type": "supergroup", "title": "HR"},
+            "message_thread_id": _ADMIN_TOPIC_ID,
+            "date": 1234567890,
+            "text": "/help",
+            "entities": [{"type": "bot_command", "offset": 0, "length": 5}],
+        },
+    })
+
+    with (
+        patch("hh_monitor.tg.commands.settings") as ms,
+        patch("hh_monitor.tg.commands.is_admin", return_value=True),
+        _patch.object(Message, "answer", new_callable=AsyncMock) as mock_answer,
+    ):
+        ms.telegram_admin_topic_id = _ADMIN_TOPIC_ID
+        await dp.feed_update(bot, update)
+
+    mock_answer.assert_called_once()
+    sent_text: str = mock_answer.call_args[0][0]
+    assert "/active" in sent_text, "Expected admin help card"
+    assert "/threshold" not in sent_text, "Old help card must not appear"
