@@ -34,8 +34,8 @@ from hh_monitor.llm_enrich.prompt import build_messages
 from hh_monitor.llm_enrich.prompts import (
     build_full_prompt,
     check_forbidden_phrases,
-    derive_score_from_verdict,
     derive_verdict_class,
+    extract_llm_score,
     parse_dossier,
 )
 
@@ -197,7 +197,7 @@ async def _enrich_one(
 
     # Derive numeric score + structured verdict class for backward compat (TG bot / digest)
     verdict_text: str = _coerce_text(dossier.get("verdict"))
-    llm_score = derive_score_from_verdict(verdict_text)
+    llm_score = extract_llm_score(dossier, resume_id)
     llm_verdict_class = derive_verdict_class(verdict_text)
     score_total = round(0.3 * fit_score_val + 0.7 * llm_score)
 
@@ -357,6 +357,9 @@ async def run_llm_enrichment(
         raise ValueError(
             f"No portrait found for position_code={position_code!r}. Available: {sorted(portraits)}"
         )
+
+    if not critic_prompt:
+        critic_prompt = portrait.critic_lens
 
     # Fetch events to process; --force drops the llm_enriched=False filter.
     event_stmt = (

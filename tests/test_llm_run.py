@@ -410,7 +410,7 @@ async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPa
     with patch(
         "hh_monitor.llm_enrich.client.chat_completion_messages",
         new_callable=AsyncMock,
-        # "Нужно интервью" → derive_score=60, derive_class="спорно"
+        # "Нужно интервью" → extract_llm_score → спорно → 50
         return_value=_ok_llm_response(verdict_text="Нужно интервью с проверкой."),
     ):
         await run_llm_enrichment(
@@ -422,8 +422,8 @@ async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPa
         )
 
     await db_session.refresh(resume)
-    # fit_score=60, derived llm_score=60 → score_total = round(0.3*60 + 0.7*60) = 60
-    expected = round(0.3 * 60 + 0.7 * 60)
+    # fit_score=60, llm_score=50 (спорно) → score_total = round(0.3*60 + 0.7*50) = 53
+    expected = round(0.3 * 60 + 0.7 * 50)
     assert resume.score_total == expected
 
 
@@ -633,9 +633,7 @@ async def test_interview_questions_as_string_splits(
 
 
 @pytest.mark.asyncio
-async def test_force_ignores_valid_cache(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_force_ignores_valid_cache(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """force=True calls the API even when a valid dossier cache entry exists."""
     monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
@@ -705,9 +703,7 @@ async def test_resume_ids_narrows_selection(
         "total_experience": {"months": 48},
         "experience": [],
     }
-    db_session.add(
-        Snapshot(hh_resume_id="other_r", payload=payload2, content_hash=_hash(payload2))
-    )
+    db_session.add(Snapshot(hh_resume_id="other_r", payload=payload2, content_hash=_hash(payload2)))
     event2 = Event(
         hh_resume_id="other_r",
         event_type="NEW",
@@ -861,9 +857,7 @@ async def test_non_force_uses_updated_cache(
 
 
 @pytest.mark.asyncio
-async def test_coerce_list_fields_to_str(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coerce_list_fields_to_str(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """LLM returns red_flags/weak_spots as lists → Event stores joined strings; None → ''."""
     monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     search, _resume, event = await _seed_db(db_session, resume_id="r_coerce", fit_score=70)

@@ -101,6 +101,9 @@ class Portrait(BaseModel):
     # Optional fixed evaluation questions for this position.
     # Empty → LLM auto-derives 4-6 criteria from position_description.
     evaluation_focus: list[str] = []
+    # Static critic lens injected into the LLM system prompt when
+    # searches.llm_critic_prompt is empty.  Multi-line string of red-flag patterns.
+    critic_lens: str = ""
     # Per-position company overrides (fall back to _global.yaml if empty)
     target_companies_override: list[str] = []
     stop_companies_override: list[str] = []

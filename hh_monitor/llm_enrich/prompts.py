@@ -163,13 +163,68 @@ def derive_score_from_verdict(verdict: str) -> int:
     return 50
 
 
+# Keywords that indicate a recognised verdict pattern (used to detect "truly unrecognised")
+_VERDICT_KEYWORDS = (
+    "мимо",
+    "не рекомендую",
+    "нужно интервью",
+    "нужна проверка",
+    "спорно",
+    "рекомендую",
+    "подходит",
+)
+_CLASS_TO_SCORE: dict[str, int] = {"мимо": 20, "спорно": 50, "подходит": 80}
+
+
+def extract_llm_score(dossier: dict[str, Any], resume_id: str) -> int:
+    """Extract llm_score from a parsed dossier dict.
+
+    Priority:
+    1. Integer ``score`` field (0–100), clamped.
+    2. ``verdict_class`` string field (if LLM included it).
+    3. Free-form ``verdict`` text → derive_verdict_class → map to int.
+    4. Unrecognised text → 0 + warning.
+    """
+    raw_score = dossier.get("score")
+    if raw_score is not None and not isinstance(raw_score, bool):
+        try:
+            return max(0, min(100, int(raw_score)))
+        except (ValueError, TypeError):
+            pass
+
+    # Resolve the text to classify: prefer dossier.verdict_class, then verdict
+    vc_field = dossier.get("verdict_class")
+    if isinstance(vc_field, str):
+        verdict_text = vc_field
+    else:
+        v = dossier.get("verdict")
+        if isinstance(v, list):
+            verdict_text = " ".join(str(x) for x in v)
+        elif isinstance(v, str):
+            verdict_text = v
+        else:
+            verdict_text = ""
+
+    vl = verdict_text.lower()
+    if not any(kw in vl for kw in _VERDICT_KEYWORDS):
+        log.warning(
+            "llm_enrich.score_parse_fallback",
+            resume_id=resume_id,
+            verdict_preview=verdict_text[:100],
+        )
+        return 0
+
+    verdict_class = derive_verdict_class(verdict_text)
+    return _CLASS_TO_SCORE.get(verdict_class, 0)
+
+
 def derive_verdict_class(verdict: str) -> str:
     """Map free-form verdict text → 'подходит' | 'спорно' | 'мимо'."""
     v = verdict.lower()
-    if "не рекомендую" in v:
+    if "не рекомендую" in v or "мимо" in v:
         return "мимо"
-    if "нужно интервью" in v or "нужна проверка" in v:
+    if "нужно интервью" in v or "нужна проверка" in v or "спорно" in v:
         return "спорно"
-    if "рекомендую" in v:
+    if "рекомендую" in v or "подходит" in v:
         return "подходит"
     return "спорно"

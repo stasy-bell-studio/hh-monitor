@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     llm_prompt_version: str = "v2"
     # Candidates with fit_score below this threshold are not sent to LLM
-    score_fit_min_for_llm: int = Field(default=60, ge=0, le=100)
+    score_fit_min_for_llm: int = Field(default=40, ge=0, le=100)
 
     # Telegram — bot credentials and targeting
     telegram_bot_token: str | None = None
