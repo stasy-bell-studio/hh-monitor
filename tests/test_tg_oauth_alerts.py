@@ -152,6 +152,17 @@ async def test_warning_alert_happy() -> None:
     bot.send_message.assert_awaited_once()
     bot.session.close.assert_awaited_once()
 
+    text = bot.send_message.call_args.kwargs["text"]
+    assert "токен скоро истечёт" in text
+    assert "До refresh:" in text
+    assert "истекает через: 2.5 ч" in text
+    assert "Refresh уже выполнен автоматически." in text
+    assert "фоновое задание refresh" in text
+    assert "systemd" not in text
+    assert "systemctl" not in text
+    assert "journalctl" not in text
+    assert "expires_at:" not in text
+
 
 @pytest.mark.asyncio
 async def test_warning_alert_degraded() -> None:
@@ -171,3 +182,33 @@ async def test_warning_alert_degraded() -> None:
 
     assert result is False
     mock_make_bot.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_warning_alert_token_already_expired_text() -> None:
+    """Expired token (expires_in_hours <= 0) → uses 'просрочен' wording."""
+    bot = _make_mock_bot()
+    with (
+        patch("hh_monitor.tg.oauth_alerts.settings") as ms,
+        patch("hh_monitor.tg.client.make_bot", return_value=bot),
+    ):
+        ms.telegram_bot_token = "tok"
+        ms.telegram_hr_group_id = -100123456
+        ms.telegram_admin_topic_id = 0
+
+        result = await send_oauth_expiry_warning_alert(
+            expires_in_hours=-0.1,
+            last_refresh_age_hours=173.4,
+            expires_at_utc=datetime.now(UTC),
+        )
+
+    assert result is True
+    text = bot.send_message.call_args.kwargs["text"]
+    assert "токен был просрочен (refresh уже выполнен)" in text
+    assert "уже истёк (просрочен на 0.1 ч)" in text
+    assert "До refresh:" in text
+    assert "Refresh уже выполнен автоматически." in text
+    assert "173.4 ч назад" in text
+    assert "systemd" not in text
+    assert "systemctl" not in text
+    assert "journalctl" not in text

@@ -106,16 +106,29 @@ async def send_oauth_expiry_warning_alert(
         )
         return False
 
-    expires_at_msk = _fmt_msk(expires_at_utc)
+    _ = expires_at_utc  # CC-4 will use; kept in signature for forward-compat
+
+    if expires_in_hours <= 0:
+        header = "⚠️ HH OAuth: токен был просрочен (refresh уже выполнен)"
+        expiry_line = (
+            f"  access_token уже истёк (просрочен на {abs(expires_in_hours):.1f} ч)"
+        )
+    else:
+        header = "⚠️ HH OAuth: токен скоро истечёт"
+        expiry_line = f"  access_token истекает через: {expires_in_hours:.1f} ч"
+
     text = (
-        "⚠️ HH OAuth: токен скоро истечёт\n\n"
-        f"access_token истекает через: {expires_in_hours:.1f} ч\n"
-        f"Последний успешный refresh: {last_refresh_age_hours:.1f} ч назад\n"
-        f"expires_at: {expires_at_msk}\n\n"
-        "Это значит, что systemd timer hh-monitor-token-refresh.timer не сработал\n"
-        "за последние сутки. Проверь:\n"
-        "  systemctl status hh-monitor-token-refresh.timer\n"
-        "  journalctl -u hh-monitor-token-refresh.service -n 50"
+        f"{header}\n\n"
+        "До refresh:\n"
+        f"{expiry_line}\n"
+        f"  Последний успешный refresh: {last_refresh_age_hours:.1f} ч назад\n\n"
+        "Refresh уже выполнен автоматически.\n\n"
+        "Возможные причины:\n"
+        "  — фоновое задание refresh не запускалось > 24 ч\n"
+        "  — или ручной refresh в этот момент не выполнялся\n\n"
+        "Что делать:\n"
+        "  — проверь логи приложения (последний hh.oauth.refresh.* event)\n"
+        "  — если фоновое задание не настроено — это нормально до CC-4"
     )
     try:
         from hh_monitor.tg.client import make_bot
