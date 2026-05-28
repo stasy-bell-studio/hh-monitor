@@ -56,7 +56,7 @@ _MACROS: dict[str, tuple[int, ...]] = {
     "все регионы 21 века": PRIMARY_AREA_IDS_21VEK,
     "все регионы 21 век": PRIMARY_AREA_IDS_21VEK,
     "21 век": PRIMARY_AREA_IDS_21VEK,
-    "21век": PRIMARY_AREA_IDS_21VEK,
+    "21век": PRIMARY_AREA_IDS_21VEK,  # noqa: RUF001 — intentional Cyrillic in Russian word
     "21 vek": PRIMARY_AREA_IDS_21VEK,
     "21vek": PRIMARY_AREA_IDS_21VEK,
     "филиалы 21 века": PRIMARY_AREA_IDS_21VEK,

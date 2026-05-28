@@ -15,8 +15,8 @@ import structlog
 
 from hh_monitor.fit.portrait import Portrait
 from hh_monitor.llm_enrich import client as llm_client
-from hh_monitor.regions.expander import expand_region_names
 from hh_monitor.llm_enrich.critic_lens_builder import generate_critic_lens_from_portrait
+from hh_monitor.regions.expander import expand_region_names
 from hh_monitor.searches.codes import slugify
 
 log = structlog.get_logger(__name__)
