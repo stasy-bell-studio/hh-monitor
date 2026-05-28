@@ -9,10 +9,11 @@ from __future__ import annotations
 import time
 import traceback
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, or_, select, update
 
 from hh_monitor.config import settings
 from hh_monitor.db.models import Search
@@ -22,6 +23,12 @@ from hh_monitor.hh.oauth import get_valid_token
 from hh_monitor.parser.run import run_parser
 
 logger = structlog.get_logger(__name__)
+
+# Per-search cooldown: a search that ran successfully within this window is
+# skipped on the next pipeline pass.  Applied BEFORE the --search-codes filter,
+# so a manual CLI re-trigger within the window is also skipped.  Manual override:
+# UPDATE searches SET last_run_at = NULL WHERE search_code = '<code>'.
+PIPELINE_SEARCH_COOLDOWN_MINUTES = 30
 
 # Type alias matching the async_session_factory signature used throughout the project.
 _SessionFactory = Callable[[], Any]
@@ -60,7 +67,12 @@ async def run_all(
         limit: Process at most this many searches (useful for smoke tests).
         search_codes: Comma-split allowlist.  Only searches whose
             search_code appears in this list are run.  Codes that are not
-            found or not active are reported in ``skipped_codes``.
+            found or not active are reported in ``skipped_codes``.  NOTE: the
+            cooldown filter (PIPELINE_SEARCH_COOLDOWN_MINUTES) is applied
+            BEFORE this allowlist, so a manual re-trigger of a search that ran
+            within the cooldown window is still skipped.  To force an
+            immediate re-run, clear the timestamp:
+            ``UPDATE searches SET last_run_at = NULL WHERE search_code = '<code>'``.
         _notify: Internal seam for tests.  Set False to skip the
             ``send_pending_cards`` step (avoids requiring a real Bot token).
             The CLI always passes True.
@@ -72,11 +84,19 @@ async def run_all(
     """
     t_start = time.monotonic()
 
-    # ── 1. Fetch active searches ───────────────────────────────────────────
+    # ── 1. Fetch active searches (cooldown-eligible only) ──────────────────
+    cooldown_cutoff = func.now() - timedelta(minutes=PIPELINE_SEARCH_COOLDOWN_MINUTES)
     async with session_factory() as session:
         stmt = (
             select(Search)
-            .where(Search.active.is_(True), Search.archived_at.is_(None))
+            .where(
+                Search.active.is_(True),
+                Search.archived_at.is_(None),
+                or_(
+                    Search.last_run_at.is_(None),
+                    Search.last_run_at < cooldown_cutoff,
+                ),
+            )
             .order_by(Search.id)
         )
         rows: list[Search] = list((await session.execute(stmt)).scalars().all())
@@ -120,13 +140,19 @@ async def run_all(
         }
 
     # ── 5. Run each search ────────────────────────────────────────────────
+    # Snapshot (id, search_code) into plain tuples up front: the per-search
+    # cooldown commit below expires ORM instances (expire_on_commit), and a
+    # subsequent attribute read would trigger lazy IO outside the loaded
+    # session.  Iterating over scalars decouples the loop from ORM state.
+    search_refs: list[tuple[int, str | None]] = [(s.id, s.search_code) for s in rows]
+
     succeeded = 0
     failures: list[dict[str, str]] = []
 
-    for search in rows:
-        sc = search.search_code or str(search.id)
+    for search_id, search_code in search_refs:
+        sc = search_code or str(search_id)
         t_search = time.monotonic()
-        log = logger.bind(search_id=search.id, search_code=sc)
+        log = logger.bind(search_id=search_id, search_code=sc)
         log.info("run_all_search_start")
 
         try:
@@ -135,8 +161,15 @@ async def run_all(
                     token_provider=lambda: get_valid_token(session),
                     user_agent=settings.hh_user_agent,
                 )
-                await run_parser(session, client, search.id, max_pages=max_pages)
-                await run_detector(session, search.id)
+                await run_parser(session, client, search_id, max_pages=max_pages)
+                await run_detector(session, search_id)
+                # Mark the cooldown timestamp only after a clean parse+detect pass.
+                await session.execute(
+                    update(Search)
+                    .where(Search.id == search_id)
+                    .values(last_run_at=func.now())
+                )
+                await session.commit()
             log.info(
                 "run_all_search_done",
                 duration_s=round(time.monotonic() - t_search, 2),

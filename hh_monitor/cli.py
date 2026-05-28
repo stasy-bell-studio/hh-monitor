@@ -900,7 +900,7 @@ async def _llm_score(
 ) -> None:
     from sqlalchemy import select
 
-    from hh_monitor.fit.portrait import load_all_portraits
+    from hh_monitor.fit.portrait_loader import load_portrait_for_search
     from hh_monitor.fit.rules import compute as fit_compute_fn
 
     async with async_session_factory() as session:
@@ -913,16 +913,11 @@ async def _llm_score(
                 raise SearchNotFoundError(f"No active search with search_code={search_code!r}")
             search_id = resolved_id
 
-        # Load search to get position_code
         s = await session.get(Search, search_id)
         if s is None:
             raise ValueError(f"Search id={search_id} not found")
 
-        # Load portrait
-        portraits = load_all_portraits()
-        portrait = portraits.get(s.position_code)
-        if portrait is None:
-            raise ValueError(f"No portrait for position_code={s.position_code!r}")
+        portrait = load_portrait_for_search(s)
 
         # Latest snapshot
         row = (

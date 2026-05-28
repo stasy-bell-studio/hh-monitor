@@ -1,0 +1,36 @@
+{
+  "position_description": "Директор филиала страховой компании в СЗФО. Управление P&L филиала, развитие агентской сети, моторные виды (КАСКО, ОСАГО) и ИФЛ.",
+  "evaluation_focus": [
+    "Опыт управления P&L филиала",
+    "Размер и динамика агентской сети",
+    "Опыт в моторных видах (КАСКО/ОСАГО)",
+    "Управленческий стаж в страховании"
+  ],
+  "position_synonyms": [
+    "Руководитель филиала",
+    "Управляющий филиалом",
+    "Региональный директор"
+  ],
+  "filters": {
+    "regions": {
+      "primary": ["Санкт-Петербург", "Ленинградская область"],
+      "adjacent": [],
+      "stop": []
+    },
+    "salary_range": [150000, 350000],
+    "age_range": null
+  },
+  "must_have_keywords": ["агентская сеть", "руководство филиалом", "P&L"],
+  "nice_to_have_keywords": ["ОСАГО", "КАСКО", "ИФЛ"],
+  "stop_words": ["банк", "автосалон", "лизинг", "МФО"],
+  "forbidden_industries": ["банк", "автосалон", "автодилер", "лизинг", "МФО"],
+  "min_insurance_experience_months": 36,
+  "motor_experience_preferred": true,
+  "higher_education_required": true,
+  "citizenship": "РФ",
+  "bonus_companies": ["Ресо-Гарантия", "ВСК", "Ингосстрах", "Альфа-Страхование"],
+  "weights": {"agent_network_experience": 99},
+  "search_params": {"text": "ОТРАВЛЕНО"},
+  "position_code": "hacker_override",
+  "title_keywords": ["legacy"]
+}

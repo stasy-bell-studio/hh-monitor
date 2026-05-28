@@ -321,12 +321,14 @@ async def test_settings_non_admin_no_inline_keyboard() -> None:
 
 
 @pytest.mark.asyncio
-async def test_add_vacancy_returns_soon_message() -> None:
+async def test_add_vacancy_redirects_to_admin_topic() -> None:
+    """Session 12 (AC18): DM button redirects to the admin topic, no FSM in DM."""
     msg = _msg("🆕 Добавить вакансию")
     await handle_dm_add_vacancy(msg)  # type: ignore[arg-type]
     msg.answer.assert_called_once()
-    assert "Скоро" in msg.answer.call_args[0][0]
-    assert "Сессии 9" in msg.answer.call_args[0][0]
+    text_out: str = msg.answer.call_args[0][0]
+    assert "групповом чате" in text_out
+    assert "Управление" in text_out
 
 
 # ── ❓ Помощь ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,22 @@
+{
+  "position_description": "Андеррайтер моторных видов: оценка рисков по КАСКО и ОСАГО, расчёт тарифов, контроль убыточности портфеля.",
+  "evaluation_focus": [
+    "Опыт андеррайтинга в моторных видах",
+    "Навык расчёта тарифов",
+    "Работа с убыточностью портфеля"
+  ],
+  "position_synonyms": ["Андеррайтер", "Специалист по андеррайтингу", "Риск-аналитик"],
+  "filters": {
+    "regions": {"primary": ["Москва"], "adjacent": [], "stop": []},
+    "salary_range": null,
+    "age_range": null
+  },
+  "must_have_keywords": ["андеррайтинг", "КАСКО", "ОСАГО", "тарификация"],
+  "nice_to_have_keywords": ["убыточность", "портфель"],
+  "stop_words": ["коллекшн", "МФО"],
+  "forbidden_industries": ["коллекшн", "МФО"],
+  "min_insurance_experience_months": 24,
+  "min_motor_experience_months": 24,
+  "higher_education_required": true,
+  "preferred_education_fields": ["экономика", "математика"]
+}

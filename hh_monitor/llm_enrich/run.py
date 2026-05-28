@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.config import settings
 from hh_monitor.db.models import Event, Resume, Snapshot
-from hh_monitor.fit.portrait import GlobalContext, Portrait, load_all_portraits, load_global_context
+from hh_monitor.fit.portrait import GlobalContext, Portrait, load_global_context
 from hh_monitor.fit.rules import compute as fit_compute
 from hh_monitor.llm_enrich import cache as llm_cache
 from hh_monitor.llm_enrich import client as llm_client
@@ -327,23 +327,19 @@ async def render_prompt_for_resume(
     Returns the user-message portion (system prompt is printed separately).
     """
     from hh_monitor.db.models import Search
+    from hh_monitor.fit.portrait_loader import load_portrait_for_search
     from hh_monitor.llm_enrich.prompt import _normalize_resume_payload, _render_user_template
 
-    if portraits is None:
-        portraits = load_all_portraits()
     if global_ctx is None:
         global_ctx = load_global_context()
 
-    search_result = await session.execute(
-        select(Search.position_code).where(Search.id == search_id)
-    )
-    position_code: str | None = search_result.scalar_one_or_none()
-    if position_code is None:
+    search_row = (
+        await session.execute(select(Search).where(Search.id == search_id))
+    ).scalar_one_or_none()
+    if search_row is None:
         raise ValueError(f"Search id={search_id} not found")
 
-    portrait = portraits.get(position_code)
-    if portrait is None:
-        raise ValueError(f"No portrait for position_code={position_code!r}")
+    portrait = load_portrait_for_search(search_row, portraits=portraits)
 
     snap = await _latest_snapshot(session, hh_resume_id)
     if snap is None:
@@ -380,28 +376,22 @@ async def run_llm_enrichment(
     Returns:
         Summary dict with counts: enriched, skipped, errors, total_processed.
     """
-    if portraits is None:
-        portraits = load_all_portraits()
     if global_ctx is None:
         global_ctx = load_global_context()
 
     from hh_monitor.db.models import Search
+    from hh_monitor.fit.portrait_loader import load_portrait_for_search
 
-    search_result = await session.execute(
-        select(Search.position_code, Search.llm_critic_prompt).where(Search.id == search_id)
-    )
-    row = search_result.one_or_none()
-    if row is None:
+    search_row = (
+        await session.execute(select(Search).where(Search.id == search_id))
+    ).scalar_one_or_none()
+    if search_row is None:
         raise ValueError(f"Search id={search_id} not found")
 
-    position_code: str = row[0]
-    critic_prompt: str = row[1] or ""
+    position_code: str = search_row.position_code
+    critic_prompt: str = search_row.llm_critic_prompt or ""
 
-    portrait = portraits.get(position_code)
-    if portrait is None:
-        raise ValueError(
-            f"No portrait found for position_code={position_code!r}. Available: {sorted(portraits)}"
-        )
+    portrait = load_portrait_for_search(search_row, portraits=portraits)
 
     if not critic_prompt:
         critic_prompt = portrait.critic_lens

@@ -396,7 +396,7 @@ async def test_run_no_portrait_raises(db_session: Any) -> None:
     await db_session.flush()
 
     portraits: dict[str, Portrait] = {}  # no portrait for 'unknown_pos'
-    with pytest.raises(ValueError, match="No portrait found"):
+    with pytest.raises(ValueError, match="No portrait for search"):
         await run_llm_enrichment(db_session, search.id, portraits=portraits)
 
 

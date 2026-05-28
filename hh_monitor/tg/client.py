@@ -12,6 +12,7 @@ from aiogram.exceptions import (
     TelegramForbiddenError,
     TelegramRetryAfter,
 )
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,7 +29,10 @@ def make_bot() -> Bot:
 
 
 def make_dispatcher() -> Dispatcher:
-    return Dispatcher()
+    # Explicit MemoryStorage for the FSM "Add Vacancy" wizard (Session 12).
+    # Multi-step wizards use aiogram FSMContext; single-value TTL guards (e.g.
+    # control_panel._cp_threshold_fsm) keep their own ad-hoc dicts by design.
+    return Dispatcher(storage=MemoryStorage())
 
 
 def is_admin(user_id: int) -> bool:
@@ -58,9 +62,15 @@ def register_tg_routers(dp: Dispatcher) -> None:
     admin_router must precede the general screening router.
     """
     # Lazy imports to avoid circular dependency (commands/handlers import from client).
+    from hh_monitor.tg.add_vacancy import add_vacancy_router
     from hh_monitor.tg.commands import admin_router
     from hh_monitor.tg.control_panel import cp_router
     from hh_monitor.tg.handlers import router
+
+    # FSM "Add Vacancy" wizard lives under the admin router (admin-topic only).
+    # Sub-routers do NOT inherit parent message filters, so add_vacancy_router
+    # applies its own admin/topic guards internally.
+    admin_router.include_router(add_vacancy_router)
 
     dp.include_router(cp_router)
     dp.include_router(admin_router)

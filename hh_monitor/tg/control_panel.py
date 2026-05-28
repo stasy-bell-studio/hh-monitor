@@ -376,7 +376,14 @@ async def handle_dm_settings(message: Message) -> None:
 
 @cp_router.message(F.text == "🆕 Добавить вакансию")
 async def handle_dm_add_vacancy(message: Message) -> None:
-    await message.answer("Скоро. Появится в Сессии 9.")
+    # Session 12: vacancy creation runs as an FSM wizard only inside the HR
+    # supergroup admin topic (so both admins see each other's work, and the
+    # aiogram FSM is keyed by chat+user).  DM is a side channel — redirect.
+    await message.answer(
+        "Создание вакансий доступно только в групповом чате администраторов, "
+        "топик 🎛 Управление. Перейдите туда и нажмите кнопку «➕ Добавить вакансию» "
+        "или отправьте команду /add."
+    )
 
 
 # ── ❓ Помощь ─────────────────────────────────────────────────────────────────

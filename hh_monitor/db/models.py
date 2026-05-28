@@ -54,8 +54,16 @@ class Search(Base):
     )
     created_by_tg_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
+    # Session 12: per-search cooldown for pipeline.run_all.  NULL = never run /
+    # eligible immediately; otherwise pipeline skips the search until
+    # NOW() - last_run_at > PIPELINE_SEARCH_COOLDOWN_MINUTES.
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
     __table_args__ = (
         Index("ix_searches_active_archived", "active", "archived_at"),
+        Index("ix_searches_last_run_at", "last_run_at"),
     )
 
 

@@ -175,10 +175,26 @@ def _bar(count: int, max_count: int) -> str:
 # ── /help ─────────────────────────────────────────────────────────────────────
 
 
+def _panel_keyboard() -> InlineKeyboardMarkup:
+    """Admin panel keyboard with the Add Vacancy entry button (Session 12)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить вакансию", callback_data="add_vacancy:start"
+                )
+            ],
+            _close_button(),
+        ]
+    )
+
+
 @admin_router.message(Command("help"))
 async def handle_admin_help(message: Message) -> None:
     help_text = (
         "<b>🎛 Панель управления hh-monitor</b>\n\n"
+        "➕ Добавить вакансию — мастер создания нового поиска\n"
+        "/add — то же командой\n"
         "/active — активные и приостановленные поиски\n"
         "/archive — архив поисков (последние 20)\n"
         "/stats — статистика уведомлений и скрининга\n"
@@ -187,7 +203,7 @@ async def handle_admin_help(message: Message) -> None:
     )
     await message.answer(
         help_text,
-        reply_markup=_close_keyboard(),
+        reply_markup=_panel_keyboard(),
     )
 
 
@@ -739,6 +755,7 @@ async def _fetch_active_row(
 async def register_admin_commands(bot: Bot) -> None:
     """Register /command hints in the HR group (visible in the /-menu)."""
     commands = [
+        BotCommand(command="add", description="Добавить вакансию"),
         BotCommand(command="active", description="Активные поиски"),
         BotCommand(command="archive", description="Архив поисков"),
         BotCommand(command="stats", description="Статистика"),

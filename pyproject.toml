@@ -24,6 +24,8 @@ pyyaml = "^6.0.3"
 jinja2 = "^3.1.6"
 openpyxl = "^3.1.5"
 weasyprint = "^68.1"
+pypdf = "^5.0"
+python-docx = "^1.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
@@ -52,6 +54,12 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 "hh_monitor/tg/handlers.py" = ["RUF001"]
 "hh_monitor/tg/reasons.py" = ["RUF001"]
 "hh_monitor/weekly_digest/run.py" = ["RUF001"]
+# Session 12 "Add Vacancy" FSM — Russian UI strings + LLM prompts (Cyrillic intentional).
+"hh_monitor/tg/add_vacancy/handlers.py" = ["RUF001"]
+"hh_monitor/tg/add_vacancy/keyboards.py" = ["RUF001"]
+"hh_monitor/tg/add_vacancy/launcher.py" = ["RUF001"]
+"hh_monitor/tg/add_vacancy/llm.py" = ["RUF001", "RUF002", "E501"]
+"hh_monitor/searches/codes.py" = ["RUF001", "RUF003"]
 # Russian-language LLM prompt constants — Cyrillic chars intentionally
 # look like Latin; long lines are deliberate (prose sent to the API).
 "hh_monitor/llm_enrich/prompt.py" = ["RUF001", "E501"]
