@@ -38,6 +38,7 @@ from hh_monitor.db.engine import async_session_factory  # noqa: E402
 from hh_monitor.db.models import Search  # noqa: E402
 from hh_monitor.fit.portrait import load_portrait  # noqa: E402
 from hh_monitor.parser.run import build_search_params  # noqa: E402
+from hh_monitor.regions.expander import PRIMARY_AREA_IDS_21VEK  # noqa: E402
 
 # ── 27 area IDs for branch_director_21vek ────────────────────────────────────
 #
@@ -70,35 +71,7 @@ from hh_monitor.parser.run import build_search_params  # noqa: E402
 #   2155 Запорожская область
 #   2173 ЛНР
 #   2134 ДНР
-AREA_IDS: list[int] = [
-    1,
-    2,
-    145,
-    1020,
-    1103,
-    1090,
-    1828,
-    1077,
-    1438,
-    2114,
-    130,
-    1530,
-    1481,
-    1754,
-    1563,
-    1187,
-    1192,
-    1317,
-    1905,
-    1575,
-    1556,
-    1261,
-    1342,
-    2209,
-    2155,
-    2173,
-    2134,
-]
+AREA_IDS: list[int] = list(PRIMARY_AREA_IDS_21VEK)
 
 _PORTRAIT_YAML = _ROOT / "config" / "portraits" / "branch_director.yaml"
 _POSITION_CODE = "branch_director"

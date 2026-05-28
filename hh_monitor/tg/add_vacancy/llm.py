@@ -15,6 +15,7 @@ import structlog
 
 from hh_monitor.fit.portrait import Portrait
 from hh_monitor.llm_enrich import client as llm_client
+from hh_monitor.regions.expander import expand_region_names
 from hh_monitor.llm_enrich.critic_lens_builder import generate_critic_lens_from_portrait
 from hh_monitor.searches.codes import slugify
 
@@ -197,12 +198,20 @@ def compute_gaps(portrait: Portrait) -> list[str]:
 def derive_initial_hh_params(portrait: Portrait) -> dict[str, Any]:
     """Minimal base hh_params for the searches row.
 
-    Only ``text`` (the position name) is set here.  The full hh.ru ``text=`` query
-    (OR-joined synonyms + "страхование" suffix) and ``period=`` are assembled at
-    parse time by :func:`hh_monitor.parser.run.build_search_params` from the
-    portrait, so we deliberately keep this dict minimal and let the parser augment.
+    Sets ``text`` from the position name.  When ``portrait.filters.regions.primary``
+    contains recognized macros (e.g. "21 век"), ``area`` is populated with the
+    corresponding hh.ru area IDs via :func:`hh_monitor.regions.expander.expand_region_names`.
+    Unknown region strings are skipped with a WARNING (V2 will resolve them via
+    hh.ru /areas).  The full hh.ru ``text=`` query and ``period=`` are assembled at
+    parse time by :func:`hh_monitor.parser.run.build_search_params`.
     """
-    return {"text": portrait.position_name}
+    result: dict[str, Any] = {"text": portrait.position_name}
+    primary = portrait.filters.regions.primary
+    if primary:
+        area = expand_region_names(primary)
+        if area:
+            result["area"] = area
+    return result
 
 
 async def draft_critic_prompt(
