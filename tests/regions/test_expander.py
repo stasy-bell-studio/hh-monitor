@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import structlog.testing
 
-import hh_monitor.regions.expander as _mod
 from hh_monitor.regions.expander import PRIMARY_AREA_IDS_21VEK, expand_region_names
 
 
