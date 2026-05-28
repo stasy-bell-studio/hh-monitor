@@ -151,13 +151,13 @@ def test_target_companies_override_replaces_global() -> None:
     assert "Ресо-Гарантия" not in result
 
 
-def test_stop_companies_override_replaces_global() -> None:
-    """Portrait-level stop_companies_override replaces global stop_companies."""
+def test_stop_companies_override_unions_with_global() -> None:
+    """Portrait-level stop_companies_override unions with global stop_companies (Bug-3b fix)."""
     portrait = _portrait(stop_companies_override=["Плохой Банк"])
     ctx = _global_ctx(stop_companies=["Капитал Лайф"])
     result = _render_user_template(portrait=portrait, resume=_resume(), global_ctx=ctx)
     assert "Плохой Банк" in result
-    assert "Капитал Лайф" not in result
+    assert "Капитал Лайф" in result
 
 
 def test_no_target_companies_section_when_both_empty() -> None:

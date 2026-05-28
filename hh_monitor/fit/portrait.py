@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Region / geography filters ────────────────────────────────────────────────
 
@@ -90,6 +90,8 @@ class Portrait(BaseModel):
       preferred_total_months, min_salary, max_salary,
       preferred_education_levels, preferred_areas, age_range
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     position_code: str
     position_name: str

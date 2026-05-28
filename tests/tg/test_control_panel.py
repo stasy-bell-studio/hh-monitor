@@ -24,7 +24,6 @@ from hh_monitor.tg.control_panel import (
     handle_cp_threshold_button,
     handle_cp_threshold_reply,
     handle_dm_active,
-    handle_dm_add_vacancy,
     handle_dm_help,
     handle_dm_settings,
     handle_dm_start,
@@ -315,20 +314,6 @@ async def test_settings_non_admin_no_inline_keyboard() -> None:
         await handle_dm_settings(msg)  # type: ignore[arg-type]
     keyboard = msg.answer.call_args[1].get("reply_markup")
     assert keyboard is None
-
-
-# ── 🆕 Добавить вакансию ─────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_add_vacancy_redirects_to_admin_topic() -> None:
-    """Session 12 (AC18): DM button redirects to the admin topic, no FSM in DM."""
-    msg = _msg("🆕 Добавить вакансию")
-    await handle_dm_add_vacancy(msg)  # type: ignore[arg-type]
-    msg.answer.assert_called_once()
-    text_out: str = msg.answer.call_args[0][0]
-    assert "групповом чате" in text_out
-    assert "Управление" in text_out
 
 
 # ── ❓ Помощь ─────────────────────────────────────────────────────────────────

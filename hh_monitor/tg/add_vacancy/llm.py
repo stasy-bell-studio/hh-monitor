@@ -42,6 +42,10 @@ _ALLOWED_KEYS: frozenset[str] = frozenset(
         "citizenship",
         "bonus_companies",
         "forbidden_industries",
+        "resume_freshness_days",
+        "min_total_months",
+        "stop_companies_override",
+        "target_companies_override",
     }
 )
 
@@ -76,10 +80,25 @@ JSON-объект со следующими допустимыми ключам�
 - citizenship: string или null
 - bonus_companies: array[string] — компании-доноры, дающие плюс
 - forbidden_industries: array[string] — индустрии-стоп на последнем месте работы
+- resume_freshness_days: int — давность резюме в днях. Если HR явно \
+указал срок («не старше 14 дней», «свежие», «активные за месяц») — \
+соответствующее число (14 / 14 / 30). Если HR не упоминает — \
+ОПУСТИ ключ, не придумывай.
+- min_total_months: int — минимальный общий стаж в месяцах. Если HR \
+говорит «общий опыт от 5 лет» — поставь 60. Не путать с \
+min_insurance_experience_months (опыт именно в страховании).
+- stop_companies_override: array[string] — конкретные компании-стопы \
+под эту вакансию (например: ["Капитал Лайф"]). Эти компании \
+ДОБАВЯТСЯ к глобальному стоп-листу, не заменят его. Если HR не \
+называл конкретных стоп-компаний — опусти.
+- target_companies_override: array[string] — компании-доноры, особенно \
+ценимые для этой вакансии (например: ["Росгосстрах", "Согаз", \
+"Ингосстрах"]). Кандидаты оттуда получают плюс. Если HR не называл \
+— опусти.
 
 НЕ возвращай ключи: weights, search_params, critic_lens, position_code, position_name, \
-target_companies_override, stop_companies_override, title_keywords, experience_keywords, \
-min_total_months, preferred_total_months, min_salary, max_salary, preferred_education_levels, \
+title_keywords, experience_keywords, \
+preferred_total_months, min_salary, max_salary, preferred_education_levels, \
 preferred_areas, age_range (на верхнем уровне).
 
 Название позиции: __POSITION_NAME__

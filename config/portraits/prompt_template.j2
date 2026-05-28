@@ -36,7 +36,7 @@
 {{ targets | join(", ") }}
 {% endif %}
 
-{% set stops = portrait.stop_companies_override or global_ctx.stop_companies %}
+{% set stops = ((portrait.stop_companies_override or []) + (global_ctx.stop_companies or [])) | unique | list %}
 {% if stops %}
 СТОП-КОМПАНИИ (текущее место работы там = verdict "стоп-сигнал"):
 {{ stops | join(", ") }}
