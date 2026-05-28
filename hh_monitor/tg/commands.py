@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
+from zoneinfo import ZoneInfo
 
+import httpx
 import structlog
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, Command
@@ -23,14 +25,19 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.config import settings
+from hh_monitor.db.models import OAuthToken
+from hh_monitor.errors import HHOAuthError
+from hh_monitor.hh.oauth import refresh_access_token
 from hh_monitor.tg.client import get_session_factory, is_admin
 from hh_monitor.tg.sender import get_current_threshold, upsert_app_config
 
 logger = structlog.get_logger(__name__)
+
+_MSK = ZoneInfo("Europe/Moscow")
 
 admin_router = Router()
 
@@ -199,6 +206,7 @@ async def handle_admin_help(message: Message) -> None:
         "/archive — архив поисков (последние 20)\n"
         "/stats — статистика уведомлений и скрининга\n"
         "/settings — настройки бота (порог, расписание)\n"
+        "/hh_refresh — обновить HH OAuth токен вручную\n"
         "/help — эта справка"
     )
     await message.answer(
@@ -431,6 +439,97 @@ async def handle_settings(message: Message) -> None:
         settings_text,
         reply_markup=_settings_keyboard(),
     )
+
+
+# ── /hh_refresh ──────────────────────────────────────────────────────────────
+
+
+def _fmt_msk(dt: datetime) -> str:
+    return dt.astimezone(_MSK).strftime("%d.%m.%Y %H:%M МСК")
+
+
+def _format_ttl(td: timedelta) -> str:
+    total = int(td.total_seconds())
+    if total < 0:
+        return "истёк"
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days >= 7:
+        return f"~{days} дн."
+    if days >= 1:
+        return f"{days} дн. {hours} ч."
+    if hours >= 1:
+        return f"{hours} ч. {minutes} мин."
+    return f"{minutes} мин."
+
+
+@admin_router.message(Command("hh_refresh"))
+async def handle_hh_refresh(message: Message) -> None:
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(select(OAuthToken).limit(1))
+        token = result.scalar_one_or_none()
+        if token is None:
+            await message.answer(
+                "❌ Токен не найден в БД.\n"
+                "Запусти локально: <code>poetry run hh-monitor hh auth</code>",
+                reply_markup=_close_keyboard(),
+            )
+            return
+
+        old_expires_at = token.expires_at
+        old_updated_at = token.updated_at
+
+        try:
+            updated = await refresh_access_token(session)
+        except HHOAuthError as exc:
+            if (
+                "invalid_grant" in exc.message.lower()
+                and (datetime.now(UTC) - old_updated_at).total_seconds() < 5
+            ):
+                await message.answer(
+                    "⚠️ Похоже, токен только что обновился другим вызовом. "
+                    "Проверь /settings.",
+                    reply_markup=_close_keyboard(),
+                )
+                return
+            await message.answer(
+                f"❌ Refresh failed: {exc.message[:300]}\n\n"
+                "refresh_token мог быть отозван. Запусти локально:\n"
+                "<code>poetry run hh-monitor hh auth</code>",
+                reply_markup=_close_keyboard(),
+            )
+            return
+        except httpx.HTTPError as exc:
+            err = f"{type(exc).__name__}: {exc}"[:200]
+            await message.answer(
+                f"❌ Сетевая ошибка при refresh: {err}\n"
+                "Повтори через минуту.",
+                reply_markup=_close_keyboard(),
+            )
+            return
+        except Exception as exc:
+            logger.exception("hh_refresh_unexpected", error=str(exc))
+            await message.answer(
+                f"❌ Ошибка: {type(exc).__name__}\n"
+                "Подробности в логах.",
+                reply_markup=_close_keyboard(),
+            )
+            return
+
+        ttl = updated.expires_at - datetime.now(UTC)
+        reply = (
+            "✅ <b>HH OAuth токен обновлён</b>\n\n"
+            "Было:\n"
+            f"  expires_at: {_fmt_msk(old_expires_at)}\n"
+            f"  updated_at: {_fmt_msk(old_updated_at)}\n\n"
+            "Стало:\n"
+            f"  expires_at: {_fmt_msk(updated.expires_at)}\n"
+            f"  updated_at: {_fmt_msk(updated.updated_at)}\n\n"
+            f"TTL: {_format_ttl(ttl)}"
+        )
+        await message.answer(reply, reply_markup=_close_keyboard())
 
 
 # ── Threshold FSM ─────────────────────────────────────────────────────────────
