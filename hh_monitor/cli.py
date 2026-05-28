@@ -6,12 +6,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import structlog
 import typer
 
 from hh_monitor.config import settings
 from hh_monitor.db.engine import async_session_factory
 from hh_monitor.db.models import OAuthToken, Resume, Search, Snapshot
-from hh_monitor.errors import HHApiError, HHQuotaExceeded, HHServiceNotActive, SearchNotFoundError
+from hh_monitor.errors import (
+    HHApiError,
+    HHOAuthError,
+    HHQuotaExceeded,
+    HHServiceNotActive,
+    SearchNotFoundError,
+)
 from hh_monitor.fit.portrait import Portrait, load_portrait
 from hh_monitor.fit.rules import compute as fit_compute
 from hh_monitor.hh import cache, endpoints
@@ -20,7 +27,10 @@ from hh_monitor.hh.oauth import (
     build_authorize_url,
     exchange_code_for_token,
     get_valid_token,
+    refresh_access_token,
 )
+
+log = structlog.get_logger(__name__)
 
 app = typer.Typer(name="hh-monitor", help="HR Resume Monitor for SK 21 Vek")
 hh_app = typer.Typer(help="HH.ru API commands")
@@ -65,6 +75,47 @@ def hh_auth() -> None:
 async def _exchange_code(code: str) -> OAuthToken:
     async with async_session_factory() as session:
         return await exchange_code_for_token(code, session)
+
+
+@hh_app.command("refresh")
+def hh_refresh() -> None:
+    """Refresh the stored HH.ru OAuth token using the saved refresh_token."""
+    asyncio.run(_do_refresh())
+
+
+async def _do_refresh() -> None:
+    log.info("hh.oauth.refresh.started")
+    try:
+        async with async_session_factory() as session:
+            token = await refresh_access_token(session)
+    except HHOAuthError as exc:
+        log.error(
+            "hh.oauth.refresh.failed",
+            error_message=exc.message,
+            status_code=exc.status_code,
+            body=str(exc.body)[:500],
+        )
+        typer.echo(f"Refresh failed: {exc.message}", err=True)
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        log.error(
+            "hh.oauth.refresh.failed",
+            error_message=str(exc),
+            error_type=type(exc).__name__,
+        )
+        typer.echo(f"Refresh failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    now_utc = datetime.now(UTC)
+    expires_in = int((token.expires_at - now_utc).total_seconds())
+    expires_at_iso = token.expires_at.isoformat()
+    log.info(
+        "hh.oauth.refresh.ok",
+        expires_at=expires_at_iso,
+        expires_in_seconds=expires_in,
+        scope=token.scope,
+    )
+    typer.echo(f"Token refreshed. Expires in {expires_in} seconds ({expires_at_iso}).")
 
 
 @hh_app.command("me")
