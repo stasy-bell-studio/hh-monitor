@@ -1336,7 +1336,7 @@ def tg_run() -> None:
         register_tg_routers,
         set_session_factory,
     )
-    from hh_monitor.tg.commands import register_admin_commands
+    from hh_monitor.tg.commands import register_admin_commands, register_dm_commands
 
     async def _run() -> None:
         bot = make_bot()
@@ -1344,6 +1344,7 @@ def tg_run() -> None:
         set_session_factory(async_session_factory)
         register_tg_routers(dp)
         await register_admin_commands(bot)
+        await register_dm_commands(bot)
         await dp.start_polling(bot)
 
     _asyncio.run(_run())

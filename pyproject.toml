@@ -54,6 +54,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 "hh_monitor/tg/handlers.py" = ["RUF001"]
 "hh_monitor/tg/reasons.py" = ["RUF001"]
 "hh_monitor/weekly_digest/run.py" = ["RUF001"]
+"hh_monitor/tg/start_menu.py" = ["RUF001"]
 # Session 12 "Add Vacancy" FSM — Russian UI strings + LLM prompts (Cyrillic intentional).
 "hh_monitor/tg/add_vacancy/handlers.py" = ["RUF001"]
 "hh_monitor/tg/add_vacancy/keyboards.py" = ["RUF001"]
