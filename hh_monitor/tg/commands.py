@@ -16,7 +16,6 @@ from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, Command
 from aiogram.types import (
     BotCommand,
-    BotCommandScopeAllPrivateChats,
     BotCommandScopeChat,
     CallbackQuery,
     ForceReply,
@@ -768,13 +767,3 @@ async def register_admin_commands(bot: Bot) -> None:
         await bot.set_my_commands(
             commands, scope=BotCommandScopeChat(chat_id=group_id)
         )
-
-
-async def register_dm_commands(bot: Bot) -> None:
-    """Register /command hints for DM (visible in /-menu of private chats)."""
-    commands = [
-        BotCommand(command="start", description="Главное меню"),
-        BotCommand(command="add_vacancy", description="Добавить вакансию"),
-        BotCommand(command="list", description="Мои поиски"),
-    ]
-    await bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())

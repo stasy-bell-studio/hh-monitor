@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiogram.types import ReplyKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.tg.control_panel import (
@@ -25,6 +26,7 @@ from hh_monitor.tg.control_panel import (
     handle_dm_active,
     handle_dm_help,
     handle_dm_settings,
+    handle_dm_start,
     handle_dm_stats,
 )
 from tests.tg.conftest import (
@@ -56,7 +58,16 @@ def test_cp_router_registered_before_admin() -> None:
     )
 
 
-# ── /start keyboard helpers ───────────────────────────────────────────────────
+# ── /start ────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_start_sends_reply_keyboard() -> None:
+    msg = _msg("/start")
+    await handle_dm_start(msg)  # type: ignore[arg-type]
+    msg.answer.assert_called_once()
+    keyboard = msg.answer.call_args[1]["reply_markup"]
+    assert isinstance(keyboard, ReplyKeyboardMarkup)
 
 
 @pytest.mark.asyncio

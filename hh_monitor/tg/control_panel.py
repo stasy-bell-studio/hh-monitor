@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 import structlog
 from aiogram import F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import BaseFilter
+from aiogram.filters import BaseFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -263,6 +263,17 @@ async def _fetch_cp_active_row(session: AsyncSession, search_id: int) -> dict[st
     }
 
 
+# ── /start ────────────────────────────────────────────────────────────────────
+
+
+@cp_router.message(Command("start"))
+async def handle_dm_start(message: Message) -> None:
+    await message.answer(
+        "<b>Панель управления hh-monitor</b>\nВыбери раздел:",
+        reply_markup=_main_menu_keyboard(),
+    )
+
+
 # ── 📋 Активные вакансии ─────────────────────────────────────────────────────
 
 
@@ -374,6 +385,7 @@ async def handle_dm_add_vacancy(message: Message, state: FSMContext) -> None:
 # ── ❓ Помощь ─────────────────────────────────────────────────────────────────
 
 
+@cp_router.message(Command("help"))
 @cp_router.message(F.text == "❓ Помощь")
 async def handle_dm_help(message: Message) -> None:
     help_text = (
