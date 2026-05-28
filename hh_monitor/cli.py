@@ -29,6 +29,10 @@ from hh_monitor.hh.oauth import (
     get_valid_token,
     refresh_access_token,
 )
+from hh_monitor.tg.oauth_alerts import (
+    send_oauth_expiry_warning_alert,
+    send_oauth_refresh_failed_alert,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -84,9 +88,23 @@ def hh_refresh() -> None:
 
 
 async def _do_refresh() -> None:
+    from sqlalchemy import select
+
     log.info("hh.oauth.refresh.started")
+
+    # Snapshot pre-refresh token state so alert functions can report the last
+    # known expiry even when the refresh itself fails (B1: same select criterion
+    # as refresh_access_token uses — select(OAuthToken).limit(1)).
+    pre_expires_at: datetime | None = None
+    pre_updated_at: datetime | None = None
+
     try:
         async with async_session_factory() as session:
+            pre_result = await session.execute(select(OAuthToken).limit(1))
+            pre_snap = pre_result.scalar_one_or_none()
+            if pre_snap is not None:
+                pre_expires_at = pre_snap.expires_at
+                pre_updated_at = pre_snap.updated_at
             token = await refresh_access_token(session)
     except HHOAuthError as exc:
         log.error(
@@ -95,6 +113,11 @@ async def _do_refresh() -> None:
             status_code=exc.status_code,
             body=str(exc.body)[:500],
         )
+        await send_oauth_refresh_failed_alert(
+            error_message=exc.message[:300],
+            status_code=exc.status_code,
+            last_known_expires_at_utc=pre_expires_at,
+        )
         typer.echo(f"Refresh failed: {exc.message}", err=True)
         raise typer.Exit(1) from exc
     except Exception as exc:
@@ -102,6 +125,11 @@ async def _do_refresh() -> None:
             "hh.oauth.refresh.failed",
             error_message=str(exc),
             error_type=type(exc).__name__,
+        )
+        await send_oauth_refresh_failed_alert(
+            error_message=str(exc)[:300],
+            status_code=None,
+            last_known_expires_at_utc=pre_expires_at,
         )
         typer.echo(f"Refresh failed: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -116,6 +144,18 @@ async def _do_refresh() -> None:
         scope=token.scope,
     )
     typer.echo(f"Token refreshed. Expires in {expires_in} seconds ({expires_at_iso}).")
+
+    # Fire expiry warning if pre-refresh token was near-expiry AND stale (> 24 h
+    # since last refresh), which indicates the systemd timer may have missed a run.
+    if pre_expires_at is not None and pre_updated_at is not None:
+        pre_expires_in_h = (pre_expires_at - now_utc).total_seconds() / 3600
+        pre_refresh_age_h = (now_utc - pre_updated_at).total_seconds() / 3600
+        if pre_expires_in_h < 24.0 and pre_refresh_age_h > 24.0:
+            await send_oauth_expiry_warning_alert(
+                expires_in_hours=pre_expires_in_h,
+                last_refresh_age_hours=pre_refresh_age_h,
+                expires_at_utc=token.expires_at,
+            )
 
 
 @hh_app.command("me")
