@@ -77,11 +77,14 @@ _TYPE_WORDS: frozenset[str] = frozenset(
     {"область", "край", "республика", "округ", "автономный", "автономная", "автономное"}
 )
 
-# Genuine spelling variants only — no city→region mappings here.
+# Genuine spelling variants and city-level entries absent from /areas/113 top level.
 _SPELLING_ALIASES: dict[str, int] = {
     "спб": 2,
     "питер": 2,
     "санкт петербург": 2,  # without hyphen
+    # 130 = Севастополь: federal city nested under Республика Крым in HH's hierarchy,
+    # absent from /areas/113 top-level, verified via GET /areas/130 on 2026-05-29.
+    "севастополь": 130,
 }
 
 _TRAILING_PARENS_RE = re.compile(r"\s*\(\d+\)$")

@@ -116,6 +116,22 @@ def test_resolve_piter_alias() -> None:
     assert unknown == []
 
 
+def test_resolve_sevastopol_alias() -> None:
+    """Севастополь is a federal city nested under Крым in HH's hierarchy
+    (id=130, parent_id=2114, absent from /areas/113 top level).
+    Must resolve by name, not only via the 21Vek macro."""
+    ids, unknown = resolve_region_names(["Севастополь"])
+    assert ids == [130]
+    assert unknown == []
+
+
+def test_resolve_krym_stripped() -> None:
+    """'Крым' (without 'Республика') resolves via auto-stripped type-word alias."""
+    ids, unknown = resolve_region_names(["Крым"])
+    assert ids == [2114]
+    assert unknown == []
+
+
 # ── Unknown names ─────────────────────────────────────────────────────────────────
 
 
@@ -158,7 +174,29 @@ def test_primary_area_ids_traceable_in_ru_areas() -> None:
     ID 130 (Севастополь) is a city nested under Республика Крым (parent_id=2114)
     in HH's area hierarchy — not a top-level federal subject, hence absent from
     RU_AREAS (which covers /areas/113 top-level entries only).
+    It is covered separately via _SPELLING_ALIASES.
     """
     _KNOWN_CITY_IDS = {130}
     missing = set(PRIMARY_AREA_IDS_21VEK) - set(RU_AREAS.values()) - _KNOWN_CITY_IDS
     assert not missing, f"IDs in PRIMARY_AREA_IDS_21VEK not found in RU_AREAS: {missing}"
+
+
+def test_all_21vek_ids_resolve_by_name() -> None:
+    """Every ID in PRIMARY_AREA_IDS_21VEK must be reachable by typing its region name.
+
+    This catches the class of bug where a region can only be addressed via the
+    macro but returns ⚠️ unknown when typed explicitly (e.g. 'Севастополь').
+    """
+    reverse = {v: k for k, v in RU_AREAS.items()}
+    # 130 (Севастополь) is in _SPELLING_ALIASES, not RU_AREAS; name is known.
+    extra: dict[int, str] = {130: "Севастополь"}
+
+    failures: list[str] = []
+    for area_id in PRIMARY_AREA_IDS_21VEK:
+        name = reverse.get(area_id) or extra.get(area_id)
+        assert name is not None, f"No name found for area_id={area_id}"
+        ids, unk = resolve_region_names([name.title()])
+        if area_id not in ids:
+            failures.append(f"area_id={area_id} name={name!r} resolved_ids={ids}")
+
+    assert not failures, "Some 21Vek IDs do not resolve by name:\n" + "\n".join(failures)
