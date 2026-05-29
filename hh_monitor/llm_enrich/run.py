@@ -115,11 +115,25 @@ async def _latest_snapshot(
     return payload, content_hash
 
 
+async def _snapshot_by_id(
+    session: AsyncSession, snapshot_id: int
+) -> tuple[dict[str, Any], str] | None:
+    """Return (payload, content_hash) for a specific snapshot row, or None."""
+    result = await session.execute(
+        select(Snapshot.payload, Snapshot.content_hash).where(Snapshot.id == snapshot_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        return None
+    return row[0], row[1]
+
+
 async def _enrich_one(
     session: AsyncSession,
     event_id: int,
     resume_id: str,
     event_fit_score: int | None,
+    event_details: dict[str, Any] | None,
     portrait: Portrait,
     global_ctx: GlobalContext,
     *,
@@ -135,14 +149,22 @@ async def _enrich_one(
     """
     log_ctx = log.bind(resume_id=resume_id, event_id=event_id)
 
-    # 1. Load latest snapshot
-    snap = await _latest_snapshot(session, resume_id)
+    # 1. Load the snapshot that generated this event (own-snapshot scoring).
+    # Fall back to latest snapshot only for legacy events without curr_snapshot_id.
+    curr_snapshot_id: int | None = (event_details or {}).get("curr_snapshot_id")
+    if curr_snapshot_id is not None:
+        snap = await _snapshot_by_id(session, curr_snapshot_id)
+    else:
+        snap = await _latest_snapshot(session, resume_id)
     if snap is None:
         log_ctx.warning("llm_enrich.no_snapshot")
         return {"resume_id": resume_id, "status": "skipped", "reason": "no_snapshot"}
     payload, content_hash = snap
 
-    # 2. Compute fit score and check hard-reject guard
+    # 2. Compute fit score and check hard-reject guard.
+    # event_fit_score is NULL in normal production flow (detector never writes it), so
+    # we recompute from the snapshot payload.  On --force re-runs, the cached DB value
+    # is used to skip the CPU work (score is deterministic for a fixed snapshot).
     fit_score_val: int | None = event_fit_score
     if fit_score_val is None:
         fit_score_val, breakdown = fit_compute(payload, portrait)
@@ -167,13 +189,20 @@ async def _enrich_one(
         )
         return {"resume_id": resume_id, "status": "skipped", "reason": reject_reason}
 
-    # 3. Check fit threshold
+    # 3. Check fit threshold — close the event so it is never re-churned.
+    # score_total stays NULL (NULL >= threshold is false in SQL → never sends).
     if fit_score_val < settings.score_fit_min_for_llm:
         log_ctx.info(
             "llm_enrich.below_threshold",
             fit_score=fit_score_val,
             threshold=settings.score_fit_min_for_llm,
         )
+        await session.execute(
+            update(Event)
+            .where(Event.id == event_id)
+            .values(llm_enriched=True, fit_score=fit_score_val)
+        )
+        await session.commit()
         return {
             "resume_id": resume_id,
             "status": "skipped",
@@ -275,6 +304,8 @@ async def _enrich_one(
         .where(Event.id == event_id)
         .values(
             llm_enriched=True,
+            fit_score=fit_score_val,
+            score_total=score_total,
             llm_facts_confirmed=facts_text,
             llm_weak_spots=weak_text,
             llm_red_flags=red_text,
@@ -398,7 +429,7 @@ async def run_llm_enrichment(
 
     # Fetch events to process; --force drops the llm_enriched=False filter.
     event_stmt = (
-        select(Event.id, Event.hh_resume_id, Event.fit_score)
+        select(Event.id, Event.hh_resume_id, Event.fit_score, Event.details)
         .where(Event.search_id == search_id)
         .order_by(Event.created_at.asc())
         .limit(limit)
@@ -426,13 +457,14 @@ async def run_llm_enrichment(
     errors = 0
     results: list[dict[str, Any]] = []
 
-    for i, (event_id, resume_id, event_fit_score) in enumerate(event_rows):
+    for i, (event_id, resume_id, event_fit_score, event_details) in enumerate(event_rows):
         try:
             result = await _enrich_one(
                 session,
                 event_id,
                 resume_id,
                 event_fit_score,
+                event_details,
                 portrait,
                 global_ctx,
                 critic_prompt=critic_prompt,

@@ -12,7 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from hh_monitor.db.models import Event, Resume, Search, Snapshot
 from hh_monitor.fit.portrait import Filters, GlobalContext, Portrait, RegionFilters
@@ -1119,3 +1119,170 @@ async def test_nested_interview_questions_flattened(
     assert all(isinstance(x, str) for x in iq)
     assert any("Q1" in x for x in iq)
     assert "Q3" in iq
+
+
+# ── CC-14-fix: below-threshold close + per-event scores ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_below_threshold_closes_event(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Below-threshold event is closed (llm_enriched=True) so it is never re-picked."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
+    search, resume, event = await _seed_db(db_session, fit_score=50)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+    ) as mock_api:
+        await run_llm_enrichment(
+            db_session, search.id, limit=5, portraits=portraits, global_ctx=_global_ctx()
+        )
+        mock_api.assert_not_called()
+
+    await db_session.refresh(event)
+    assert event.llm_enriched is True, "below-threshold event must be closed"
+    assert event.fit_score == 50, "fit_score must be persisted on event"
+    assert event.score_total is None, "score_total must stay NULL (never passes send gate)"
+
+
+@pytest.mark.asyncio
+async def test_below_threshold_event_not_re_picked(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A closed below-threshold event is not selected in a subsequent enrichment run."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
+    search, resume, event = await _seed_db(db_session, fit_score=50)
+    # Capture IDs as plain ints now — _enrich_one's internal commit expires ORM objects,
+    # so accessing .id on expired objects would trigger a sync lazy-load → MissingGreenlet.
+    search_id: int = search.id
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    with patch("hh_monitor.llm_enrich.client.chat_completion_messages", new_callable=AsyncMock):
+        await run_llm_enrichment(
+            db_session, search_id, limit=5, portraits=portraits, global_ctx=_global_ctx()
+        )
+
+    # After close, no unenriched events should remain for this search.
+    # Query directly rather than calling run_llm_enrichment twice (avoids second
+    # savepoint cycle that confuses asyncpg in the test fixture).
+    count_result = await db_session.execute(
+        select(func.count()).where(
+            Event.search_id == search_id,
+            Event.llm_enriched.is_(False),
+        )
+    )
+    remaining = count_result.scalar_one()
+    assert remaining == 0, "closed event must not be re-picked"
+
+
+@pytest.mark.asyncio
+async def test_enriched_event_has_per_event_scores(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After successful enrichment, Event.fit_score and Event.score_total are written."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=_ok_llm_response(),
+    ):
+        result = await run_llm_enrichment(
+            db_session, search.id, limit=5, portraits=portraits, global_ctx=_global_ctx()
+        )
+
+    assert result["enriched"] == 1
+    await db_session.refresh(event)
+    await db_session.refresh(resume)
+    assert event.fit_score is not None, "Event.fit_score must be written after enrichment"
+    assert event.score_total is not None, "Event.score_total must be written after enrichment"
+    assert event.score_total == resume.score_total, "per-event score must equal resume aggregate"
+
+
+@pytest.mark.asyncio
+async def test_enrich_uses_own_snapshot(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Event with curr_snapshot_id in details is scored from its own snapshot, not latest."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
+
+    from hh_monitor.llm_enrich.run import _snapshot_by_id
+
+    # Create search + resume
+    search = Search(position_code="own_snap_pos", position_name="Test", hh_params={}, portrait={})
+    db_session.add(search)
+    await db_session.flush()
+    resume = Resume(hh_resume_id="r_own_snap")
+    db_session.add(resume)
+    await db_session.flush()
+
+    # S1: the snapshot the event was generated from (seeded fit_score will be None — recomputed)
+    s1_payload = {
+        "id": "r_own_snap",
+        "title": "директор",
+        "total_experience": {"months": 48},
+        "area": {"id": "63", "name": "Самара"},
+        "experience": [],
+    }
+    snap1 = Snapshot(
+        hh_resume_id="r_own_snap", payload=s1_payload, content_hash=_hash(s1_payload)
+    )
+    db_session.add(snap1)
+    await db_session.flush()
+
+    # S2: a newer snapshot (simulates the candidate updating their resume later)
+    s2_payload = dict(s1_payload)
+    s2_payload["title"] = "директор агентской сети страхование ОСАГО КАСКО"
+    snap2 = Snapshot(
+        hh_resume_id="r_own_snap", payload=s2_payload, content_hash=_hash(s2_payload)
+    )
+    db_session.add(snap2)
+    await db_session.flush()
+
+    # E1 references S1 explicitly — score must use S1's payload
+    event = Event(
+        hh_resume_id="r_own_snap",
+        event_type="NEW",
+        search_id=search.id,
+        llm_enriched=False,
+        details={"curr_snapshot_id": snap1.id},
+    )
+    db_session.add(event)
+    await db_session.flush()
+
+    # Capture IDs before any commit to avoid MissingGreenlet on expired ORM objects.
+    search_id: int = search.id
+    snap1_id: int = snap1.id
+    snap2_id: int = snap2.id
+
+    portraits = {"own_snap_pos": _portrait("own_snap_pos")}
+    called_snapshot_ids: list[int] = []
+    original_by_id = _snapshot_by_id
+
+    async def spy_by_id(session: Any, snapshot_id: int) -> Any:
+        called_snapshot_ids.append(snapshot_id)
+        return await original_by_id(session, snapshot_id)
+
+    with (
+        patch("hh_monitor.llm_enrich.run._snapshot_by_id", spy_by_id),
+        patch(
+            "hh_monitor.llm_enrich.client.chat_completion_messages", new_callable=AsyncMock
+        ) as mock_api,
+    ):
+        await run_llm_enrichment(
+            db_session, search_id, limit=5, portraits=portraits, global_ctx=_global_ctx()
+        )
+
+    # _snapshot_by_id must have been called with S1's id, not S2's
+    assert snap1_id in called_snapshot_ids, "must fetch event's own snapshot (S1)"
+    assert snap2_id not in called_snapshot_ids, "must NOT fall back to latest snapshot (S2)"
+    # With threshold=80, S1's payload should score below threshold → no LLM call
+    mock_api.assert_not_called()

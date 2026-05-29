@@ -68,6 +68,7 @@ async def _seed(session: AsyncSession, score_total: int = 80) -> int:
         event_type="NEW",
         search_id=search.id,
         llm_enriched=True,
+        score_total=score_total,
     )
     session.add(event)
     await session.flush()
@@ -235,3 +236,99 @@ async def test_send_new_candidate_card_dev_opt_in(db_session: AsyncSession) -> N
 
     assert result is True
     mock_send.assert_awaited_once()
+
+
+# ── CC-14-fix: send gate uses Event.score_total, not Resume.score_total ───────
+
+
+async def _seed_with_scores(
+    session: AsyncSession,
+    *,
+    event_score_total: int | None,
+    resume_score_total: int,
+) -> int:
+    """Seed a sendable event where Event.score_total and Resume.score_total can differ."""
+    search = Search(
+        position_code="gate_test_pos",
+        position_name="Gate Test",
+        hh_params={},
+        portrait={},
+        active=True,
+    )
+    session.add(search)
+    await session.flush()
+
+    resume = Resume(
+        hh_resume_id="resume_gate_test",
+        fit_score=70,
+        llm_score=90,
+        score_total=resume_score_total,
+        llm_verdict="подходит",
+        llm_real_role="Директор",
+        llm_comment="Опытный кандидат",
+    )
+    session.add(resume)
+    await session.flush()
+
+    payload = _payload()
+    snap = Snapshot(
+        hh_resume_id="resume_gate_test",
+        payload=payload,
+        content_hash=_hash(payload),
+    )
+    session.add(snap)
+    await session.flush()
+
+    event = Event(
+        hh_resume_id="resume_gate_test",
+        event_type="NEW",
+        search_id=search.id,
+        llm_enriched=True,
+        score_total=event_score_total,
+    )
+    session.add(event)
+    await session.flush()
+    event_id: int = event.id
+    await session.commit()
+    return event_id
+
+
+@pytest.mark.asyncio
+async def test_send_gate_uses_event_score_total(db_session: AsyncSession) -> None:
+    """send gate passes on Event.score_total >= threshold even when Resume.score_total is low."""
+    await _seed_with_scores(db_session, event_score_total=70, resume_score_total=20)
+    msg = MagicMock(spec=Message)
+    msg.message_id = 555
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock, return_value=msg),
+    ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_score_threshold = 60
+        ms.telegram_hr_group_id = -100
+        ms.telegram_cards_topic_id = 0
+        result = await send_pending_cards(db_session, _make_bot())
+
+    assert result["sent"] == 1, "event with score_total=70 must send even if Resume.score_total=20"
+
+
+@pytest.mark.asyncio
+async def test_send_gate_skips_null_event_score_total(db_session: AsyncSession) -> None:
+    """send_pending_cards skips events with NULL score_total (below-threshold closed events)."""
+    await _seed_with_scores(db_session, event_score_total=None, resume_score_total=80)
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock),
+    ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_score_threshold = 60
+        ms.telegram_hr_group_id = -100
+        ms.telegram_cards_topic_id = 0
+        result = await send_pending_cards(db_session, _make_bot())
+
+    assert result["sent"] == 0, "event with score_total=NULL must not be sent"
+    assert result["skipped_threshold"] == 0, "NULL score_total event must not appear in query"

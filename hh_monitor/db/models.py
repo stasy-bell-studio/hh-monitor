@@ -139,6 +139,9 @@ class Event(Base):
     search_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("searches.id"), nullable=True)
     details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     fit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Per-event combined score (0.3*fit + 0.7*llm). NULL = not yet enriched or below threshold.
+    # Send gate compares this, not Resume.score_total, to avoid last-write race between events.
+    score_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
     )

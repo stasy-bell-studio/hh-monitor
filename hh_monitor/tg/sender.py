@@ -65,11 +65,11 @@ async def send_new_candidate_card(session: AsyncSession, bot: Bot, event_id: int
     event, resume, search, snap_payload = data
 
     threshold = await get_current_threshold(session)
-    if resume.score_total is None or resume.score_total < threshold:
+    if event.score_total is None or event.score_total < threshold:
         logger.info(
             "tg_sender_under_threshold",
             event_id=event_id,
-            score_total=resume.score_total,
+            score_total=event.score_total,
             threshold=threshold,
         )
         return False
@@ -113,10 +113,9 @@ async def send_pending_cards(
     subq = select(NotificationSent.event_id)
     stmt = (
         select(Event.id)
-        .join(Resume, Resume.hh_resume_id == Event.hh_resume_id)
         .where(Event.llm_enriched.is_(True))
         .where(Event.id.not_in(subq))
-        .where(Resume.score_total >= threshold)
+        .where(Event.score_total >= threshold)
         .order_by(Event.id.asc())
     )
     if limit is not None:
