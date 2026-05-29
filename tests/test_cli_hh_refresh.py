@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import respx
 import typer
-from httpx import Response
+from httpx import ConnectError, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
@@ -50,6 +50,16 @@ def _expiring_token() -> OAuthToken:
         refresh_token="old_ref",
         token_type="bearer",
         expires_at=datetime.now(UTC) + timedelta(seconds=30),
+    )
+
+
+def _token_expiring_in(delta: timedelta) -> OAuthToken:
+    """Return a fresh OAuthToken whose access_token expires after ``delta``."""
+    return OAuthToken(
+        access_token="old_acc",
+        refresh_token="old_ref",
+        token_type="bearer",
+        expires_at=datetime.now(UTC) + delta,
     )
 
 
@@ -244,3 +254,169 @@ async def test_refresh_ok_warning_suppressed_when_fresh(db_session: AsyncSession
         await _do_refresh()
 
     mock_warn.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# CC-6 — TTL-guarded scheduled refresh (`--if-due`) + benign "not expired"
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_refresh_if_due_skips_when_ttl_above_threshold(
+    db_session: AsyncSession, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--if-due with plenty of TTL left → no HH call, exit 0, skipped log, no alert."""
+    token = _token_expiring_in(timedelta(days=10))
+    db_session.add(token)
+    await db_session.flush()
+
+    route = respx.post(_TOKEN_URL).mock(return_value=Response(200, json=_FAKE_RESP))
+
+    with (
+        capture_logs() as cap,
+        patch("hh_monitor.cli.async_session_factory", new=_make_sf(db_session)),
+        patch(
+            "hh_monitor.cli.send_oauth_refresh_failed_alert", new_callable=AsyncMock
+        ) as mock_fail,
+        patch(
+            "hh_monitor.cli.send_oauth_expiry_warning_alert", new_callable=AsyncMock
+        ) as mock_warn,
+    ):
+        await _do_refresh(if_due=True, threshold_hours=72)
+
+    assert route.call_count == 0
+    skipped = [e for e in cap if e.get("event") == "hh.oauth.refresh.skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["reason"] == "ttl_above_threshold"
+    mock_fail.assert_not_awaited()
+    mock_warn.assert_not_awaited()
+    assert "Refresh skipped" in capsys.readouterr().out
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_refresh_if_due_refreshes_when_ttl_below_threshold(
+    db_session: AsyncSession,
+) -> None:
+    """--if-due with TTL under the threshold → HH called, token updated, exit 0, no alert."""
+    token = _token_expiring_in(timedelta(hours=1))
+    db_session.add(token)
+    await db_session.flush()
+
+    route = respx.post(_TOKEN_URL).mock(return_value=Response(200, json=_FAKE_RESP))
+
+    with (
+        patch("hh_monitor.cli.async_session_factory", new=_make_sf(db_session)),
+        patch(
+            "hh_monitor.cli.send_oauth_refresh_failed_alert", new_callable=AsyncMock
+        ) as mock_fail,
+        patch(
+            "hh_monitor.cli.send_oauth_expiry_warning_alert", new_callable=AsyncMock
+        ),
+    ):
+        await _do_refresh(if_due=True, threshold_hours=72)
+
+    assert route.called
+    await db_session.refresh(token)
+    assert token.access_token == "new_acc"
+    mock_fail.assert_not_awaited()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_refresh_benign_when_hh_says_not_expired(
+    db_session: AsyncSession, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """HH 400 'token not expired' → benign no-op, exit 0, NO failed alert (manual mode)."""
+    token = _expiring_token()
+    db_session.add(token)
+    await db_session.flush()
+
+    respx.post(_TOKEN_URL).mock(
+        return_value=Response(
+            400, json={"error": "invalid_grant", "error_description": "token not expired"}
+        )
+    )
+
+    with (
+        patch("hh_monitor.cli.async_session_factory", new=_make_sf(db_session)),
+        patch(
+            "hh_monitor.cli.send_oauth_refresh_failed_alert", new_callable=AsyncMock
+        ) as mock_fail,
+    ):
+        await _do_refresh()  # manual mode still benign on "not expired"
+
+    assert "not expired" in capsys.readouterr().out.lower()
+    mock_fail.assert_not_awaited()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_refresh_failed_alert_on_revoked(db_session: AsyncSession) -> None:
+    """HH 400 without 'not expired' (revoked) → failed alert once, non-zero exit."""
+    token = _expiring_token()
+    db_session.add(token)
+    await db_session.flush()
+
+    respx.post(_TOKEN_URL).mock(
+        return_value=Response(
+            400,
+            json={"error": "invalid_grant", "error_description": "token has been revoked"},
+        )
+    )
+
+    with (
+        patch("hh_monitor.cli.async_session_factory", new=_make_sf(db_session)),
+        patch(
+            "hh_monitor.cli.send_oauth_refresh_failed_alert", new_callable=AsyncMock
+        ) as mock_fail,
+        pytest.raises(typer.Exit) as exc_info,
+    ):
+        await _do_refresh()
+
+    assert exc_info.value.exit_code == 1
+    mock_fail.assert_awaited_once()
+    assert mock_fail.call_args.kwargs["status_code"] == 400
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_refresh_network_error_alerts(db_session: AsyncSession) -> None:
+    """Network failure (ConnectError, no HTTP response) → failed alert, non-zero exit."""
+    token = _expiring_token()
+    db_session.add(token)
+    await db_session.flush()
+
+    respx.post(_TOKEN_URL).mock(side_effect=ConnectError("connection refused"))
+
+    with (
+        patch("hh_monitor.cli.async_session_factory", new=_make_sf(db_session)),
+        patch(
+            "hh_monitor.cli.send_oauth_refresh_failed_alert", new_callable=AsyncMock
+        ) as mock_fail,
+        pytest.raises(typer.Exit) as exc_info,
+    ):
+        await _do_refresh()
+
+    assert exc_info.value.exit_code == 1
+    mock_fail.assert_awaited_once()
+    assert mock_fail.call_args.kwargs["status_code"] is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_manual_refresh_calls_hh_even_when_ttl_high(db_session: AsyncSession) -> None:
+    """Manual `hh refresh` (no --if-due) ignores the TTL guard and always calls HH."""
+    token = _token_expiring_in(timedelta(days=10))
+    db_session.add(token)
+    await db_session.flush()
+
+    route = respx.post(_TOKEN_URL).mock(return_value=Response(200, json=_FAKE_RESP))
+
+    with patch("hh_monitor.cli.async_session_factory", new=_make_sf(db_session)):
+        await _do_refresh()
+
+    assert route.called
+    await db_session.refresh(token)
+    assert token.access_token == "new_acc"

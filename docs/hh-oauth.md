@@ -50,6 +50,69 @@ POST /oauth/token  grant_type=refresh_token
 
 и обновляет строку в `oauth_tokens`. Приложение никогда не делает запросы с просроченным токеном.
 
+## Проактивный refresh (systemd timer)
+
+`get_valid_token` обновляет токен только когда приложение **само** делает запрос к HH.
+Если запросов нет (тихий период), токен может протухнуть. Поэтому на сервере крутится
+oneshot-таска, запускаемая таймером каждые 6 часов:
+
+```bash
+hh-monitor hh refresh --if-due
+```
+
+- `--if-due` — обновляет токен **только** если до истечения осталось меньше порога
+  (`--threshold-hours`, по умолчанию 72 ч). Иначе — no-op, выход 0, HH не дёргается,
+  алерт не шлётся (лог `hh.oauth.refresh.skipped reason=ttl_above_threshold`).
+- Ручной `hh refresh` (без `--if-due`) обновляет токен безусловно — поведение не изменилось.
+- Если HH отвечает 400 «token not expired» (в любом режиме) — это безобидный no-op,
+  выход 0, алерт **не** шлётся.
+- Реальная ошибка (отозванный refresh_token, сетевой сбой, нет токена в БД) → CRITICAL-алерт
+  через production-gated путь + ненулевой exit (таска помечается failed в `systemctl status`).
+
+Unit-файлы **не** хранятся в репозитории — применяются вручную на сервере (как у hh-digest).
+Содержимое (зеркалит `hh-monitor-bot.service`: `User/Group=skadmin`, `.venv` python,
+`.env` читается из `WorkingDirectory`, без `EnvironmentFile`):
+
+```ini
+# /etc/systemd/system/hh-oauth-refresh.service
+[Unit]
+Description=hh-monitor proactive HH OAuth token refresh (oneshot)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=skadmin
+Group=skadmin
+WorkingDirectory=/home/skadmin/hh-monitor
+ExecStart=/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli hh refresh --if-due
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hh-oauth-refresh
+```
+
+```ini
+# /etc/systemd/system/hh-oauth-refresh.timer
+[Unit]
+Description=Run hh-monitor proactive OAuth refresh every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+Unit=hh-oauth-refresh.service
+
+[Install]
+WantedBy=timers.target
+```
+
+Установка на сервере:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now hh-oauth-refresh.timer
+systemctl list-timers hh-oauth-refresh.timer
+```
+
 ## Если refresh-token отозван
 
 Признаки: `hh-monitor hh me` возвращает `Error: Token refresh failed: ...` или `401`.

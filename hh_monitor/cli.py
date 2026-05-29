@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -82,15 +82,27 @@ async def _exchange_code(code: str) -> OAuthToken:
 
 
 @hh_app.command("refresh")
-def hh_refresh() -> None:
+def hh_refresh(
+    if_due: bool = typer.Option(
+        False,
+        "--if-due/--no-if-due",
+        help="Refresh only when the token's remaining TTL is below --threshold-hours "
+        "(for the scheduled systemd timer). Manual default refreshes unconditionally.",
+    ),
+    threshold_hours: int = typer.Option(
+        72,
+        "--threshold-hours",
+        help="With --if-due, refresh only when remaining TTL < N hours (default 72).",
+    ),
+) -> None:
     """Refresh the stored HH.ru OAuth token using the saved refresh_token."""
-    asyncio.run(_do_refresh())
+    asyncio.run(_do_refresh(if_due=if_due, threshold_hours=threshold_hours))
 
 
-async def _do_refresh() -> None:
+async def _do_refresh(if_due: bool = False, threshold_hours: int = 72) -> None:
     from sqlalchemy import select
 
-    log.info("hh.oauth.refresh.started")
+    log.info("hh.oauth.refresh.started", if_due=if_due, threshold_hours=threshold_hours)
 
     # Snapshot pre-refresh token state so alert functions can report the last
     # known expiry even when the refresh itself fails (B1: same select criterion
@@ -105,8 +117,42 @@ async def _do_refresh() -> None:
             if pre_snap is not None:
                 pre_expires_at = pre_snap.expires_at
                 pre_updated_at = pre_snap.updated_at
+
+            # TTL guard (scheduled path only). When the token is still comfortably
+            # valid, skip the HH round-trip entirely — this avoids HH's benign
+            # 400 "token not expired" and a needless request. Manual mode
+            # (if_due=False) always refreshes, preserving prior behavior.
+            if if_due and pre_expires_at is not None:
+                remaining = pre_expires_at - datetime.now(UTC)
+                if remaining > timedelta(hours=threshold_hours):
+                    remaining_h = remaining.total_seconds() / 3600
+                    log.info(
+                        "hh.oauth.refresh.skipped",
+                        reason="ttl_above_threshold",
+                        remaining_hours=round(remaining_h, 2),
+                        threshold_hours=threshold_hours,
+                    )
+                    typer.echo(
+                        f"Refresh skipped — token still valid ({remaining_h:.1f} h left, "
+                        f"threshold {threshold_hours} h)."
+                    )
+                    return
+
             token = await refresh_access_token(session)
     except HHOAuthError as exc:
+        # Benign: HH replies 400 "token not expired" when refreshing a still-valid
+        # token. Treat as a no-op in every mode (parity with the /hh_refresh
+        # handler), never alert. Mirrors the parse in hh_monitor/tg/commands.py.
+        try:
+            body = exc.body if isinstance(exc.body, dict) else json.loads(exc.body)
+            not_expired = "not expired" in str(body.get("error_description", "")).lower()
+        except Exception:
+            not_expired = False
+        if not_expired:
+            log.info("hh.oauth.refresh.skipped", reason="token_not_expired")
+            typer.echo("Token still valid — HH reports it is not expired. No-op.")
+            return
+
         log.error(
             "hh.oauth.refresh.failed",
             error_message=exc.message,
