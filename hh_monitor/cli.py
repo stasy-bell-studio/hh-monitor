@@ -29,6 +29,7 @@ from hh_monitor.hh.oauth import (
     get_valid_token,
     refresh_access_token,
 )
+from hh_monitor.logging import configure_logging
 from hh_monitor.tg.oauth_alerts import (
     send_oauth_expiry_warning_alert,
     send_oauth_refresh_failed_alert,
@@ -37,6 +38,13 @@ from hh_monitor.tg.oauth_alerts import (
 log = structlog.get_logger(__name__)
 
 app = typer.Typer(name="hh-monitor", help="HR Resume Monitor for SK 21 Vek")
+
+
+@app.callback()
+def _startup() -> None:
+    configure_logging()
+
+
 hh_app = typer.Typer(help="HH.ru API commands")
 app.add_typer(hh_app, name="hh")
 
