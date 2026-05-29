@@ -136,3 +136,24 @@ poetry run hh-monitor hh auth
 | `expires_at` | TIMESTAMPTZ | Момент истечения access_token |
 | `scope` | TEXT | Разрешённые scope (может быть NULL) |
 | `updated_at` | TIMESTAMPTZ | Обновляется при каждом refresh |
+
+## Безопасность .env на сервере
+
+Файл `.env` содержит OAuth-токены, клиентский секрет HH и API-ключи **в открытом виде**.
+Ограничьте доступ сразу после первого деплоя:
+
+```bash
+chmod 700 /home/skadmin/hh-monitor
+chmod 600 /home/skadmin/hh-monitor/.env
+# Проверить владельца:
+stat /home/skadmin/hh-monitor/.env
+# Ожидаемый результат: Access: (0600/-rw-------), Uid: skadmin, Gid: skadmin
+```
+
+После этого файл доступен только пользователю `skadmin`; другие системные пользователи
+доступа не имеют.
+
+**Шифрование токенов at rest** — принятый MVP-риск. Токены хранятся в plaintext;
+единственный контроль — права файловой системы и изоляция пользователя `skadmin`.
+Полноценное шифрование at rest (например, через systemd credentials или HashiCorp Vault)
+вынесено за рамки MVP.

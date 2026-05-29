@@ -7,30 +7,57 @@
 
 ## Расписание
 
-В сессии 7 (deployment) настраивается systemd timer:
+В сессии 7 (deployment) настраивается systemd timer.
+Unit-файлы не хранятся в репозитории — применяются вручную на сервере.
+
+```ini
+# /etc/systemd/system/hh-digest.service
+[Unit]
+Description=hh-monitor weekly digest sender (oneshot)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=skadmin
+Group=skadmin
+WorkingDirectory=/home/skadmin/hh-monitor
+ExecStart=/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli digest weekly
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hh-digest
+```
 
 ```ini
 # /etc/systemd/system/hh-digest.timer
+[Unit]
+Description=Run hh-monitor weekly digest every Friday at 15:00 Moscow time
+
 [Timer]
 OnCalendar=Fri *-*-* 15:00:00
 TimeZone=Europe/Moscow
 AccuracySec=1min
+Persistent=true
+Unit=hh-digest.service
 
 [Install]
 WantedBy=timers.target
 ```
 
-```ini
-# /etc/systemd/system/hh-digest.service
-[Service]
-ExecStart=poetry run python -m hh_monitor.cli digest weekly
-WorkingDirectory=/opt/hh-monitor
-EnvironmentFile=/opt/hh-monitor/.env
+Установка на сервере:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now hh-digest.timer
+systemctl list-timers hh-digest.timer
 ```
 
 Для ручного запуска:
 ```bash
-TZ=Europe/Moscow poetry run python -m hh_monitor.cli digest now
+# Локально (dev):
+poetry run python -m hh_monitor.cli digest now
+
+# На сервере (прямой venv):
+/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli digest now
 ```
 
 Или прямо из Telegram-группы (только для админов):
