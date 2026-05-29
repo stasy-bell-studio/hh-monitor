@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     telegram_digest_topic_id: int = 0
     telegram_admin_topic_id: int = 0
 
+    # Proactive send gate: True/False overrides env check; None → production-only default
+    telegram_send_enabled: bool | None = None  # env: TELEGRAM_SEND_ENABLED
+
     # Weekly digest schedule (used as reference; actual scheduling via systemd timer in session 7)
     weekly_digest_cron: str = "0 15 * * 5"  # Friday 15:00
     weekly_digest_tz: str = "Europe/Moscow"

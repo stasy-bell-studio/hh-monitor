@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from hh_monitor.config import settings
 from hh_monitor.db.models import Event, Search
+from hh_monitor.tg.send_guard import send_enabled
 
 logger = structlog.get_logger(__name__)
 
@@ -22,6 +23,9 @@ async def _notify_admin(text_msg: str) -> None:
     """Best-effort status post into the admin topic; never raises."""
     if not settings.telegram_bot_token or not settings.telegram_hr_group_id:
         logger.warning("add_vacancy.launcher_no_bot_config")
+        return
+    if not send_enabled(settings):
+        logger.info("tg.send.skipped", reason="send_disabled", env=settings.env)
         return
     try:
         from hh_monitor.tg.client import make_bot

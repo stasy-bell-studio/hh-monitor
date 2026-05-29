@@ -12,6 +12,7 @@ from hh_monitor.config import settings
 from hh_monitor.db.models import AppConfig, Event, NotificationSent, Resume, Search, Snapshot
 from hh_monitor.tg.cards import build_card_html, build_inline_keyboard
 from hh_monitor.tg.client import send_card
+from hh_monitor.tg.send_guard import send_enabled
 
 logger = structlog.get_logger(__name__)
 
@@ -53,6 +54,9 @@ async def _fetch_event_data(
 
 
 async def send_new_candidate_card(session: AsyncSession, bot: Bot, event_id: int) -> bool:
+    if not send_enabled(settings):
+        logger.info("tg.send.skipped", reason="send_disabled", env=settings.env, event_id=event_id)
+        return False
     data = await _fetch_event_data(session, event_id)
     if data is None:
         logger.warning("tg_sender_event_not_found", event_id=event_id)
@@ -101,6 +105,9 @@ async def send_pending_cards(
     bot: Bot,
     limit: int | None = None,
 ) -> dict[str, int]:
+    if not send_enabled(settings):
+        logger.info("tg.send.skipped", reason="send_disabled", env=settings.env)
+        return {"sent": 0, "skipped_threshold": 0, "skipped_duplicate": 0, "errors": 0}
     threshold = await get_current_threshold(session)
 
     subq = select(NotificationSent.event_id)

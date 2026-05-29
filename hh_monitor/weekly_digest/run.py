@@ -14,6 +14,7 @@ from weasyprint import HTML  # type: ignore[import-untyped]
 
 from hh_monitor.config import settings
 from hh_monitor.db.models import Event, ParserRun, Resume, Search
+from hh_monitor.tg.send_guard import send_enabled
 
 logger = structlog.get_logger(__name__)
 
@@ -133,6 +134,9 @@ def _empty_digest_text(date_from: datetime, date_to: datetime) -> str:
 
 
 async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
+    if not send_enabled(settings):
+        logger.info("tg.send.skipped", reason="send_disabled", env=settings.env)
+        return
     now = datetime.now(UTC)
     date_to = now
     date_from = now - timedelta(days=7)

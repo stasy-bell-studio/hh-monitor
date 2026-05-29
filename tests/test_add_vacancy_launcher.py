@@ -87,3 +87,44 @@ async def test_initial_scan_failure_notifies(db_session: Any) -> None:
     assert notes
     assert "упал" in notes[0]
     assert "RuntimeError" in notes[0]
+
+
+# ── CC-7 env gate ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_notify_admin_skipped_non_prod() -> None:
+    """Non-prod + TELEGRAM_SEND_ENABLED unset → make_bot never called."""
+    with (
+        patch("hh_monitor.tg.add_vacancy.launcher.settings") as ms,
+        patch("hh_monitor.tg.client.make_bot") as mock_make_bot,
+    ):
+        ms.env = "local"
+        ms.telegram_send_enabled = None
+        ms.telegram_bot_token = "tok"
+        ms.telegram_hr_group_id = -100
+        await L._notify_admin("hello")
+
+    mock_make_bot.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_notify_admin_dev_opt_in() -> None:
+    """env=local + TELEGRAM_SEND_ENABLED=True → guard passes, send_message called once."""
+    bot = AsyncMock()
+    bot.send_message = AsyncMock()
+    bot.session = AsyncMock()
+
+    # make_bot is imported lazily inside _notify_admin, so patch the source module
+    with (
+        patch("hh_monitor.tg.add_vacancy.launcher.settings") as ms,
+        patch("hh_monitor.tg.client.make_bot", return_value=bot),
+    ):
+        ms.env = "local"
+        ms.telegram_send_enabled = True
+        ms.telegram_bot_token = "tok"
+        ms.telegram_hr_group_id = -100
+        ms.telegram_admin_topic_id = 0
+        await L._notify_admin("hello")
+
+    bot.send_message.assert_awaited_once()

@@ -157,11 +157,18 @@ async def test_run_weekly_digest_calls_send_document() -> None:
         "parser_stats": _synthetic_context()["parser_stats"],
     }
 
-    with patch(
-        "hh_monitor.weekly_digest.run._collect_data",
-        new_callable=AsyncMock,
-        return_value=synthetic_data,
+    with (
+        patch("hh_monitor.weekly_digest.run.settings") as ms,
+        patch(
+            "hh_monitor.weekly_digest.run._collect_data",
+            new_callable=AsyncMock,
+            return_value=synthetic_data,
+        ),
     ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_hr_group_id = -100
+        ms.telegram_digest_topic_id = 0
         await run_weekly_digest(mock_session, mock_bot)
 
     mock_bot.send_document.assert_called_once()
@@ -193,14 +200,75 @@ async def test_run_weekly_digest_pdf_content() -> None:
         },
     }
 
-    with patch(
-        "hh_monitor.weekly_digest.run._collect_data",
-        new_callable=AsyncMock,
-        return_value=synthetic_data,
+    with (
+        patch("hh_monitor.weekly_digest.run.settings") as ms,
+        patch(
+            "hh_monitor.weekly_digest.run._collect_data",
+            new_callable=AsyncMock,
+            return_value=synthetic_data,
+        ),
     ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_hr_group_id = -100
+        ms.telegram_digest_topic_id = 0
         await run_weekly_digest(mock_session, mock_bot)
 
     call_kwargs = mock_bot.send_document.call_args[1]
     doc = call_kwargs["document"]
     assert isinstance(doc, BufferedInputFile)
     assert doc.data[:4] == b"%PDF"
+
+
+# ── CC-7 env gate ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_weekly_digest_skipped_non_prod() -> None:
+    """Non-prod + TELEGRAM_SEND_ENABLED unset → immediate return, no bot calls."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from hh_monitor.weekly_digest.run import run_weekly_digest
+
+    bot = AsyncMock()
+
+    with patch("hh_monitor.weekly_digest.run.settings") as ms:
+        ms.env = "local"
+        ms.telegram_send_enabled = None
+        await run_weekly_digest(MagicMock(), bot)
+
+    bot.send_message.assert_not_called()
+    bot.send_document.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_weekly_digest_dev_opt_in() -> None:
+    """env=local + TELEGRAM_SEND_ENABLED=True → guard passes, send_document called once."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from hh_monitor.weekly_digest.run import run_weekly_digest
+
+    bot = AsyncMock()
+    bot.send_document = AsyncMock()
+
+    synthetic_data = {
+        "positions": _synthetic_context()["positions"],
+        "total_candidates": 3,
+        "parser_stats": _synthetic_context()["parser_stats"],
+    }
+
+    with (
+        patch("hh_monitor.weekly_digest.run.settings") as ms,
+        patch(
+            "hh_monitor.weekly_digest.run._collect_data",
+            new_callable=AsyncMock,
+            return_value=synthetic_data,
+        ),
+    ):
+        ms.env = "local"
+        ms.telegram_send_enabled = True
+        ms.telegram_hr_group_id = -100
+        ms.telegram_digest_topic_id = 0
+        await run_weekly_digest(MagicMock(), bot)
+
+    bot.send_document.assert_awaited_once()

@@ -12,7 +12,7 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.db.models import AppConfig, Event, NotificationSent, Resume, Search, Snapshot
-from hh_monitor.tg.sender import get_current_threshold, send_new_candidate_card
+from hh_monitor.tg.sender import get_current_threshold, send_new_candidate_card, send_pending_cards
 
 # ── DB seed helpers ───────────────────────────────────────────────────────────
 
@@ -108,7 +108,15 @@ async def test_send_new_candidate_card_success(db_session: AsyncSession) -> None
     event_id = await _seed(db_session, score_total=80)
     bot = _make_bot(message_id=1234)
 
-    with patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send:
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_score_threshold = 60
+        ms.telegram_hr_group_id = -100
+        ms.telegram_cards_topic_id = 0
         msg = MagicMock(spec=Message)
         msg.message_id = 1234
         mock_send.return_value = msg
@@ -128,7 +136,15 @@ async def test_send_new_candidate_card_success(db_session: AsyncSession) -> None
 async def test_send_new_candidate_card_idempotent(db_session: AsyncSession) -> None:
     event_id = await _seed(db_session, score_total=80)
 
-    with patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send:
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_score_threshold = 60
+        ms.telegram_hr_group_id = -100
+        ms.telegram_cards_topic_id = 0
         msg = MagicMock(spec=Message)
         msg.message_id = 5678
         mock_send.return_value = msg
@@ -166,3 +182,56 @@ async def test_send_new_candidate_card_event_not_found(db_session: AsyncSession)
 
     assert result is False
     mock_send.assert_not_called()
+
+
+# ── CC-7 env gate ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_send_new_candidate_card_skipped_non_prod(db_session: AsyncSession) -> None:
+    """Non-prod + TELEGRAM_SEND_ENABLED unset → False, send_card never called."""
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        ms.env = "local"
+        ms.telegram_send_enabled = None
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id=1)
+
+    assert result is False
+    mock_send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_pending_cards_skipped_non_prod(db_session: AsyncSession) -> None:
+    """Non-prod + TELEGRAM_SEND_ENABLED unset → zero dict, no DB query."""
+    with patch("hh_monitor.tg.sender.settings") as ms:
+        ms.env = "local"
+        ms.telegram_send_enabled = None
+        result = await send_pending_cards(db_session, _make_bot())
+
+    assert result == {"sent": 0, "skipped_threshold": 0, "skipped_duplicate": 0, "errors": 0}
+
+
+@pytest.mark.asyncio
+async def test_send_new_candidate_card_dev_opt_in(db_session: AsyncSession) -> None:
+    """env=local + TELEGRAM_SEND_ENABLED=True → guard passes, send_card called once."""
+    event_id = await _seed(db_session, score_total=80)
+
+    msg = MagicMock(spec=Message)
+    msg.message_id = 42
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock, return_value=msg)
+        as mock_send,
+    ):
+        ms.env = "local"
+        ms.telegram_send_enabled = True
+        ms.telegram_score_threshold = 60
+        ms.telegram_hr_group_id = -100
+        ms.telegram_cards_topic_id = 0
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is True
+    mock_send.assert_awaited_once()

@@ -25,11 +25,18 @@ async def test_empty_digest_sends_text_not_pdf() -> None:
     mock_bot.send_message = AsyncMock()
     mock_bot.send_document = AsyncMock()
 
-    with patch(
-        "hh_monitor.weekly_digest.run._collect_data",
-        new_callable=AsyncMock,
-        return_value=_make_data(0),
+    with (
+        patch("hh_monitor.weekly_digest.run.settings") as ms,
+        patch(
+            "hh_monitor.weekly_digest.run._collect_data",
+            new_callable=AsyncMock,
+            return_value=_make_data(0),
+        ),
     ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_hr_group_id = -100
+        ms.telegram_digest_topic_id = 0
         await run_weekly_digest(mock_session, mock_bot)
 
     mock_bot.send_message.assert_called_once()
@@ -51,11 +58,18 @@ async def test_non_empty_digest_sends_pdf_not_text() -> None:
     mock_bot.send_message = AsyncMock()
     mock_bot.send_document = AsyncMock()
 
-    with patch(
-        "hh_monitor.weekly_digest.run._collect_data",
-        new_callable=AsyncMock,
-        return_value=_make_data(3),
+    with (
+        patch("hh_monitor.weekly_digest.run.settings") as ms,
+        patch(
+            "hh_monitor.weekly_digest.run._collect_data",
+            new_callable=AsyncMock,
+            return_value=_make_data(3),
+        ),
     ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_hr_group_id = -100
+        ms.telegram_digest_topic_id = 0
         await run_weekly_digest(mock_session, mock_bot)
 
     mock_bot.send_document.assert_called_once()
