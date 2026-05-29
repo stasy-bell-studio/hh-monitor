@@ -84,10 +84,21 @@ async def test_forbidden_keys_stripped() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_json_response_raises() -> None:
+async def test_no_brace_response_raises() -> None:
     with (
         _patch_llm({"choices": [{"message": {"content": "не json"}}], "usage": {}}),
-        pytest.raises(ValueError, match="JSON"),
+        pytest.raises(ValueError, match="no JSON object"),
+    ):
+        await parse_to_portrait_dict("text", "Role")
+
+
+@pytest.mark.asyncio
+async def test_malformed_json_response_raises() -> None:
+    with (
+        _patch_llm(
+            {"choices": [{"message": {"content": '{"position_description": }'}}], "usage": {}}
+        ),
+        pytest.raises(ValueError, match="non-JSON portrait"),
     ):
         await parse_to_portrait_dict("text", "Role")
 
