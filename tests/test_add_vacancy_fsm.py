@@ -456,3 +456,50 @@ async def test_admin_filter_classes() -> None:
 
     with patch("hh_monitor.tg.add_vacancy.handlers.is_admin", return_value=False):
         assert await h._AdminUserFilter()(_msg(user_id=1)) is False
+
+
+# ── CC-4a AC5: callback.answer() before slow downstream calls ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_callback_answered_before_slow_call_s4_ok() -> None:
+    """AC5: handle_s4_ok answers the callback BEFORE the blocking LLM call."""
+    call_order: list[str] = []
+
+    async def track_answer(*a: Any, **kw: Any) -> None:
+        call_order.append("answer")
+
+    async def track_critic(*a: Any, **kw: Any) -> None:
+        call_order.append("critic")
+
+    cb = _cb("av:review:ok")
+    cb.answer = AsyncMock(side_effect=track_answer)
+
+    fsm = FakeFSM(data={"portrait_dict": _PORTRAIT_DICT, "position_name": "Test Role"})
+    with patch("hh_monitor.tg.add_vacancy.handlers._enter_critic", side_effect=track_critic):
+        await h.handle_s4_ok(cb, fsm)  # type: ignore[arg-type]
+
+    assert "answer" in call_order and "critic" in call_order
+    assert call_order.index("answer") < call_order.index("critic")
+
+
+@pytest.mark.asyncio
+async def test_callback_answered_before_slow_call_s3_retry() -> None:
+    """AC5: handle_s3_retry answers the callback BEFORE the blocking LLM parse."""
+    call_order: list[str] = []
+
+    async def track_answer(*a: Any, **kw: Any) -> None:
+        call_order.append("answer")
+
+    async def track_parse(*a: Any, **kw: Any) -> None:
+        call_order.append("parse")
+
+    cb = _cb("av:retry")
+    cb.answer = AsyncMock(side_effect=track_answer)
+
+    fsm = FakeFSM(data={"portrait_raw": "текст", "position_name": "Test Role"})
+    with patch("hh_monitor.tg.add_vacancy.handlers._run_parse", side_effect=track_parse):
+        await h.handle_s3_retry(cb, fsm)  # type: ignore[arg-type]
+
+    assert "answer" in call_order and "parse" in call_order
+    assert call_order.index("answer") < call_order.index("parse")

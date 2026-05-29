@@ -99,9 +99,9 @@ async def handle_add_start_callback(callback: CallbackQuery, state: FSMContext) 
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     if isinstance(callback.message, Message):
         await _start_wizard(state, callback.message)
-    await callback.answer()
 
 
 async def _start_wizard(state: FSMContext, message: Message) -> None:
@@ -122,9 +122,9 @@ async def handle_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     if isinstance(callback.message, Message):
         await _reset_to_panel(state, callback.message)
-    await callback.answer()
 
 
 # ── S1: position name ────────────────────────────────────────────────────────────
@@ -152,6 +152,7 @@ async def handle_s2_text(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     await state.update_data(input_mode="text")
     await state.set_state(AddVacancy.S3_portrait_raw)
     if isinstance(callback.message, Message):
@@ -161,7 +162,6 @@ async def handle_s2_text(callback: CallbackQuery, state: FSMContext) -> None:
             "Чем подробнее — тем точнее поиск.",
             reply_markup=kb.kb_cancel(),
         )
-    await callback.answer()
 
 
 @add_vacancy_router.callback_query(StateFilter(AddVacancy.S2_input_mode), F.data == "av:mode:file")
@@ -169,6 +169,7 @@ async def handle_s2_file(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     await state.update_data(input_mode="file")
     await state.set_state(AddVacancy.S3_portrait_raw)
     if isinstance(callback.message, Message):
@@ -176,7 +177,6 @@ async def handle_s2_file(callback: CallbackQuery, state: FSMContext) -> None:
             "Прикрепи файл с портретом (PDF, DOCX или TXT, до 5 МБ).",
             reply_markup=kb.kb_cancel(),
         )
-    await callback.answer()
 
 
 # ── S3: raw portrait (text or file) ──────────────────────────────────────────────
@@ -246,11 +246,11 @@ async def handle_s3_retry(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     data = await state.get_data()
     raw = data.get("portrait_raw", "")
     if isinstance(callback.message, Message) and raw:
         await _run_parse(callback.message, state, raw)
-    await callback.answer()
 
 
 async def _accumulate_and_parse(message: Message, state: FSMContext, new_text: str) -> None:
@@ -318,9 +318,9 @@ async def handle_s4_ok(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     if isinstance(callback.message, Message):
         await _enter_critic(callback.message, state)
-    await callback.answer()
 
 
 @add_vacancy_router.callback_query(StateFilter(AddVacancy.S4_review), F.data == "av:review:more")
@@ -328,13 +328,13 @@ async def handle_s4_more(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     await state.update_data(visited_review=True, input_mode="text")
     await state.set_state(AddVacancy.S3_portrait_raw)
     if isinstance(callback.message, Message):
         await callback.message.answer(
             "Что добавить или уточнить?", reply_markup=kb.kb_cancel()
         )
-    await callback.answer()
 
 
 async def _enter_critic(
@@ -379,9 +379,9 @@ async def handle_s5_ok(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     if isinstance(callback.message, Message):
         await _enter_launch(callback.message, state)
-    await callback.answer()
 
 
 @add_vacancy_router.callback_query(
@@ -391,12 +391,12 @@ async def handle_s5_rewrite(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     await state.update_data(awaiting="critic_feedback")
     if isinstance(callback.message, Message):
         await callback.message.answer(
             "Что переписать или подчеркнуть?", reply_markup=kb.kb_cancel()
         )
-    await callback.answer()
 
 
 @add_vacancy_router.message(StateFilter(AddVacancy.S5_critic_prompt), F.text)
@@ -466,6 +466,7 @@ async def handle_s6_launch(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     data = await state.get_data()
     tg_user_id = callback.from_user.id if callback.from_user else None
     search_code = await _insert_search(data, active=True, tg_user_id=tg_user_id)
@@ -479,7 +480,6 @@ async def handle_s6_launch(callback: CallbackQuery, state: FSMContext) -> None:
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     await state.clear()
-    await callback.answer()
 
 
 @add_vacancy_router.callback_query(StateFilter(AddVacancy.S6_launch), F.data == "av:launch:draft")
@@ -487,6 +487,7 @@ async def handle_s6_draft(callback: CallbackQuery, state: FSMContext) -> None:
     if not _guard_callback(callback):
         await callback.answer()
         return
+    await callback.answer()
     data = await state.get_data()
     tg_user_id = callback.from_user.id if callback.from_user else None
     await _insert_search(data, active=False, tg_user_id=tg_user_id)
@@ -495,4 +496,3 @@ async def handle_s6_draft(callback: CallbackQuery, state: FSMContext) -> None:
             "💾 Сохранено как черновик. Запустить можно позже из /active."
         )
     await state.clear()
-    await callback.answer()

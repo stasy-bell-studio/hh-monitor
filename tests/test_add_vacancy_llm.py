@@ -87,7 +87,7 @@ async def test_forbidden_keys_stripped() -> None:
 async def test_non_json_response_raises() -> None:
     with (
         _patch_llm({"choices": [{"message": {"content": "не json"}}], "usage": {}}),
-        pytest.raises(ValueError, match="non-JSON"),
+        pytest.raises(ValueError, match="JSON"),
     ):
         await parse_to_portrait_dict("text", "Role")
 
@@ -167,3 +167,62 @@ async def test_draft_critic_prompt_passes_feedback() -> None:
         )
     assert len(out) >= 100
     assert "меньше воды, больше цифр" in captured[0]["content"]
+
+
+# ── CC-4a: Bug-3 / Bug-4 hardening ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_parse_markdown_fence_ok() -> None:
+    """AC1: JSON wrapped in ```json ... ``` code fence parses into a valid Portrait."""
+    json_str = '{"position_description": "desc"}'
+    fenced = f"```json\n{json_str}\n```"
+    with _patch_llm({"choices": [{"message": {"content": fenced}}], "usage": {}}):
+        result = await parse_to_portrait_dict("текст", "Роль")
+    portrait = Portrait.model_validate(result)
+    assert portrait.position_description == "desc"
+
+
+@pytest.mark.asyncio
+async def test_null_scalars_use_defaults() -> None:
+    """AC2: explicit null for int/bool fields falls back to model defaults."""
+    payload = '{"max_career_gap_months": null, "higher_education_required": null}'
+    with _patch_llm({"choices": [{"message": {"content": payload}}], "usage": {}}):
+        result = await parse_to_portrait_dict("текст", "Роль")
+    portrait = Portrait.model_validate(result)
+    assert portrait.max_career_gap_months == 0
+    assert portrait.higher_education_required is False
+
+
+@pytest.mark.asyncio
+async def test_empty_llm_text_raises_clear_error() -> None:
+    """AC3: whitespace-only LLM output raises ValueError with an intelligible message."""
+    with (
+        _patch_llm({"choices": [{"message": {"content": "   "}}], "usage": {}}),
+        pytest.raises(ValueError, match="no JSON object"),
+    ):
+        await parse_to_portrait_dict("текст", "Роль")
+
+
+@pytest.mark.asyncio
+async def test_null_nested_filter_ok() -> None:
+    """AC4: filters.salary_range: null keeps salary_range as None (Optional field)."""
+    payload = '{"filters": {"salary_range": null}}'
+    with _patch_llm({"choices": [{"message": {"content": payload}}], "usage": {}}):
+        result = await parse_to_portrait_dict("текст", "Роль")
+    portrait = Portrait.model_validate(result)
+    assert portrait.filters.salary_range is None
+
+
+@pytest.mark.asyncio
+async def test_null_nested_region_fields_ok() -> None:
+    """AC4b: null two levels deep (regions.adjacent, regions.stop) → Pydantic defaults []."""
+    payload = (
+        '{"filters": {"regions": {"primary": ["Москва"], "adjacent": null, "stop": null}}}'
+    )
+    with _patch_llm({"choices": [{"message": {"content": payload}}], "usage": {}}):
+        result = await parse_to_portrait_dict("текст", "Роль")
+    portrait = Portrait.model_validate(result)
+    assert portrait.filters.regions.primary == ["Москва"]
+    assert portrait.filters.regions.adjacent == []
+    assert portrait.filters.regions.stop == []

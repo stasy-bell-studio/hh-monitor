@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import structlog
@@ -109,6 +110,32 @@ __RAW_TEXT__
 """
 
 
+_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.DOTALL)
+
+
+def _extract_json_object(text: str) -> str:
+    """Strip Markdown code fences, then slice to the outermost { … }."""
+    m = _CODE_FENCE_RE.search(text)
+    candidate = m.group(1) if m else text
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError(
+            "LLM returned no JSON object in portrait response"
+            f" (got {len(text.strip())} chars of text)"
+        )
+    return candidate[start : end + 1]
+
+
+def _drop_none_values(data: dict[str, Any]) -> dict[str, Any]:
+    """Recursively remove keys whose value is None from nested dicts."""
+    return {
+        k: _drop_none_values(v) if isinstance(v, dict) else v
+        for k, v in data.items()
+        if v is not None
+    }
+
+
 def _strip_forbidden(data: dict[str, Any]) -> dict[str, Any]:
     """Keep only whitelisted top-level keys; sanitise nested ``filters``."""
     cleaned: dict[str, Any] = {k: v for k, v in data.items() if k in _ALLOWED_KEYS}
@@ -117,7 +144,7 @@ def _strip_forbidden(data: dict[str, Any]) -> dict[str, Any]:
         cleaned["filters"] = {
             k: v for k, v in filters.items() if k in _ALLOWED_FILTER_KEYS
         }
-    return cleaned
+    return _drop_none_values(cleaned)
 
 
 async def parse_to_portrait_dict(raw_text: str, position_name: str) -> dict[str, Any]:
@@ -140,7 +167,7 @@ async def parse_to_portrait_dict(raw_text: str, position_name: str) -> dict[str,
     )
     text = llm_client.extract_text(raw)
     try:
-        parsed: Any = json.loads(text)
+        parsed: Any = json.loads(_extract_json_object(text))
     except json.JSONDecodeError as exc:
         raise ValueError(f"LLM returned non-JSON portrait: {exc}") from exc
     if not isinstance(parsed, dict):
