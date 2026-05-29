@@ -45,6 +45,7 @@ async def test_failed_alert_happy() -> None:
         patch("hh_monitor.tg.oauth_alerts.settings") as ms,
         patch("hh_monitor.tg.client.make_bot", return_value=bot),
     ):
+        ms.env = "production"
         ms.telegram_bot_token = "tok"
         ms.telegram_hr_group_id = -100123456
         ms.telegram_admin_topic_id = 5
@@ -67,6 +68,7 @@ async def test_failed_alert_degraded_no_token() -> None:
         patch("hh_monitor.tg.oauth_alerts.settings") as ms,
         patch("hh_monitor.tg.client.make_bot") as mock_make_bot,
     ):
+        ms.env = "production"
         ms.telegram_bot_token = ""
         ms.telegram_hr_group_id = -100123456
 
@@ -87,6 +89,7 @@ async def test_failed_alert_degraded_no_group() -> None:
         patch("hh_monitor.tg.oauth_alerts.settings") as ms,
         patch("hh_monitor.tg.client.make_bot") as mock_make_bot,
     ):
+        ms.env = "production"
         ms.telegram_bot_token = "tok"
         ms.telegram_hr_group_id = 0
 
@@ -110,6 +113,7 @@ async def test_failed_alert_bot_raises() -> None:
         patch("hh_monitor.tg.oauth_alerts.settings") as ms,
         patch("hh_monitor.tg.client.make_bot", return_value=bot),
     ):
+        ms.env = "production"
         ms.telegram_bot_token = "tok"
         ms.telegram_hr_group_id = -100123456
         ms.telegram_admin_topic_id = 0
@@ -138,6 +142,7 @@ async def test_warning_alert_happy() -> None:
         patch("hh_monitor.tg.oauth_alerts.settings") as ms,
         patch("hh_monitor.tg.client.make_bot", return_value=bot),
     ):
+        ms.env = "production"
         ms.telegram_bot_token = "tok"
         ms.telegram_hr_group_id = -100123456
         ms.telegram_admin_topic_id = 0
@@ -164,6 +169,76 @@ async def test_warning_alert_happy() -> None:
     assert "expires_at:" not in text
 
 
+# ---------------------------------------------------------------------------
+# Env gate (CC-5a)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failed_alert_suppressed_non_prod() -> None:
+    """Non-prod env → return False, make_bot never called."""
+    with (
+        patch("hh_monitor.tg.oauth_alerts.settings") as ms,
+        patch("hh_monitor.tg.client.make_bot") as mock_make_bot,
+    ):
+        ms.env = "local"
+        ms.telegram_bot_token = "tok"
+        ms.telegram_hr_group_id = -100123456
+
+        result = await send_oauth_refresh_failed_alert(
+            error_message="err",
+            status_code=400,
+            last_known_expires_at_utc=None,
+        )
+
+        assert result is False
+        mock_make_bot.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_warning_alert_suppressed_non_prod() -> None:
+    """Non-prod env → return False, make_bot never called."""
+    with (
+        patch("hh_monitor.tg.oauth_alerts.settings") as ms,
+        patch("hh_monitor.tg.client.make_bot") as mock_make_bot,
+    ):
+        ms.env = "local"
+        ms.telegram_bot_token = "tok"
+        ms.telegram_hr_group_id = -100123456
+
+        result = await send_oauth_expiry_warning_alert(
+            expires_in_hours=2.5,
+            last_refresh_age_hours=26.0,
+            expires_at_utc=datetime.now(UTC),
+        )
+
+        assert result is False
+        mock_make_bot.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_alert_prod_case_insensitive() -> None:
+    """env='Production' (mixed case) → sends alert (result True)."""
+    bot = _make_mock_bot()
+    with (
+        patch("hh_monitor.tg.oauth_alerts.settings") as ms,
+        patch("hh_monitor.tg.client.make_bot", return_value=bot),
+    ):
+        ms.env = "Production"
+        ms.telegram_bot_token = "tok"
+        ms.telegram_hr_group_id = -100123456
+        ms.telegram_admin_topic_id = 0
+
+        result = await send_oauth_refresh_failed_alert(
+            error_message="err",
+            status_code=400,
+            last_known_expires_at_utc=datetime.now(UTC),
+        )
+
+    assert result is True
+    bot.send_message.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_warning_alert_degraded() -> None:
     """Degraded: no bot token → skip, return False."""
@@ -171,6 +246,7 @@ async def test_warning_alert_degraded() -> None:
         patch("hh_monitor.tg.oauth_alerts.settings") as ms,
         patch("hh_monitor.tg.client.make_bot") as mock_make_bot,
     ):
+        ms.env = "production"
         ms.telegram_bot_token = None
         ms.telegram_hr_group_id = -100123456
 
@@ -192,6 +268,7 @@ async def test_warning_alert_token_already_expired_text() -> None:
         patch("hh_monitor.tg.oauth_alerts.settings") as ms,
         patch("hh_monitor.tg.client.make_bot", return_value=bot),
     ):
+        ms.env = "production"
         ms.telegram_bot_token = "tok"
         ms.telegram_hr_group_id = -100123456
         ms.telegram_admin_topic_id = 0

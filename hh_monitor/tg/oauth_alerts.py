@@ -27,6 +27,10 @@ def _is_degraded() -> bool:
     return not settings.telegram_bot_token or not settings.telegram_hr_group_id
 
 
+def _alerts_enabled() -> bool:
+    return str(settings.env).strip().lower() == "production"
+
+
 async def send_oauth_refresh_failed_alert(
     error_message: str,
     status_code: int | None,
@@ -37,6 +41,9 @@ async def send_oauth_refresh_failed_alert(
     Returns True if the message was delivered, False on any failure or degraded skip.
     Never raises.
     """
+    if not _alerts_enabled():
+        log.info("hh.oauth.alert.suppressed", alert_type="failed", env=settings.env)
+        return False
     if _is_degraded():
         log.warning(
             "hh.oauth.alert.skipped",
@@ -96,6 +103,9 @@ async def send_oauth_expiry_warning_alert(
     Returns True if the message was delivered, False on any failure or degraded skip.
     Never raises.
     """
+    if not _alerts_enabled():
+        log.info("hh.oauth.alert.suppressed", alert_type="warning", env=settings.env)
+        return False
     if _is_degraded():
         log.warning(
             "hh.oauth.alert.skipped",
