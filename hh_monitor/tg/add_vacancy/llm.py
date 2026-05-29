@@ -17,7 +17,7 @@ import structlog
 from hh_monitor.fit.portrait import Portrait
 from hh_monitor.llm_enrich import client as llm_client
 from hh_monitor.llm_enrich.critic_lens_builder import generate_critic_lens_from_portrait
-from hh_monitor.regions.expander import expand_region_names
+from hh_monitor.regions.expander import resolve_region_names
 from hh_monitor.searches.codes import slugify
 
 log = structlog.get_logger(__name__)
@@ -226,18 +226,18 @@ def derive_initial_hh_params(portrait: Portrait) -> dict[str, Any]:
     """Minimal base hh_params for the searches row.
 
     Sets ``text`` from the position name.  When ``portrait.filters.regions.primary``
-    contains recognized macros (e.g. "21 век"), ``area`` is populated with the
-    corresponding hh.ru area IDs via :func:`hh_monitor.regions.expander.expand_region_names`.
-    Unknown region strings are skipped with a WARNING (V2 will resolve them via
-    hh.ru /areas).  The full hh.ru ``text=`` query and ``period=`` are assembled at
-    parse time by :func:`hh_monitor.parser.run.build_search_params`.
+    contains recognizable region names or 21Vek macros, ``area`` is populated
+    with the corresponding hh.ru area IDs.  Unresolved names are silently
+    dropped here — they were already surfaced to the admin on the S4 review
+    card via resolve_region_names.  The full hh.ru ``text=`` query and
+    ``period=`` are assembled at parse time by build_search_params.
     """
     result: dict[str, Any] = {"text": portrait.position_name}
     primary = portrait.filters.regions.primary
     if primary:
-        area = expand_region_names(primary)
-        if area:
-            result["area"] = area
+        ids, _ = resolve_region_names(primary)
+        if ids:
+            result["area"] = ids
     return result
 
 

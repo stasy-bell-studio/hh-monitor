@@ -25,6 +25,7 @@ from sqlalchemy import insert
 from hh_monitor.config import settings
 from hh_monitor.db.models import Search
 from hh_monitor.fit.portrait import Portrait
+from hh_monitor.regions.expander import resolve_region_names
 from hh_monitor.searches.codes import next_unique_search_code, slugify
 from hh_monitor.tg.add_vacancy import keyboards as kb
 from hh_monitor.tg.add_vacancy.llm import (
@@ -277,10 +278,13 @@ async def _run_parse(message: Message, state: FSMContext, raw: str) -> None:
     await state.update_data(portrait_dict=portrait_dict)
     await state.set_state(AddVacancy.S4_review)
     portrait = Portrait.model_validate(portrait_dict)
-    await message.answer(_render_review(portrait), reply_markup=kb.kb_review())
+    _ids, unknown_regions = resolve_region_names(portrait.filters.regions.primary)
+    kb_fn = kb.kb_review_with_unknown if unknown_regions else kb.kb_review
+    await message.answer(_render_review(portrait, unknown_regions), reply_markup=kb_fn())
 
 
-def _render_review(portrait: Portrait) -> str:
+def _render_review(portrait: Portrait, unknown: list[str] | None = None) -> str:
+    unknown = unknown or []
     regions = portrait.filters.regions
     salary = portrait.filters.salary_range
     salary_str = f"{salary[0]}–{salary[1]} ₽" if salary else "не указана"
@@ -302,6 +306,9 @@ def _render_review(portrait: Portrait) -> str:
         f"📊 Опыт (моторное): {portrait.min_motor_experience_months} мес.",
         f"🎓 Высшее обязательно: {'да' if portrait.higher_education_required else 'нет'}",
     ]
+    if unknown:
+        lines.append(f"\n⚠️ Не распознаны: {', '.join(unknown)}")
+        lines.append("Исправь портрет или запусти поиск без фильтра региона.")
     gaps = compute_gaps(portrait)
     if gaps:
         lines.append("\nЧто я мог не дозаполнить:")

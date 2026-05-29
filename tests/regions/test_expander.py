@@ -1,50 +1,164 @@
-"""Tests for hh_monitor.regions.expander — V1 macro recognition."""
+"""Tests for hh_monitor.regions.expander — resolve_region_names."""
 
 from __future__ import annotations
 
 import structlog.testing
 
-from hh_monitor.regions.expander import PRIMARY_AREA_IDS_21VEK, expand_region_names
+from hh_monitor.regions.expander import PRIMARY_AREA_IDS_21VEK, resolve_region_names
+from hh_monitor.regions.ru_areas import RU_AREAS
+
+# ── 21Vek macro ──────────────────────────────────────────────────────────────────
 
 
-def test_expander_recognizes_canonical_macro() -> None:
-    result = expand_region_names(["все регионы 21 века"])
-    assert result == list(PRIMARY_AREA_IDS_21VEK)
-    assert len(result) == 27
+def test_resolve_canonical_macro() -> None:
+    ids, unknown = resolve_region_names(["все регионы 21 века"])
+    assert ids == list(PRIMARY_AREA_IDS_21VEK)
+    assert unknown == []
 
 
-def test_expander_case_and_whitespace_insensitive() -> None:
-    result = expand_region_names(["  21 ВЕК  ", "  21VEK"])
-    assert len(result) == 27
-    assert result == list(PRIMARY_AREA_IDS_21VEK)
+def test_resolve_paraphrased_21vek_macro() -> None:
+    """LLM paraphrase with trailing "(27)" must still trigger the 21Vek macro."""
+    ids, unknown = resolve_region_names(["Все регионы присутствия 21 Века (27)"])
+    assert ids == list(PRIMARY_AREA_IDS_21VEK)
+    assert unknown == []
 
 
-def test_expander_dedupes_multiple_macros() -> None:
-    result = expand_region_names(["21vek", "21 век", "все регионы 21 века"])
-    assert result == list(PRIMARY_AREA_IDS_21VEK)
+def test_resolve_21vek_bare() -> None:
+    ids, unknown = resolve_region_names(["21 Век"])
+    assert ids == list(PRIMARY_AREA_IDS_21VEK)
+    assert unknown == []
 
 
-def test_expander_unknown_name_warns_and_skips() -> None:
+def test_resolve_21vek_latin() -> None:
+    ids, unknown = resolve_region_names(["21vek"])
+    assert ids == list(PRIMARY_AREA_IDS_21VEK)
+    assert unknown == []
+
+
+def test_resolve_dedupes_multiple_macros() -> None:
+    ids, unknown = resolve_region_names(["21vek", "21 век", "все регионы 21 века"])
+    assert ids == list(PRIMARY_AREA_IDS_21VEK)
+    assert unknown == []
+
+
+# ── Explicit RF region names ──────────────────────────────────────────────────────
+
+
+def test_resolve_explicit_region_moskva() -> None:
+    ids, unknown = resolve_region_names(["Москва"])
+    assert ids == [1]
+    assert unknown == []
+
+
+def test_resolve_explicit_region_nizhegorodskaya() -> None:
+    ids, unknown = resolve_region_names(["Нижегородская область"])
+    assert ids == [1679]
+    assert unknown == []
+
+
+def test_resolve_explicit_region_krasnodarsky() -> None:
+    ids, unknown = resolve_region_names(["Краснодарский край"])
+    assert ids == [1438]
+    assert unknown == []
+
+
+# ── Normalisation ─────────────────────────────────────────────────────────────────
+
+
+def test_resolve_case_insensitive() -> None:
+    ids, unknown = resolve_region_names(["МОСКВА"])
+    assert ids == [1]
+    assert unknown == []
+
+
+def test_resolve_trailing_number_stripped() -> None:
+    """Trailing "(NN)" is stripped before lookup."""
+    ids, unknown = resolve_region_names(["Москва (1)"])
+    assert ids == [1]
+    assert unknown == []
+
+
+def test_resolve_whitespace_stripped() -> None:
+    ids, unknown = resolve_region_names(["  Санкт-Петербург  "])
+    assert ids == [2]
+    assert unknown == []
+
+
+# ── Stripped-type-word alias ──────────────────────────────────────────────────────
+
+
+def test_resolve_stripped_oblast() -> None:
+    """'нижегородская' (without 'область') should resolve via stripped alias."""
+    ids, unknown = resolve_region_names(["нижегородская"])
+    assert ids == [1679]
+    assert unknown == []
+
+
+def test_resolve_stripped_respublika() -> None:
+    """'татарстан' (without 'республика') should resolve."""
+    ids, unknown = resolve_region_names(["татарстан"])
+    assert ids == [1624]
+    assert unknown == []
+
+
+# ── Spelling aliases ─────────────────────────────────────────────────────────────
+
+
+def test_resolve_spb_alias() -> None:
+    ids, unknown = resolve_region_names(["СПб"])
+    assert ids == [2]
+    assert unknown == []
+
+
+def test_resolve_piter_alias() -> None:
+    ids, unknown = resolve_region_names(["Питер"])
+    assert ids == [2]
+    assert unknown == []
+
+
+# ── Unknown names ─────────────────────────────────────────────────────────────────
+
+
+def test_resolve_unknown_name_in_unknown_list() -> None:
+    ids, unknown = resolve_region_names(["НесуществующийГород"])
+    assert ids == []
+    assert unknown == ["НесуществующийГород"]
+
+
+def test_resolve_unknown_preserves_original_casing() -> None:
+    ids, unknown = resolve_region_names(["НесуществующийГород"])
+    assert unknown == ["НесуществующийГород"]
+
+
+def test_resolve_emits_no_logs() -> None:
+    """resolve_region_names must never emit structlog events."""
     with structlog.testing.capture_logs() as captured:
-        result = expand_region_names(["Хабаровск"])
-    assert result == []
-    assert len(captured) == 1
-    assert captured[0]["event"] == "regions.unknown_name"
-    assert captured[0]["name"] == "Хабаровск"
-
-
-def test_expander_empty_input() -> None:
-    with structlog.testing.capture_logs() as captured:
-        result = expand_region_names([])
-    assert result == []
+        resolve_region_names(["НесуществующийГород", "21 Век", "Москва"])
     assert captured == []
 
 
-def test_expander_mixed_macro_and_unknown() -> None:
-    with structlog.testing.capture_logs() as captured:
-        result = expand_region_names(["21vek", "Камчатка"])
-    assert len(result) == 27
-    assert result == list(PRIMARY_AREA_IDS_21VEK)
-    assert len(captured) == 1
-    assert captured[0]["event"] == "regions.unknown_name"
-    assert captured[0]["name"] == "Камчатка"
+def test_resolve_mixed_known_and_unknown() -> None:
+    ids, unknown = resolve_region_names(["Москва", "НесуществующийГород", "Санкт-Петербург"])
+    assert ids == [1, 2]
+    assert unknown == ["НесуществующийГород"]
+
+
+def test_resolve_empty_input() -> None:
+    ids, unknown = resolve_region_names([])
+    assert ids == []
+    assert unknown == []
+
+
+# ── Guard: PRIMARY_AREA_IDS_21VEK traceable in RU_AREAS ──────────────────────────
+
+
+def test_primary_area_ids_traceable_in_ru_areas() -> None:
+    """All 21Vek macro IDs must be traceable in RU_AREAS.
+
+    ID 130 (Севастополь) is a city nested under Республика Крым (parent_id=2114)
+    in HH's area hierarchy — not a top-level federal subject, hence absent from
+    RU_AREAS (which covers /areas/113 top-level entries only).
+    """
+    _KNOWN_CITY_IDS = {130}
+    missing = set(PRIMARY_AREA_IDS_21VEK) - set(RU_AREAS.values()) - _KNOWN_CITY_IDS
+    assert not missing, f"IDs in PRIMARY_AREA_IDS_21VEK not found in RU_AREAS: {missing}"

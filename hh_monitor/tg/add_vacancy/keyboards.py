@@ -64,6 +64,23 @@ def kb_review() -> InlineKeyboardMarkup:
     )
 
 
+def kb_review_with_unknown() -> InlineKeyboardMarkup:
+    """Review keyboard variant shown when portrait contains unresolved region names."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Исправить портрет", callback_data="av:review:more"
+                ),
+                InlineKeyboardButton(
+                    text="⚠️ Запустить без региона", callback_data="av:review:ok"
+                ),
+            ],
+            [_CANCEL_BTN],
+        ]
+    )
+
+
 def kb_critic() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
