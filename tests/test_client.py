@@ -76,6 +76,84 @@ async def test_401_twice_raises_oauth_error() -> None:
         await client.get("/me")
 
 
+# ── force_refresh tests (CC-8) ────────────────────────────────────────────────
+
+_REFRESHED_TOKEN = OAuthToken(
+    access_token="refreshed_token",
+    refresh_token="new_refresh",
+    token_type="bearer",
+    expires_at=datetime.now(UTC) + timedelta(hours=2),
+)
+
+
+def _make_client_with_refresh() -> tuple[HHClient, list[int]]:
+    calls: list[int] = []
+
+    async def force_refresh() -> OAuthToken:
+        calls.append(1)
+        return _REFRESHED_TOKEN
+
+    client = HHClient(
+        token_provider=_make_client()._token_provider,
+        force_refresh=force_refresh,
+        user_agent="test/1.0",
+    )
+    return client, calls
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_401_force_refresh_retry_success() -> None:
+    """401 → force_refresh called once → retry returns 200."""
+    client, refresh_calls = _make_client_with_refresh()
+    respx.get(f"{_BASE}/me").mock(
+        side_effect=[Response(401), Response(200, json={"id": "ok"})]
+    )
+    result = await client.get("/me")
+    assert result == {"id": "ok"}
+    assert len(refresh_calls) == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_401_force_refresh_still_401_raises() -> None:
+    """401 → refresh succeeds → server still 401s → HHOAuthError; exactly two HTTP calls."""
+    client, refresh_calls = _make_client_with_refresh()
+    route = respx.get(f"{_BASE}/me").mock(return_value=Response(401))
+    with pytest.raises(HHOAuthError):
+        await client.get("/me")
+    assert len(refresh_calls) == 1
+    assert route.call_count == 2  # initial + exactly one retry
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_401_force_refresh_raises_propagates() -> None:
+    """force_refresh raises HHOAuthError (revoked) → propagated, not swallowed."""
+    async def bad_refresh() -> OAuthToken:
+        raise HHOAuthError("invalid_grant", 400, "")
+
+    client = HHClient(
+        token_provider=_make_client()._token_provider,
+        force_refresh=bad_refresh,
+        user_agent="test/1.0",
+    )
+    respx.get(f"{_BASE}/me").mock(return_value=Response(401))
+    with pytest.raises(HHOAuthError, match="invalid_grant"):
+        await client.get("/me")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_200_no_force_refresh_called() -> None:
+    """Happy path (200): token_provider used, force_refresh never called."""
+    client, refresh_calls = _make_client_with_refresh()
+    respx.get(f"{_BASE}/me").mock(return_value=Response(200, json={"ok": True}))
+    result = await client.get("/me")
+    assert result == {"ok": True}
+    assert len(refresh_calls) == 0
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_429_with_retry_after() -> None:

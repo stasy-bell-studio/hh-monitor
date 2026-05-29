@@ -19,7 +19,7 @@ from hh_monitor.config import settings
 from hh_monitor.db.models import Search
 from hh_monitor.detector.run import run_detector
 from hh_monitor.hh.client import HHClient
-from hh_monitor.hh.oauth import get_valid_token
+from hh_monitor.hh.oauth import get_valid_token, refresh_access_token
 from hh_monitor.parser.run import run_parser
 
 logger = structlog.get_logger(__name__)
@@ -159,6 +159,7 @@ async def run_all(
             async with session_factory() as session:
                 client = HHClient(
                     token_provider=lambda: get_valid_token(session),
+                    force_refresh=lambda: refresh_access_token(session),
                     user_agent=settings.hh_user_agent,
                 )
                 await run_parser(session, client, search_id, max_pages=max_pages)

@@ -30,8 +30,10 @@ class HHClient:
         user_agent: str,
         base_url: str = _BASE_URL,
         max_retries: int = 6,
+        force_refresh: Callable[[], Awaitable[OAuthToken]] | None = None,
     ) -> None:
         self._token_provider = token_provider
+        self._force_refresh = force_refresh
         self._user_agent = user_agent
         self._base_url = base_url
         self._max_retries = max_retries
@@ -63,10 +65,16 @@ class HHClient:
             async with httpx.AsyncClient() as http:
                 resp = await self._send(http, method, url, token, params, data, json)
 
-                # 401: refresh token once and retry
+                # 401: force a real token refresh once, then retry exactly once.
+                # Semaphore(1) serialises all requests, so no concurrent 401s can occur —
+                # no storm guard needed.  After this block returns, the next waiter calls
+                # token_provider() → get_valid_token() → reads the freshly committed DB row.
                 if resp.status_code == 401:
-                    logger.info("Got 401, refreshing token and retrying", path=path)
-                    token = await self._token_provider()
+                    logger.info("Got 401, forcing token refresh and retrying", path=path)
+                    if self._force_refresh is not None:
+                        token = await self._force_refresh()  # propagates HHOAuthError if revoked
+                    else:
+                        token = await self._token_provider()
                     resp = await self._send(http, method, url, token, params, data, json)
                     if resp.status_code == 401:
                         raise HHOAuthError("Token invalid after refresh", 401, _body(resp))

@@ -218,6 +218,7 @@ async def _me() -> None:
     async with async_session_factory() as session:
         client = HHClient(
             token_provider=lambda: get_valid_token(session),
+            force_refresh=lambda: refresh_access_token(session),
             user_agent=settings.hh_user_agent,
         )
         result = await endpoints.me(client)
@@ -247,6 +248,7 @@ async def _dictionaries_refresh() -> None:
     async with async_session_factory() as session:
         client = HHClient(
             token_provider=lambda: get_valid_token(session),
+            force_refresh=lambda: refresh_access_token(session),
             user_agent=settings.hh_user_agent,
         )
         dicts = await endpoints.dictionaries_raw(client)
@@ -602,6 +604,7 @@ async def _parse_run(
 
         client = HHClient(
             token_provider=lambda: get_valid_token(session),
+            force_refresh=lambda: refresh_access_token(session),
             user_agent=settings.hh_user_agent,
         )
         return await run_parser(session, client, search_id, max_pages=max_pages)
@@ -767,6 +770,7 @@ async def _pipeline_run(
             # ── Normal mode: fetch from hh.ru first ───────────────────────
             client = HHClient(
                 token_provider=lambda: get_valid_token(session),
+                force_refresh=lambda: refresh_access_token(session),
                 user_agent=settings.hh_user_agent,
             )
             parser_result = await run_parser(session, client, search_id, max_pages=max_pages)
