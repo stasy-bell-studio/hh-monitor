@@ -165,3 +165,82 @@ async def test_hh_refresh_unexpected_error(caplog: pytest.LogCaptureFixture) -> 
     msg.answer.assert_awaited_once()
     text: str = msg.answer.call_args[0][0]
     assert "❌ Ошибка: RuntimeError" in text
+
+
+@pytest.mark.asyncio
+async def test_hh_refresh_token_not_expired() -> None:
+    token = _make_token(expires_at=datetime(2026, 6, 10, 12, 0, 0, tzinfo=UTC))
+    session = _mock_session(token)
+    not_expired_body = (
+        '{"error":"invalid_grant","error_description":"token not expired"}'
+    )
+
+    with (
+        patch(
+            "hh_monitor.tg.commands.get_session_factory",
+            return_value=_sf(session),
+        ),
+        patch(
+            "hh_monitor.tg.commands.refresh_access_token",
+            new_callable=AsyncMock,
+            side_effect=HHOAuthError("invalid_grant", 400, not_expired_body),
+        ),
+    ):
+        msg = _msg("/hh_refresh")
+        await handle_hh_refresh(msg)  # type: ignore[arg-type]
+
+    text: str = msg.answer.call_args[0][0]
+    assert "✅" in text
+    assert "❌" not in text
+    assert "10.06.2026" in text
+
+
+@pytest.mark.asyncio
+async def test_hh_refresh_genuine_invalid_grant() -> None:
+    token = _make_token()
+    session = _mock_session(token)
+    genuine_body = (
+        '{"error":"invalid_grant","error_description":"refresh_token is expired"}'
+    )
+
+    with (
+        patch(
+            "hh_monitor.tg.commands.get_session_factory",
+            return_value=_sf(session),
+        ),
+        patch(
+            "hh_monitor.tg.commands.refresh_access_token",
+            new_callable=AsyncMock,
+            side_effect=HHOAuthError("invalid_grant", 400, genuine_body),
+        ),
+    ):
+        msg = _msg("/hh_refresh")
+        await handle_hh_refresh(msg)  # type: ignore[arg-type]
+
+    text: str = msg.answer.call_args[0][0]
+    assert "❌ Refresh failed" in text
+
+
+@pytest.mark.asyncio
+async def test_hh_refresh_bad_body() -> None:
+    """Empty and non-JSON bodies must not raise and must produce ❌."""
+    for bad_body in ["", "oops"]:
+        token = _make_token()
+        session = _mock_session(token)
+
+        with (
+            patch(
+                "hh_monitor.tg.commands.get_session_factory",
+                return_value=_sf(session),
+            ),
+            patch(
+                "hh_monitor.tg.commands.refresh_access_token",
+                new_callable=AsyncMock,
+                side_effect=HHOAuthError("some error", 400, bad_body),
+            ),
+        ):
+            msg = _msg("/hh_refresh")
+            await handle_hh_refresh(msg)  # type: ignore[arg-type]
+
+        text: str = msg.answer.call_args[0][0]
+        assert "❌" in text, f"Expected ❌ for body={bad_body!r}"

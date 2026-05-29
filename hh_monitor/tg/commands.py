@@ -8,6 +8,7 @@ Callback queries check admin whitelist inline.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
@@ -484,16 +485,36 @@ async def handle_hh_refresh(message: Message) -> None:
         try:
             updated = await refresh_access_token(session)
         except HHOAuthError as exc:
-            if (
-                "invalid_grant" in exc.message.lower()
-                and (datetime.now(UTC) - old_updated_at).total_seconds() < 5
-            ):
-                await message.answer(
-                    "⚠️ Похоже, токен только что обновился другим вызовом. "
-                    "Проверь /settings.",
-                    reply_markup=_close_keyboard(),
+            try:
+                body = (
+                    exc.body
+                    if isinstance(exc.body, dict)
+                    else json.loads(exc.body)
                 )
+                not_expired = "not expired" in str(
+                    body.get("error_description", "")
+                ).lower()
+            except Exception:
+                not_expired = False
+
+            if not_expired:
+                result2 = await session.execute(select(OAuthToken).limit(1))
+                current = result2.scalar_one_or_none()
+                if current is not None:
+                    ttl = current.expires_at - datetime.now(UTC)
+                    await message.answer(
+                        "✅ Токен ещё действителен — обновление не требуется. "
+                        f"Истекает: {_fmt_msk(current.expires_at)}, "
+                        f"осталось {_format_ttl(ttl)}.",
+                        reply_markup=_close_keyboard(),
+                    )
+                else:
+                    await message.answer(
+                        "✅ Токен ещё действителен — обновление не требуется.",
+                        reply_markup=_close_keyboard(),
+                    )
                 return
+
             await message.answer(
                 f"❌ Refresh failed: {exc.message[:300]}\n\n"
                 "refresh_token мог быть отозван. Запусти локально:\n"
