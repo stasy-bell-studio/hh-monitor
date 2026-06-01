@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     openrouter_http_referer: str = "https://github.com/Sam44ik/hh-monitor"
     openrouter_title: str = "hh-monitor"
 
-    llm_prompt_version: str = "v3"
+    llm_prompt_version: str = "v4"
     # Candidates with fit_score below this threshold are not sent to LLM
     score_fit_min_for_llm: int = Field(default=40, ge=0, le=100)
 

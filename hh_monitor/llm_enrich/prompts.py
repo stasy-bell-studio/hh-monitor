@@ -43,7 +43,7 @@ UNIVERSAL_CRITIC_PROMPT = """\
 «зарекомендовал себя», «эффективно управлял» — без конкретной цифры/факта рядом. \
 Если использовал такую фразу без подтверждения — самопроверка перед выводом, замени или удали.
 
-Структура ответа: ровно JSON с 8 полями:
+Структура ответа: ровно JSON с 9 полями:
   "real_role" — одной строкой реальная роль кандидата по совокупности опыта (должности, цифры, P&L, штат, число подчинённых), а не по заголовку резюме. Без воды, ≤120 символов.
   "facts_confirmed" — что подтверждено фактами из резюме (даты, должности, цифры, география).
   "weak_spots" — слабые места и что не подтверждено (пробелы, размытые формулировки, отсутствие KPI/P&L/штата/цифр).
@@ -52,6 +52,11 @@ UNIVERSAL_CRITIC_PROMPT = """\
   "verdict" — прямой вердикт. Внутри — гипотеза мотивации перехода одной строкой + итог: рекомендую / не рекомендую / нужно интервью с проверкой.
   "score" — целое число от 0 до 100: числовая оценка кандидата. 0–29 = мимо, 30–59 = спорно, 60–79 = нужно интервью, 80–100 = рекомендую. Обязательное поле.
   "verdict_class" — ровно одно значение из: "подходит", "спорно", "мимо", "стоп-сигнал". Обязательное поле.
+  "insurance_domain" — ровно одно значение из: "yes", "partial", "no". Обязательное поле.
+    "yes"     — кандидат работал в страховании: компания-страховщик или профильные продажи ОСАГО/КАСКО/ДМС/ИФЛ/андеррайтинг.
+    "partial" — косвенный страховой опыт: автоматизация страховых процессов, банковский кросс-сейл без профильной страховой роли, разовые страховые задачи.
+    "no"      — страхового опыта нет вообще.
+  Правило: лизинговый менеджер «автоматизировавший страхование» → "partial". Банкир без страховых ролей → "no". Сотрудник страховщика с ОСАГО/КАСКО/ДМС → "yes".
 
 Никакого предисловия, никакой обёртки в ```json блок, никаких пояснений после JSON.
 Объём: 200–400 слов суммарно по всем полям."""
@@ -121,6 +126,7 @@ def parse_dossier(raw: str) -> dict[str, Any]:
             "red_flags": None,
             "interview_questions": None,
             "verdict": raw,
+            "insurance_domain": "partial",
         }
 
     # Normalise interview_questions: accept string → split, list → flatten nested, else None.
@@ -156,6 +162,14 @@ def parse_dossier(raw: str) -> dict[str, Any]:
     data.setdefault("real_role", "")
     if not isinstance(data.get("real_role"), str):
         data["real_role"] = ""
+
+    # 9th field: insurance_domain — fail-safe default "partial" (keeps governor active).
+    # "yes" is NOT the safe default: it would disable the governor for unrecognised responses.
+    _raw_id = data.get("insurance_domain")
+    if isinstance(_raw_id, str) and _raw_id in {"yes", "partial", "no"}:
+        data["insurance_domain"] = _raw_id
+    else:
+        data["insurance_domain"] = "partial"
 
     return data
 

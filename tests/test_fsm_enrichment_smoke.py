@@ -51,6 +51,7 @@ def _ok_llm_response() -> dict[str, Any]:
                             "red_flags": "Частая смена работодателей.",
                             "interview_questions": ["Какой ваш средний чек?"],
                             "verdict": "Рекомендую на следующий этап.",
+                            "insurance_domain": "yes",
                         }
                     )
                 }

@@ -44,6 +44,19 @@ log = structlog.get_logger(__name__)
 # Polite delay between consecutive OpenRouter calls (seconds)
 _INTER_CALL_DELAY = 0.5
 
+# Domain governor: candidates with no insurance domain experience are capped here.
+# Floor = 20 (мимо zone per LLM rubric), threshold-agnostic (not tied to settings or DB knob).
+_DOMAIN_SCORE_FLOOR = 20
+
+
+def _apply_domain_governor(
+    score_total: int, insurance_domain: str, *, floor: int = _DOMAIN_SCORE_FLOOR
+) -> int:
+    """Cap score_total when LLM classifies candidate as off-domain ('partial' or 'no')."""
+    if insurance_domain in {"partial", "no"} and score_total > floor:
+        return floor
+    return score_total
+
 
 def _coerce_text(v: object) -> str:
     """Coerce a dossier value to str for Text DB columns.
@@ -274,6 +287,17 @@ async def _enrich_one(
         llm_verdict_class = derive_verdict_class(verdict_text)
 
     score_total = round(0.3 * fit_score_val + 0.7 * llm_score)
+
+    _insurance_domain: str = dossier.get("insurance_domain") or "partial"
+    capped = _apply_domain_governor(score_total, _insurance_domain)
+    if capped != score_total:
+        log_ctx.info(
+            "llm_enrich.domain_governor",
+            original_total=score_total,
+            capped_to=capped,
+            insurance_domain=_insurance_domain,
+        )
+    score_total = capped
 
     log_ctx.info(
         "llm_enrich.scored",

@@ -143,6 +143,42 @@ def test_parse_dossier_invalid_json_real_role_empty() -> None:
     assert d["verdict"] == "Это точно не JSON."
 
 
+def test_parse_dossier_insurance_domain_yes() -> None:
+    """Valid 'yes' insurance_domain is preserved."""
+    import json
+
+    raw = json.dumps({"verdict": "Рекомендую.", "insurance_domain": "yes"})
+    d = parse_dossier(raw)
+    assert d["insurance_domain"] == "yes"
+
+
+def test_parse_dossier_insurance_domain_partial() -> None:
+    """Valid 'partial' insurance_domain is preserved."""
+    import json
+
+    raw = json.dumps({"verdict": "Рекомендую.", "insurance_domain": "partial"})
+    d = parse_dossier(raw)
+    assert d["insurance_domain"] == "partial"
+
+
+def test_parse_dossier_insurance_domain_missing_defaults_to_partial() -> None:
+    """Missing insurance_domain field defaults to 'partial' (fail-safe: governor stays active)."""
+    import json
+
+    raw = json.dumps({"verdict": "Рекомендую."})
+    d = parse_dossier(raw)
+    assert d["insurance_domain"] == "partial"
+
+
+def test_parse_dossier_insurance_domain_invalid_defaults_to_partial() -> None:
+    """Unrecognised insurance_domain value (e.g. 'maybe') defaults to 'partial'."""
+    import json
+
+    raw = json.dumps({"verdict": "Рекомендую.", "insurance_domain": "maybe"})
+    d = parse_dossier(raw)
+    assert d["insurance_domain"] == "partial"
+
+
 def test_parse_dossier_extra_fields_ignored() -> None:
     """JSON with extra unknown fields: they are preserved but not causing errors."""
     import json

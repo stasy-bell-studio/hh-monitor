@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from hh_monitor.db.models import Event, Resume, Search, Snapshot
 from hh_monitor.fit.portrait import Filters, GlobalContext, Portrait, RegionFilters
-from hh_monitor.llm_enrich.run import run_llm_enrichment
+from hh_monitor.llm_enrich.run import _apply_domain_governor, run_llm_enrichment
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -81,6 +81,7 @@ def _ok_llm_response(
                                 "Каков был реальный размер вашей агентской сети?",
                             ],
                             "verdict": verdict_text,
+                            "insurance_domain": "yes",
                         }
                     )
                 }
@@ -579,6 +580,7 @@ async def test_verdict_enum_and_full_text_split(
                             "verdict": long_verdict,
                             "score": 15,
                             "verdict_class": "мимо",
+                            "insurance_domain": "yes",
                         }
                     )
                 }
@@ -1286,3 +1288,31 @@ async def test_enrich_uses_own_snapshot(
     assert snap2_id not in called_snapshot_ids, "must NOT fall back to latest snapshot (S2)"
     # With threshold=80, S1's payload should score below threshold → no LLM call
     mock_api.assert_not_called()
+
+
+# ── _apply_domain_governor — pure unit tests (no DB, no async) ────────────────
+
+
+def test_governor_caps_partial() -> None:
+    """insurance_domain='partial' → score capped to floor."""
+    assert _apply_domain_governor(61, "partial") == 20
+
+
+def test_governor_caps_no() -> None:
+    """insurance_domain='no' → score capped to floor."""
+    assert _apply_domain_governor(61, "no") == 20
+
+
+def test_governor_passes_yes() -> None:
+    """insurance_domain='yes' → score unchanged."""
+    assert _apply_domain_governor(61, "yes") == 61
+
+
+def test_governor_no_op_at_floor() -> None:
+    """score already at floor → returned unchanged."""
+    assert _apply_domain_governor(20, "partial") == 20
+
+
+def test_governor_no_op_below_floor() -> None:
+    """score below floor → returned unchanged (no negative clamping)."""
+    assert _apply_domain_governor(15, "no") == 15
