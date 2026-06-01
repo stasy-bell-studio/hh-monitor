@@ -31,7 +31,9 @@ def _hash(p: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(p, sort_keys=True).encode()).hexdigest()
 
 
-async def _seed(session: AsyncSession, score_total: int = 80) -> int:
+async def _seed(
+    session: AsyncSession, score_total: int = 80, llm_verdict: str | None = "подходит"
+) -> int:
     search = Search(
         position_code="test_pos",
         position_name="Тест позиция",
@@ -69,6 +71,7 @@ async def _seed(session: AsyncSession, score_total: int = 80) -> int:
         search_id=search.id,
         llm_enriched=True,
         score_total=score_total,
+        llm_verdict=llm_verdict,
     )
     session.add(event)
     await session.flush()
@@ -246,6 +249,7 @@ async def _seed_with_scores(
     *,
     event_score_total: int | None,
     resume_score_total: int,
+    llm_verdict: str | None = "подходит",
 ) -> int:
     """Seed a sendable event where Event.score_total and Resume.score_total can differ."""
     search = Search(
@@ -285,6 +289,7 @@ async def _seed_with_scores(
         search_id=search.id,
         llm_enriched=True,
         score_total=event_score_total,
+        llm_verdict=llm_verdict,
     )
     session.add(event)
     await session.flush()
@@ -332,3 +337,117 @@ async def test_send_gate_skips_null_event_score_total(db_session: AsyncSession) 
 
     assert result["sent"] == 0, "event with score_total=NULL must not be sent"
     assert result["skipped_threshold"] == 0, "NULL score_total event must not appear in query"
+
+
+# ── CC-16c: verdict-gate ───────────────────────────────────────────────────────
+
+
+def _prod_settings_mock(ms: MagicMock, threshold: int = 45) -> None:
+    ms.env = "production"
+    ms.telegram_send_enabled = None
+    ms.telegram_score_threshold = threshold
+    ms.telegram_hr_group_id = -100
+    ms.telegram_cards_topic_id = 0
+
+
+@pytest.mark.asyncio
+async def test_verdict_gate_blocks_mimo(db_session: AsyncSession) -> None:
+    """'мимо' at score_total=50 > threshold=45 → False, no send, no NotificationSent row."""
+    event_id = await _seed(db_session, score_total=50, llm_verdict="мимо")
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        _prod_settings_mock(ms, threshold=45)
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is False
+    mock_send.assert_not_called()
+    assert await db_session.get(NotificationSent, event_id) is None
+
+
+@pytest.mark.asyncio
+async def test_verdict_gate_blocks_stop_signal(db_session: AsyncSession) -> None:
+    """'стоп-сигнал' at score_total=50 > threshold=45 → False, no send."""
+    event_id = await _seed(db_session, score_total=50, llm_verdict="стоп-сигнал")
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        _prod_settings_mock(ms, threshold=45)
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is False
+    mock_send.assert_not_called()
+    assert await db_session.get(NotificationSent, event_id) is None
+
+
+@pytest.mark.asyncio
+async def test_verdict_gate_blocks_none(db_session: AsyncSession) -> None:
+    """llm_verdict=None → blocked even when score_total >= threshold."""
+    event_id = await _seed(db_session, score_total=50, llm_verdict=None)
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        _prod_settings_mock(ms, threshold=45)
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is False
+    mock_send.assert_not_called()
+    assert await db_session.get(NotificationSent, event_id) is None
+
+
+@pytest.mark.asyncio
+async def test_verdict_gate_sends_sporno(db_session: AsyncSession) -> None:
+    """'спорно' at score_total=45 == threshold=45 → sent, NotificationSent row created."""
+    event_id = await _seed(db_session, score_total=45, llm_verdict="спорно")
+    msg = MagicMock(spec=Message)
+    msg.message_id = 201
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock, return_value=msg),
+    ):
+        _prod_settings_mock(ms, threshold=45)
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is True
+    assert await db_session.get(NotificationSent, event_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_verdict_gate_sends_podkhodit(db_session: AsyncSession) -> None:
+    """'подходит' at score_total=45 == threshold=45 → sent, NotificationSent row created."""
+    event_id = await _seed(db_session, score_total=45, llm_verdict="подходит")
+    msg = MagicMock(spec=Message)
+    msg.message_id = 202
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock, return_value=msg),
+    ):
+        _prod_settings_mock(ms, threshold=45)
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is True
+    assert await db_session.get(NotificationSent, event_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_send_pending_cards_skips_blocked_verdict(db_session: AsyncSession) -> None:
+    """send_pending_cards SQL filter excludes 'мимо' events — send_card never called."""
+    await _seed(db_session, score_total=80, llm_verdict="мимо")
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        _prod_settings_mock(ms, threshold=45)
+        result = await send_pending_cards(db_session, _make_bot())
+
+    assert result["sent"] == 0
+    mock_send.assert_not_called()

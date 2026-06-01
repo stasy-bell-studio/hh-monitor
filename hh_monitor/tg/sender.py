@@ -16,6 +16,8 @@ from hh_monitor.tg.send_guard import send_enabled
 
 logger = structlog.get_logger(__name__)
 
+_SENDABLE_VERDICTS: frozenset[str] = frozenset({"подходит", "спорно"})
+
 
 async def get_current_threshold(session: AsyncSession) -> int:
     result = await session.execute(
@@ -74,6 +76,15 @@ async def send_new_candidate_card(session: AsyncSession, bot: Bot, event_id: int
         )
         return False
 
+    if event.llm_verdict not in _SENDABLE_VERDICTS:
+        logger.info(
+            "tg_sender_verdict_blocked",
+            event_id=event_id,
+            llm_verdict=event.llm_verdict,
+            score_total=event.score_total,
+        )
+        return False
+
     existing = await session.get(NotificationSent, event_id)
     if existing is not None:
         logger.info("tg_sender_already_sent", event_id=event_id)
@@ -116,6 +127,7 @@ async def send_pending_cards(
         .where(Event.llm_enriched.is_(True))
         .where(Event.id.not_in(subq))
         .where(Event.score_total >= threshold)
+        .where(Event.llm_verdict.in_(_SENDABLE_VERDICTS))
         .order_by(Event.id.asc())
     )
     if limit is not None:
