@@ -275,4 +275,4 @@ def derive_verdict_class(verdict: str) -> str:
         return "спорно"
     if "рекомендую" in v or "подходит" in v:
         return "подходит"
-    return "спорно"
+    return "мимо"

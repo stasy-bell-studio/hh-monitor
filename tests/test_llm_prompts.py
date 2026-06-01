@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from structlog.testing import capture_logs
 
-from hh_monitor.llm_enrich.prompts import extract_llm_score
+from hh_monitor.llm_enrich.prompts import derive_verdict_class, extract_llm_score
 
 
 def test_extract_score_from_json_score() -> None:
@@ -75,3 +75,20 @@ def test_extract_score_no_verdict_class_nujno_intervyu() -> None:
     """No score, no verdict_class, verdict text 'нужно интервью' → 50."""
     dossier = {"verdict": "Нужно интервью для проверки фактов."}
     assert extract_llm_score(dossier, "r_nvc") == 50
+
+
+# ── F2: unrecognised verdict fallback is non-sendable ────────────────────────
+
+
+def test_unrecognised_verdict_fallbacks_agree() -> None:
+    """Neither numeric score nor any verdict keyword → both functions agree: non-sendable."""
+    # extract_llm_score short-circuits to 0 when no _VERDICT_KEYWORDS found.
+    # derive_verdict_class falls through to "мимо" (non-sendable) for the same input.
+    dossier = {"verdict": "Непонятно."}
+    assert extract_llm_score(dossier, "r_unknown") == 0
+    assert derive_verdict_class("Непонятно.") == "мимо"
+
+
+def test_genuine_sporno_still_maps_to_sporno() -> None:
+    """Genuine 'спорно' keyword in text still maps to 'спорно' (recognised path unchanged)."""
+    assert derive_verdict_class("Спорно, требуется дополнительная проверка.") == "спорно"

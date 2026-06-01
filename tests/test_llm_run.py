@@ -718,8 +718,8 @@ async def test_invalid_json_fallback(db_session: Any, monkeypatch: pytest.Monkey
     assert result["enriched"] == 1
 
     await db_session.refresh(event)
-    # llm_verdict is now enum-only; non-JSON raw text → derive_verdict_class default → "спорно"
-    assert event.llm_verdict == "спорно"
+    # llm_verdict is now enum-only; non-JSON raw text → derive_verdict_class default → "мимо"
+    assert event.llm_verdict == "мимо"
     # The raw text is preserved in llm_verdict_text
     assert event.llm_verdict_text == "Это точно не JSON, просто текст."
     # _coerce_text(None) → "" — Text columns receive empty string, not NULL

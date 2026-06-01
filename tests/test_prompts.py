@@ -221,7 +221,7 @@ def test_derive_score_from_verdict(verdict_text: str, expected_score: int) -> No
         ("Не рекомендую.", "мимо"),
         ("Нужно интервью.", "спорно"),
         ("Рекомендую.", "подходит"),
-        ("Непонятно.", "спорно"),
+        ("Непонятно.", "мимо"),
     ],
 )
 def test_derive_verdict_class(verdict_text: str, expected_class: str) -> None:
