@@ -159,60 +159,60 @@ def _experience_months_fallback(experiences: list[Any]) -> int | None:
     return total if found else None
 
 
-def _insurance_experience_months(experiences: list[Any]) -> int:
-    """Sum months from experience entries that appear insurance-related.
+def _entry_industries(entry: dict[str, Any]) -> list[str]:
+    """Return lowercased industry names from an experience entry's industries list."""
+    raw = entry.get("industries")
+    if not isinstance(raw, list):
+        return []
+    return [
+        str(ind["name"]).lower()
+        for ind in raw
+        if isinstance(ind, dict) and isinstance(ind.get("name"), str)
+    ]
 
-    An entry is considered insurance-related if any *_INSURANCE_STEMS* keyword
-    appears in the concatenated company name, position title, or description.
+
+def _filtered_exp_months(
+    experiences: list[Any],
+    stems: frozenset[str],
+    *,
+    require_stem_with_industry: bool,
+) -> int:
+    """Count experience months gated by industry classification and stem set.
+
+    Two-path gate (description never read):
+      (1) industries present & contains "страхов" → count; if require_stem_with_industry,
+          also require a stem in company+position.
+      (2) industries absent/empty → require stem in company+position.
+      industries present & non-insurance → always skip.
     """
     total = 0
     for entry in experiences:
         if not isinstance(entry, dict):
             continue
-        text = " ".join(
-            filter(
-                None,
-                [
-                    entry.get("company", ""),
-                    entry.get("position", ""),
-                    entry.get("description", ""),
-                ],
-            )
-        ).lower()
-        if not any(stem in text for stem in _INSURANCE_STEMS):
-            continue
+        industries = _entry_industries(entry)
+        cp = f"{entry.get('company', '')} {entry.get('position', '')}".lower()
+        if industries:
+            if not any("страхов" in ind for ind in industries):
+                continue
+            if require_stem_with_industry and not any(stem in cp for stem in stems):
+                continue
+        else:
+            if not any(stem in cp for stem in stems):
+                continue
         months = _parse_ym_months(entry.get("start", ""), entry.get("end"))
         if months is not None:
             total += max(0, months)
     return total
+
+
+def _insurance_experience_months(experiences: list[Any]) -> int:
+    """Sum months from insurance-industry entries or entries with insurance stem in CP."""
+    return _filtered_exp_months(experiences, _INSURANCE_STEMS, require_stem_with_industry=False)
 
 
 def _motor_experience_months(experiences: list[Any]) -> int:
-    """Sum months from experience entries related to motor insurance (KASKO/OSAGO/MTPL).
-
-    An entry qualifies if any *_MOTOR_STEMS* keyword appears in the concatenated
-    company name, position title, or description.
-    """
-    total = 0
-    for entry in experiences:
-        if not isinstance(entry, dict):
-            continue
-        text = " ".join(
-            filter(
-                None,
-                [
-                    entry.get("company", ""),
-                    entry.get("position", ""),
-                    entry.get("description", ""),
-                ],
-            )
-        ).lower()
-        if not any(stem in text for stem in _MOTOR_STEMS):
-            continue
-        months = _parse_ym_months(entry.get("start", ""), entry.get("end"))
-        if months is not None:
-            total += max(0, months)
-    return total
+    """Sum months from insurance-company entries that also have a motor stem in CP."""
+    return _filtered_exp_months(experiences, _MOTOR_STEMS, require_stem_with_industry=True)
 
 
 def _max_career_gap_months(experiences: list[Any]) -> int:
@@ -293,7 +293,17 @@ def _matches_role(title: str, portrait: Portrait) -> bool:
     # Path (b): combo — at least one management word + one scope word
     has_a = any(stem in title_lower for stem in _ROLE_GROUP_A)
     has_b = any(stem in title_lower for stem in _ROLE_GROUP_B)
-    return has_a and has_b
+    if has_a and has_b:
+        return True
+
+    # Path (d): GROUP_A stem + insurance stem.
+    # Catches "Руководитель направления (Страхование)" — leadership word with
+    # insurance domain but no GROUP_B branch/office scope word.
+    # "направлени" is NOT in GROUP_B — it would falsely match
+    # "руководитель направления по работе с партнёрами" at auto-dealers.
+    # role_match is soft/logging-only today; path (d) improves log fidelity.
+    has_insurance = any(stem in title_lower for stem in _INSURANCE_STEMS)
+    return has_a and has_insurance
 
 
 def _region_match(area_name: str, regions: list[str]) -> bool:

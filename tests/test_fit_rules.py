@@ -150,8 +150,8 @@ def test_insurance_months_company_name() -> None:
     assert _insurance_experience_months(exps) == 24
 
 
-def test_insurance_months_osago_keyword() -> None:
-    """Description with 'ОСАГО' counts as insurance experience."""
+def test_insurance_desc_only_not_counted() -> None:
+    """Description-only ОСАГО with no industries and no stem in CP → 0 months."""
     exps = [
         {
             "company": "Авто Ltd",
@@ -161,7 +161,7 @@ def test_insurance_months_osago_keyword() -> None:
             "description": "Продажи ОСАГО и КАСКО",
         }
     ]
-    assert _insurance_experience_months(exps) == 12
+    assert _insurance_experience_months(exps) == 0
 
 
 def test_insurance_months_non_insurance_skipped() -> None:
@@ -187,11 +187,67 @@ def test_insurance_months_mixed_entries() -> None:
     assert _insurance_experience_months(exps) == 24
 
 
+def test_insurance_auto_dealer_desc_only_zero() -> None:
+    """Auto-dealer: desc-only страхование + non-insurance industry → 0 months."""
+    exps = [
+        {
+            "company": "АвтоМаркет",
+            "position": "Менеджер",
+            "start": "2020-01",
+            "end": "2022-01",
+            "description": "Продажа страховых продуктов при продаже авто.",
+            "industries": [{"id": "93", "name": "Розничная торговля автомобилями"}],
+        }
+    ]
+    assert _insurance_experience_months(exps) == 0
+
+
+def test_insurance_foms_industry_not_counted() -> None:
+    """ФОМС-like: company contains 'страхования', industry 'Государственные организации' → 0."""
+    exps = [
+        {
+            "company": "Фонд обязательного медицинского страхования",
+            "position": "Специалист",
+            "start": "2019-01",
+            "end": "2022-01",
+            "industries": [{"id": "19", "name": "Государственные организации"}],
+        }
+    ]
+    assert _insurance_experience_months(exps) == 0
+
+
+def test_insurance_real_insurer_counted() -> None:
+    """Entry at real insurer (industry 'Страхование, перестрахование') → months counted."""
+    exps = [
+        {
+            "company": "АО Компания",
+            "position": "Директор",
+            "start": "2020-01",
+            "end": "2023-01",
+            "industries": [{"id": "83", "name": "Страхование, перестрахование"}],
+        }
+    ]
+    assert _insurance_experience_months(exps) == 36
+
+
+def test_insurance_empty_industries_position_fallback() -> None:
+    """No industries field + 'страхов' stem in position → counted (fallback path)."""
+    exps = [
+        {
+            "company": "Некая СК",
+            "position": "Менеджер страхового отдела",
+            "start": "2021-01",
+            "end": "2022-01",
+        }
+    ]
+    assert _insurance_experience_months(exps) == 12
+
+
 # ── _motor_experience_months ──────────────────────────────────────────────────
 
 
-def test_motor_months_kasko_detected() -> None:
-    """Entry with 'КАСКО' in description counts as motor experience."""
+def test_motor_desc_only_not_counted() -> None:
+    """КАСКО only in description, no industries, no motor stem in CP → 0 months."""
     exps = [
         {
             "company": "СК Ресо",
@@ -201,7 +257,7 @@ def test_motor_months_kasko_detected() -> None:
             "description": "Оценка рисков КАСКО",
         }
     ]
-    assert _motor_experience_months(exps) == 24
+    assert _motor_experience_months(exps) == 0
 
 
 def test_motor_months_osago_in_company() -> None:
@@ -230,10 +286,9 @@ def test_motor_months_keyword_variants() -> None:
     exps_mtpl = [
         {
             "company": "СК",
-            "position": "Эксперт",
+            "position": "Специалист МТПЛ",
             "start": "2020-01",
             "end": "2021-01",
-            "description": "Урегулирование убытков МТПЛ",
         }
     ]
     exps_motor = [
@@ -242,6 +297,21 @@ def test_motor_months_keyword_variants() -> None:
     assert _motor_experience_months(exps_auto) == 12
     assert _motor_experience_months(exps_mtpl) == 12
     assert _motor_experience_months(exps_motor) == 12
+
+
+def test_motor_auto_dealer_desc_only_zero() -> None:
+    """Auto-dealer: 'ОСАГО' only in description, industry is auto-retail → 0 motor months."""
+    exps = [
+        {
+            "company": "Авто Плюс",
+            "position": "Менеджер по продажам",
+            "start": "2020-01",
+            "end": "2022-01",
+            "description": "Оформление ОСАГО при продаже автомобилей.",
+            "industries": [{"id": "93", "name": "Розничная торговля автомобилями"}],
+        }
+    ]
+    assert _motor_experience_months(exps) == 0
 
 
 # ── _max_career_gap_months ────────────────────────────────────────────────────
@@ -1144,10 +1214,9 @@ def test_hard_reject_motor_experience_passes() -> None:
         "experience": [
             {
                 "company": "СК Ресо",
-                "position": "Андеррайтер",
+                "position": "Андеррайтер КАСКО",
                 "start": "2020-01",
                 "end": "2023-01",
-                "description": "КАСКО и ОСАГО",
             },
         ]
     }
@@ -1660,3 +1729,23 @@ def test_matches_role_upravlenie_known_overmatch() -> None:
     deliberate, test-visible decision.
     """
     assert _matches_role("Менеджер по управлению проектами", _role_portrait()) is True
+
+
+def test_matches_role_group_ab_still_works() -> None:
+    """Regression: path (b) GROUP_A+GROUP_B still matches without insurance stem."""
+    assert _matches_role("Управляющий офисом", _role_portrait()) is True
+
+
+def test_matches_role_insurance_direction_path_d() -> None:
+    """Path (d): GROUP_A + insurance stem matches; no GROUP_B scope word needed.
+
+    _role_portrait synonyms ('Директор филиала', 'Руководитель филиала',
+    'Региональный директор') are not substrings of this title → path (a) skipped.
+    """
+    assert _matches_role("Руководитель направления (Страхование)", _role_portrait()) is True
+
+
+def test_matches_role_no_insurance_stem_false() -> None:
+    """Path (d) guard: GROUP_A present but no insurance stem → False."""
+    title = "Руководитель направления по работе с партнёрами"
+    assert _matches_role(title, _role_portrait()) is False
