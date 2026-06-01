@@ -125,5 +125,11 @@
   - Commits: de95ecf, 2e8e8e1, 3c0207b.
   - Фиксы: bot subscript TypeError → module-level `_session_factory`; router order (admin_router first); `message_thread_id` duplicate kwarg в aiogram 3.28.
   - Добавлен `register_tg_routers(dp)` в `client.py`.
-  - Тестов: 453 (было 451, +2).
+
+- CC-14-fix closed (2026-05-29): per-event snapshot scoring + double-card fix.
+  - Commit: afa8eb6.
+  - Event.score_total column + migration 20260529000000 (down_revision=20260527010000).
+  - Enrich from own snapshot (curr_snapshot_id); close below-threshold events; send gate on Event.score_total.
+  - Тестов: 691 (+6 новых). **Актуальный baseline — 691.**
+  - Deploy: alembic upgrade head ПЕРЕД рестартом сервиса.
   - Следующая сессия: Сессия 7 — deployment (systemd, .env, server setup); или Сессия 9 — adm:detail подробная статистика.
