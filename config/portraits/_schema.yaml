@@ -51,6 +51,20 @@ weights:
   education:             5    # education.level.id входит в filters.education_level
   region:               10    # primary match (adjacent = region // 2 = 5)
   age:                   5    # возраст в filters.age_range
+  # CC-16b — градуированные scored-критерии (используются новым fit/rules.py).
+  # Денопминатор fit_score ДИНАМИЧЕСКИЙ: база 6 критериев (45) + эти веса,
+  # когда соответствующий критерий активен для портрета.
+  insurance_experience: 12    # 2g: стаж в страховании ≥36мес → 12, ≥12мес → 6, иначе 0
+  motor_experience:      6    # 2h: стаж в моторных видах ≥24мес → 6, ≥12мес → 3, иначе 0
+
+# ── CC-16b: режим учёта опыта в страховании ──────────────────────────────────
+# soft (default) → НЕ hard-gate; стаж в страховании оценивается как критерий 2g.
+# hard            → hard-gate 1h активен (стаж < min → fit_score=0); критерий 2g выключен.
+insurance_experience_mode: soft
+
+# motor_experience_preferred: true → критерий 2h активен (моторный стаж как мягкий
+#   сигнал, без hard-gate); при false работает hard-gate 1i по min_motor_experience_months.
+motor_experience_preferred: false
 
 # ── Ключевые слова ───────────────────────────────────────────────────────────
 

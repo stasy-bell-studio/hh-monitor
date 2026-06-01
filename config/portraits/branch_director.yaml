@@ -76,6 +76,7 @@ filters:
 # Новые поля (Lesnitskaya etalon v1)
 min_total_months: 60
 min_insurance_experience_months: 36
+insurance_experience_mode: soft   # CC-16b: insurance scored as 2g (not a hard gate)
 motor_experience_preferred: true
 min_tenure_last_job_months: 12
 max_career_gap_months: 36

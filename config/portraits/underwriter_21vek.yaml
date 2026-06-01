@@ -65,6 +65,7 @@ filters:
 
 min_total_months: 60
 min_insurance_experience_months: 36
+insurance_experience_mode: hard   # CC-16b: insurance stays a hard gate (1h); 2g disabled
 min_motor_experience_months: 24
 motor_experience_preferred: true
 min_tenure_last_job_months: 12

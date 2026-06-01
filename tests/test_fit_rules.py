@@ -1,9 +1,10 @@
 """Tests for hh_monitor.fit.rules — scoring v2 (Lesnitskaya etalon v1).
 
 Scoring formula:
-  1. Seven hard filters → score=0, breakdown["hard_reject_reason"] set.
-  2. Six weighted criteria (max raw = 45).
-  3. fit_score = round(total_raw / 45 * 100), clamped [0, 100].
+  1. Hard filters → score=0, breakdown["hard_reject_reason"] set.
+  2. Weighted criteria with a DYNAMIC raw max (CC-16b): base six (45) + active
+     insurance_experience (2g) and/or motor_experience (2h) weights.
+  3. fit_score = round(total_raw / max_raw * 100), clamped [0, 100].
 
 Principles preserved from v1 tests:
   - Strong candidate → high score (≥ 70).
@@ -21,6 +22,7 @@ import pytest
 from hh_monitor.fit.portrait import Filters, Portrait, RegionFilters, Weights
 from hh_monitor.fit.rules import (
     _insurance_experience_months,
+    _matches_role,
     _max_career_gap_months,
     _motor_experience_months,
     _parse_ym_months,
@@ -48,6 +50,7 @@ def _portrait(
     preferred_education_fields: list[str] | None = None,
     forbidden_industry_mode: Literal["soft", "hard"] = "soft",
     role_match_mode: Literal["soft", "hard"] = "soft",
+    insurance_experience_mode: Literal["soft", "hard"] = "soft",
 ) -> Portrait:
     return Portrait(
         position_code="test",
@@ -64,6 +67,7 @@ def _portrait(
         forbidden_industries=forbidden_industries or [],
         forbidden_industry_mode=forbidden_industry_mode,
         role_match_mode=role_match_mode,
+        insurance_experience_mode=insurance_experience_mode,
         filters=Filters(
             age_range=age_range,
             regions=RegionFilters(
@@ -428,10 +432,9 @@ def test_total_experience_unknown_skips_filter() -> None:
     assert bd.get("hard_reject_reason") != "total_experience"
 
 
-def test_hard_reject_insurance_experience() -> None:
-    """Insurance experience below minimum → hard rejected."""
-    p = _portrait(min_insurance_experience_months=36)
-    payload = {
+def _below_min_insurance_payload() -> dict[str, Any]:
+    """Candidate with zero insurance-related experience (below any minimum)."""
+    return {
         "experience": [
             {
                 "company": "Банк ВТБ",
@@ -442,9 +445,23 @@ def test_hard_reject_insurance_experience() -> None:
             },
         ]
     }
-    score, bd = compute(payload, p)
+
+
+def test_hard_reject_insurance_experience() -> None:
+    """Insurance below minimum + hard mode → hard rejected (CC-16b: mode='hard')."""
+    p = _portrait(min_insurance_experience_months=36, insurance_experience_mode="hard")
+    score, bd = compute(_below_min_insurance_payload(), p)
     assert score == 0
     assert bd["hard_reject_reason"] == "insurance_experience"
+
+
+def test_insurance_soft_mode_no_hard_reject() -> None:
+    """CC-16b: soft mode never hard-rejects; insurance scored as 2g (present, 0 pts)."""
+    p = _portrait(min_insurance_experience_months=36, insurance_experience_mode="soft")
+    score, bd = compute(_below_min_insurance_payload(), p)
+    assert "hard_reject_reason" not in bd
+    assert "insurance_experience" not in bd.get("hard_reject_reasons", [])
+    assert bd["insurance_experience"] == 0  # key present → enters denominator
 
 
 # ══ Scored criteria ═══════════════════════════════════════════════════════════
@@ -1478,3 +1495,168 @@ def test_group_b_matches_podrazdelenie_alone() -> None:
     p = _role_filter_portrait()
     _, bd = compute(_role_resume("Начальник подразделения"), p)
     assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+# ══ CC-16b: scored insurance/motor criteria + dynamic denominator ═════════════
+#
+# Synthetic data only (no PII).  The golden 5-event before→after regression lives
+# in scripts/verify_cc16b.py (DB-driven, run manually against prod).
+
+
+def _ym_entry(months: int, *, keyword: str) -> dict[str, Any]:
+    """One experience entry spanning exactly *months*, tagged with *keyword*.
+
+    start "2020-01"; end = start + months (so _parse_ym_months returns *months*).
+    """
+    end_abs = (2020 * 12 + 1) + months
+    end_year, end_month = divmod(end_abs - 1, 12)
+    return {
+        "company": keyword,
+        "position": keyword,
+        "start": "2020-01",
+        "end": f"{end_year:04d}-{end_month + 1:02d}",
+        "description": keyword,
+    }
+
+
+# ── 2g insurance graduation (insurance_experience weight = 12) ────────────────
+
+
+@pytest.mark.parametrize(
+    ("months", "expected"),
+    [(11, 0), (12, 6), (35, 6), (36, 12)],
+)
+def test_2g_insurance_graduation(months: int, expected: int) -> None:
+    p = _portrait(min_insurance_experience_months=1, insurance_experience_mode="soft")
+    payload = {"experience": [_ym_entry(months, keyword="Страховая компания")]}
+    _, bd = compute(payload, p)
+    assert bd["insurance_experience"] == expected
+
+
+def test_2g_absent_when_min_zero() -> None:
+    """2g inactive when min_insurance_experience_months == 0 → key absent."""
+    p = _portrait(min_insurance_experience_months=0, insurance_experience_mode="soft")
+    payload = {"experience": [_ym_entry(60, keyword="Страховая компания")]}
+    _, bd = compute(payload, p)
+    assert "insurance_experience" not in bd
+
+
+def test_2g_absent_in_hard_mode() -> None:
+    """Hard mode disables 2g (insurance is a gate, not a scored criterion)."""
+    p = _portrait(min_insurance_experience_months=1, insurance_experience_mode="hard")
+    payload = {"experience": [_ym_entry(60, keyword="Страховая компания")]}
+    _, bd = compute(payload, p)
+    assert "insurance_experience" not in bd
+
+
+# ── 2h motor graduation (motor_experience weight = 6) ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("months", "expected"),
+    [(11, 0), (12, 3), (23, 3), (24, 6)],
+)
+def test_2h_motor_graduation(months: int, expected: int) -> None:
+    p = _portrait(motor_experience_preferred=True)
+    payload = {"experience": [_ym_entry(months, keyword="ОСАГО КАСКО")]}
+    _, bd = compute(payload, p)
+    assert bd["motor_experience"] == expected
+
+
+def test_2h_absent_when_not_preferred() -> None:
+    """2h inactive when motor_experience_preferred is False → key absent."""
+    p = _portrait(motor_experience_preferred=False)
+    payload = {"experience": [_ym_entry(60, keyword="ОСАГО КАСКО")]}
+    _, bd = compute(payload, p)
+    assert "motor_experience" not in bd
+
+
+# ── Dynamic denominator: 45 / 51 / 57 / 63 ────────────────────────────────────
+#
+# A region-only candidate scores exactly target_region_primary (8) and 0 on every
+# other criterion (incl. 2g/2h when active → present but 0).  fit_score therefore
+# pins the denominator: round(8/denom*100) is distinct for each denom, and proves
+# the region term is max(8,4)=8, never the additive 12.
+
+
+def _denom_portrait(*, insurance: bool, motor: bool) -> Portrait:
+    return _portrait(
+        primary_regions=["Самарская область"],
+        adjacent_regions=["Оренбургская область"],
+        min_insurance_experience_months=1 if insurance else 0,
+        insurance_experience_mode="soft",
+        motor_experience_preferred=motor,
+    )
+
+
+def _region_only_payload() -> dict[str, Any]:
+    """SPb-region candidate with NO insurance/motor/agent/edu signals."""
+    return {
+        "id": "denom_test",
+        "area": {"name": "Самарская область"},
+        "experience": [
+            {
+                "company": "ООО Ромашка",
+                "position": "Бухгалтер",
+                "start": "2018-01",
+                "end": None,
+                "description": "Бухгалтерский учёт",
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("insurance", "motor", "denom", "expected_fit"),
+    [
+        (False, False, 45, 18),  # round(8/45*100)
+        (False, True, 51, 16),   # round(8/51*100)
+        (True, False, 57, 14),   # round(8/57*100)
+        (True, True, 63, 13),    # round(8/63*100)
+    ],
+)
+def test_dynamic_denominator(insurance: bool, motor: bool, denom: int, expected_fit: int) -> None:
+    p = _denom_portrait(insurance=insurance, motor=motor)
+    score, bd = compute(_region_only_payload(), p)
+    assert bd["region"] == 8, "region must be max(8,4)=8, never additive 12"
+    assert score == expected_fit, f"denom {denom}: expected {expected_fit}, got {score}"
+
+
+def test_denominator_neither_omits_scored_keys() -> None:
+    """When neither 2g nor 2h is active, neither key enters the breakdown."""
+    p = _denom_portrait(insurance=False, motor=False)
+    _, bd = compute(_region_only_payload(), p)
+    assert "insurance_experience" not in bd
+    assert "motor_experience" not in bd
+
+
+# ── Role matcher: "управлени" Group-B stem (CC-16b) ───────────────────────────
+
+
+def _role_portrait() -> Portrait:
+    return Portrait(
+        position_code="role",
+        position_name="Директор филиала",
+        position_synonyms=["Руководитель филиала", "Региональный директор"],
+    )
+
+
+def test_matches_role_upravlenie_strahovaniya() -> None:
+    """CC-16b fix: 'Руководитель управления страхования' → руководитель(A)+управлени(B)."""
+    assert _matches_role("Руководитель управления страхования", _role_portrait()) is True
+
+
+def test_matches_role_guard_stays_false() -> None:
+    """Title with no Group-B scope word must STAY False (no over-match)."""
+    assert _matches_role("Менеджер по продажам", _role_portrait()) is False
+
+
+def test_matches_role_upravlenie_known_overmatch() -> None:
+    """Acknowledged over-match: 'управлени' makes generic 'управление проектами' match.
+
+    Documents the calibration risk surfaced in CC-16b: менеджер(A)+управлени(B).
+    role_match is logging-only today (not scored, not in the LLM prompt), so this
+    has no fit_score or LLM impact — captured here so a future tightening is a
+    deliberate, test-visible decision.
+    """
+    assert _matches_role("Менеджер по управлению проектами", _role_portrait()) is True

@@ -7,8 +7,10 @@ Scoring v2 (Lesnitskaya etalon v1, session 5.7):
      return).  If any fire → fit_score=0.
      breakdown["hard_reject_reasons"] — list of all triggered reason codes.
      breakdown["hard_reject_reason"]  — first reason (backward-compatible alias).
-  2. Six weighted scored criteria; max achievable raw sum = 45.
-  3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
+  2. Weighted scored criteria; max achievable raw sum is DYNAMIC (CC-16b):
+     base six criteria (45) + insurance_experience (2g) and/or motor_experience
+     (2h) when those criteria are active for the portrait.
+  3. fit_score = round(total_raw / max_raw * 100), clamped to [0, 100].
 
 Soft signals (default since CC-15):
   "forbidden_industry"    — when portrait.forbidden_industry_mode="soft" (default)
@@ -92,6 +94,7 @@ _ROLE_GROUP_B: frozenset[str] = frozenset(
         "подразделени",  # подразделение/ия/ию/ии
         "обособлен",     # обособленное/ного/ном
         "дополнительн",  # дополнительный/ого/ом офис
+        "управлени",     # управление/ия (CC-16b: "Руководитель управления страхования")
     }
 )
 
@@ -312,10 +315,11 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
          for backward compatibility with callers that check that key.
          ``forbidden_industry`` and ``current_role_*`` are soft by default —
          see module docstring for how mode fields control this.
-      2. Six weighted criteria with a raw max of 45.
+      2. Weighted criteria with a DYNAMIC raw max (CC-16b): base six (45) plus
+         insurance_experience (2g) and/or motor_experience (2h) when active.
       3. Soft penalties (e.g. forbidden_industry_recent) are subtracted from
          total_raw before normalization.
-      4. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
+      4. fit_score = round(total_raw / max_raw * 100), clamped to [0, 100].
 
     Returns:
         ``(score, breakdown)`` where *score* is in ``[0, 100]``.
@@ -497,8 +501,12 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
             resume_id=resume_id,
         )
 
-    # 1h. Insurance-specific experience
-    if portrait.min_insurance_experience_months > 0:
+    # 1h. Insurance-specific experience — hard gate only in "hard" mode (CC-16b).
+    # In "soft" mode insurance is scored as criterion 2g, never a hard reject.
+    if (
+        portrait.insurance_experience_mode == "hard"
+        and portrait.min_insurance_experience_months > 0
+    ):
         ins_months = _insurance_experience_months(experiences)
         if ins_months < portrait.min_insurance_experience_months:
             hard_reject_reasons.append("insurance_experience")
@@ -629,8 +637,40 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
         w.higher_specialized_education if (has_higher_edu and has_spec_match) else 0
     )
 
+    # 2g. Insurance experience (graduated) — soft-mode counterpart to gate 1h.
+    # Active only when insurance is NOT a hard gate and a minimum is configured.
+    if (
+        portrait.insurance_experience_mode == "soft"
+        and portrait.min_insurance_experience_months > 0
+    ):
+        ins = _insurance_experience_months(experiences)
+        breakdown["insurance_experience"] = (
+            w.insurance_experience
+            if ins >= 36
+            else (w.insurance_experience // 2 if ins >= 12 else 0)
+        )
+
+    # 2h. Motor experience (graduated) — active when motor is a soft preference.
+    # Mutually exclusive with the 1i hard gate (which runs only when this flag is False).
+    if portrait.motor_experience_preferred:
+        motor = _motor_experience_months(experiences)
+        breakdown["motor_experience"] = (
+            w.motor_experience
+            if motor >= 24
+            else (w.motor_experience // 2 if motor >= 12 else 0)
+        )
+
     # ── STEP 3: Normalize to 0-100 ───────────────────────────────────────────
-    _MAX_RAW = 45  # achievable max (primary wins over adjacent; max 8, not 8+4)
+    # Dynamic denominator (CC-16b): base six criteria + any active scored criterion.
+    # Region term is max(primary, adjacent), NEVER the sum.
+    base = (
+        w.agent_network_experience
+        + w.osago_knowledge
+        + max(w.target_region_primary, w.target_region_adjacent)
+        + w.ifl_experience
+        + w.top4_competitor_experience
+        + w.higher_specialized_education
+    )
     scored_keys = {
         "agent_network_experience",
         "osago_knowledge",
@@ -639,8 +679,18 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
         "top4_competitor_experience",
         "higher_specialized_education",
     }
+    max_raw = base
+    if "insurance_experience" in breakdown:
+        max_raw += w.insurance_experience
+        scored_keys.add("insurance_experience")
+    if "motor_experience" in breakdown:
+        max_raw += w.motor_experience
+        scored_keys.add("motor_experience")
+
     total_raw = sum(int(breakdown[k]) for k in scored_keys)
     if breakdown.get("forbidden_industry_recent"):
         total_raw = max(0, total_raw - portrait.weights.forbidden_industry_soft_penalty)
-    fit_score = round(total_raw / _MAX_RAW * 100)
+    if max_raw <= 0:
+        return 0, breakdown
+    fit_score = round(total_raw / max_raw * 100)
     return max(0, min(100, fit_score)), breakdown

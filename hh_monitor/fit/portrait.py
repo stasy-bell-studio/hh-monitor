@@ -45,13 +45,17 @@ class Weights(BaseModel):
       title_match, experience_keywords, total_experience, salary_fit,
       education, region, age
 
-    New fields (Lesnitskaya etalon v1, used by new fit/rules.py, max raw = 45):
+    New fields (Lesnitskaya etalon v1, used by new fit/rules.py):
       agent_network_experience (10), osago_knowledge (9),
       target_region_primary (8), target_region_adjacent (4),
       ifl_experience (7), top4_competitor_experience (6),
       higher_specialized_education (5).
-      NOTE: region score = max(target_region_primary, target_region_adjacent),
-      so the achievable max is 10+9+8+7+6+5 = 45.
+      NOTE: region score = max(target_region_primary, target_region_adjacent).
+
+    CC-16b: the achievable max is DYNAMIC, not a fixed 45.  The base of six
+    criteria sums to 10+9+8+7+6+5 = 45; insurance_experience (2g, soft mode)
+    and motor_experience (2h, motor_experience_preferred) are added to the
+    denominator only when those criteria are active for the portrait.
     """
 
     # ── Legacy weights (kept for backward compat) ────────────────────────────
@@ -71,6 +75,11 @@ class Weights(BaseModel):
     ifl_experience: int = 7
     top4_competitor_experience: int = 6
     higher_specialized_education: int = 5
+    # CC-16b scored criteria weights (graduated; see fit/rules.py 2g/2h).
+    # insurance_experience: ≥36mo → full, ≥12mo → half, else 0.
+    insurance_experience: int = 12
+    # motor_experience: ≥24mo → full, ≥12mo → half, else 0.
+    motor_experience: int = 6
     # Raw points deducted from total when forbidden_industry_mode="soft" fires.
     forbidden_industry_soft_penalty: int = 9
 
@@ -127,6 +136,9 @@ class Portrait(BaseModel):
     # "hard" → restores old hard-reject behaviour for that signal.
     role_match_mode: Literal["soft", "hard"] = "soft"
     forbidden_industry_mode: Literal["soft", "hard"] = "soft"
+    # CC-16b: "soft" (default) → insurance is NOT a hard gate; scored as criterion
+    # 2g.  "hard" → hard gate 1h active; 2g disabled (mutually exclusive).
+    insurance_experience_mode: Literal["soft", "hard"] = "soft"
     stop_words: list[str] = []
     must_have_keywords: list[str] = []
     nice_to_have_keywords: list[str] = []
