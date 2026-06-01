@@ -1410,8 +1410,8 @@ def _soft_role_portrait() -> Portrait:
     )
 
 
-def test_soft_role_mismatch_score_positive() -> None:
-    """Soft mode: wrong current role but has region points → score > 0, not rejected."""
+def test_soft_role_mismatch_region_offset_by_penalty() -> None:
+    """Soft mode: wrong current role → not hard-rejected; penalty offsets region score → score=0."""
     p = _soft_role_portrait()
     payload = {
         "id": "soft_role_1",
@@ -1429,7 +1429,8 @@ def test_soft_role_mismatch_score_positive() -> None:
     score, bd = compute(payload, p)
     assert "hard_reject_reasons" not in bd
     assert "hard_reject_reason" not in bd
-    assert score > 0
+    # penalty=9 ≥ total_raw=8 (region only) → max(0, 8-9)=0; candidate not hard-rejected.
+    assert score == 0
 
 
 def test_soft_role_mismatch_breakdown_recorded() -> None:
@@ -1540,6 +1541,166 @@ def test_hard_mode_forbidden_industry_still_rejects() -> None:
     score, bd = compute(payload, p)
     assert score == 0
     assert bd["hard_reject_reason"] == "forbidden_industry"
+
+
+# ── Soft role mismatch penalty (role_mismatch_soft_penalty) ───────────────────
+
+
+def test_soft_role_mismatch_penalty_applied() -> None:
+    """Confirmed mismatch deducts role_mismatch_soft_penalty from total_raw."""
+    p = _soft_role_portrait()
+    # Both experience.position and title are non-matching — path (c) fallback blocked.
+    mismatch_payload = {
+        "area": {"name": "Санкт-Петербург"},  # primary region → +8
+        "title": "Территориальный менеджер",
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Территориальный менеджер",  # fails _matches_role
+                "start": "2020-01",
+                "end": None,
+                "description": "ОСАГО и КАСКО",  # osago → +9
+            }
+        ],
+    }
+    # total_raw = 8+9=17, penalty=9 → raw_after=8 → score=round(8/45*100)=18
+    score_mismatch, bd = compute(mismatch_payload, p)
+    assert "hard_reject_reasons" not in bd
+    assert bd.get("role_match") is False
+    assert not bd.get("current_role_unknown")
+    assert score_mismatch == 18
+
+    # Same payload, matching role → no penalty → score=round(17/45*100)=38
+    match_payload = {
+        "area": {"name": "Санкт-Петербург"},
+        "title": "Директор филиала",
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Директор филиала",  # GROUP_A+B → match
+                "start": "2020-01",
+                "end": None,
+                "description": "ОСАГО и КАСКО",
+            }
+        ],
+    }
+    score_match, _ = compute(match_payload, p)
+    assert score_match == 38
+    assert score_mismatch < score_match
+
+
+def test_soft_role_unknown_not_penalized() -> None:
+    """Unknown role is NOT penalized; score equals baseline with no position_synonyms."""
+    p = _soft_role_portrait()
+    # No experience, no title → current_role_unknown; primary region gives points
+    payload = {"area": {"name": "Санкт-Петербург"}}
+    score_unknown, bd = compute(payload, p)
+    assert bd.get("role_match") is False
+    assert bd.get("current_role_unknown") is True
+    assert "hard_reject_reasons" not in bd
+
+    # Portrait without synonyms — role matching inactive, same candidate, same score
+    p_no_syn = Portrait(
+        position_code="no_syn_baseline",
+        position_name="Директор филиала",
+        role_match_mode="soft",
+        position_synonyms=[],
+        filters=Filters(regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])),
+    )
+    score_baseline, _ = compute(payload, p_no_syn)
+    assert score_unknown == score_baseline
+
+
+def test_soft_matching_role_unaffected_by_penalty() -> None:
+    """Matching candidate (role_match never False) — fit identical with/without synonyms."""
+    p_with_syn = _soft_role_portrait()
+    p_no_syn = Portrait(
+        position_code="no_syn_match",
+        position_name="Директор филиала",
+        role_match_mode="soft",
+        position_synonyms=[],
+        filters=Filters(regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])),
+    )
+    payload = {
+        "area": {"name": "Санкт-Петербург"},
+        "title": "Директор филиала",
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Директор филиала",
+                "start": "2020-01",
+                "end": None,
+                "description": "ОСАГО",
+            }
+        ],
+    }
+    score_syn, bd_syn = compute(payload, p_with_syn)
+    score_nosyn, _ = compute(payload, p_no_syn)
+    assert bd_syn.get("role_match") is not False
+    assert score_syn == score_nosyn  # max_raw / denominator unchanged by synonyms
+
+
+def test_soft_role_mismatch_stacks_with_forbidden_industry() -> None:
+    """Both role mismatch and forbidden industry penalties stack, floored at 0."""
+    p = Portrait(
+        position_code="stack_test",
+        position_name="Директор филиала",
+        role_match_mode="soft",
+        position_synonyms=["Руководитель филиала", "Региональный директор"],
+        forbidden_industries=["банк"],
+        forbidden_industry_mode="soft",
+        filters=Filters(regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])),
+    )
+    # Candidate has primary region (+8) + ОСАГО (+9) + forbidden company + mismatch role.
+    # total_raw=17, two penalties of 9 → max(0, 17-9-9)=0 → score=0, but no hard reject.
+    payload = {
+        "area": {"name": "Санкт-Петербург"},
+        "title": "Территориальный менеджер",
+        "experience": [
+            {
+                "company": "Сбербанк",  # forbidden_industry trigger
+                "position": "Территориальный менеджер",  # role mismatch
+                "start": "2020-01",
+                "end": None,
+                "description": "ОСАГО и КАСКО",
+            }
+        ],
+    }
+    score, bd = compute(payload, p)
+    assert "hard_reject_reasons" not in bd
+    assert bd.get("forbidden_industry_recent") is True
+    assert bd.get("role_match") is False
+    assert not bd.get("current_role_unknown")
+    assert score == 0
+
+
+def test_max_raw_unchanged_by_role_penalty() -> None:
+    """max_raw (denominator) is identical whether or not position_synonyms are present."""
+    p_with_syn = _soft_role_portrait()
+    p_no_syn = Portrait(
+        position_code="maxraw_test",
+        position_name="Директор филиала",
+        role_match_mode="soft",
+        position_synonyms=[],
+        filters=Filters(regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])),
+    )
+    # Matching candidate — no penalty in either portrait; equal scores prove equal denominators.
+    payload = {
+        "area": {"name": "Санкт-Петербург"},
+        "title": "Директор филиала",
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Директор филиала",
+                "start": "2020-01",
+                "end": None,
+                "description": "ОСАГО",
+            }
+        ],
+    }
+    score_syn, _ = compute(payload, p_with_syn)
+    score_nosyn, _ = compute(payload, p_no_syn)
+    assert score_syn == score_nosyn == 38
 
 
 # ── _ROLE_GROUP_B extended stems ──────────────────────────────────────────────

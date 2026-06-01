@@ -21,7 +21,11 @@ Soft signals (default since CC-15):
   "current_role_mismatch" — when portrait.role_match_mode="soft" (default) the
   "current_role_unknown"    candidate is NOT skipped; breakdown["role_match"]=False
                             is recorded (and breakdown["current_role_unknown"]=True for
-                            the unknown variant).  Set mode="hard" to restore.
+                            the unknown variant).  Confirmed mismatch (role_match=False
+                            and current_role_unknown not set) additionally deducts
+                            portrait.weights.role_mismatch_soft_penalty (default 9)
+                            from total_raw.  Unknown role is NOT penalized.
+                            Set mode="hard" to restore old behaviour.
 
 Hard reject reason codes (appear in hard_reject_reasons when mode="hard" or always-hard):
   "age"                   — candidate age outside portrait.filters.age_range
@@ -700,6 +704,8 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
     total_raw = sum(int(breakdown[k]) for k in scored_keys)
     if breakdown.get("forbidden_industry_recent"):
         total_raw = max(0, total_raw - portrait.weights.forbidden_industry_soft_penalty)
+    if breakdown.get("role_match") is False and not breakdown.get("current_role_unknown"):
+        total_raw = max(0, total_raw - portrait.weights.role_mismatch_soft_penalty)
     if max_raw <= 0:
         return 0, breakdown
     fit_score = round(total_raw / max_raw * 100)

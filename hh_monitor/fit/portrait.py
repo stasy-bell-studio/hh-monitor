@@ -82,6 +82,9 @@ class Weights(BaseModel):
     motor_experience: int = 6
     # Raw points deducted from total when forbidden_industry_mode="soft" fires.
     forbidden_industry_soft_penalty: int = 9
+    # Raw points deducted from total when role_match_mode="soft" fires and
+    # role is confirmed mismatched (unknown role is NOT penalized).
+    role_mismatch_soft_penalty: int = 9
 
 
 # ── Main portrait model ───────────────────────────────────────────────────────
