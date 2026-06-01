@@ -508,6 +508,85 @@ async def test_multi_reject_persists_reasons_array(db_session: Any) -> None:
     assert len(reasons) >= 2, f"Expected ≥2 reasons, got {reasons}"
 
 
+# ── F1: hard-reject close (llm_enriched=True, no re-churn) ───────────────────
+
+
+def _hard_reject_portrait() -> Portrait:
+    return Portrait(
+        position_code="hr_pos",
+        position_name="Hard Reject Test",
+        higher_education_required=True,
+        filters=Filters(
+            age_range=(30, 60),
+            regions=RegionFilters(primary=[], adjacent=[], stop=[]),
+        ),
+    )
+
+
+async def _seed_hard_reject(session: Any) -> tuple[int, int]:
+    """Seed a search + resume + event that will hard-reject (age=20, secondary edu)."""
+    resume_id = "hr00000000000000"
+    payload: dict[str, Any] = {
+        "id": resume_id,
+        "age": 20,
+        "education": {"level": {"id": "secondary"}},
+        "title": "Специалист",
+        "total_experience": {"months": 36},
+    }
+    search = Search(
+        position_code="hr_pos", position_name="Hard Reject Test", hh_params={}, portrait={}
+    )
+    session.add(search)
+    await session.flush()
+    session.add(Resume(hh_resume_id=resume_id))
+    await session.flush()
+    session.add(Snapshot(hh_resume_id=resume_id, payload=payload, content_hash=_hash(payload)))
+    await session.flush()
+    event = Event(
+        hh_resume_id=resume_id, event_type="NEW", search_id=search.id,
+        fit_score=None, llm_enriched=False,
+    )
+    session.add(event)
+    await session.flush()
+    return search.id, event.id
+
+
+@pytest.mark.asyncio
+async def test_hard_reject_closes_event(db_session: Any) -> None:
+    """Hard-rejected event is closed (llm_enriched=True) so it stops re-churning."""
+    portrait = _hard_reject_portrait()
+    search_id, event_id = await _seed_hard_reject(db_session)
+
+    await run_llm_enrichment(
+        db_session, search_id, limit=1, portraits={"hr_pos": portrait}, global_ctx=_global_ctx()
+    )
+
+    row = (await db_session.execute(select(Event).where(Event.id == event_id))).scalar_one()
+    assert row.llm_enriched is True, "hard-rejected event must be closed"
+    assert row.score_total is None, "score_total must stay NULL on hard-reject"
+    assert row.llm_verdict is None, "llm_verdict must stay NULL on hard-reject"
+
+
+@pytest.mark.asyncio
+async def test_hard_reject_event_not_re_picked(db_session: Any) -> None:
+    """A closed hard-rejected event is not selected in a subsequent enrichment run."""
+    portrait = _hard_reject_portrait()
+    search_id, _ = await _seed_hard_reject(db_session)
+
+    await run_llm_enrichment(
+        db_session, search_id, limit=1, portraits={"hr_pos": portrait}, global_ctx=_global_ctx()
+    )
+
+    count_result = await db_session.execute(
+        select(func.count()).where(
+            Event.search_id == search_id,
+            Event.llm_enriched.is_(False),
+        )
+    )
+    remaining = count_result.scalar_one()
+    assert remaining == 0, "closed hard-rejected event must not be re-picked"
+
+
 # ── Commit 9.3: dossier persist + edge cases ──────────────────────────────────
 
 

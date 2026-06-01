@@ -195,6 +195,12 @@ async def _enrich_one(
         await session.commit()
 
     if reject_reason is not None:
+        await session.execute(
+            update(Event)
+            .where(Event.id == event_id)
+            .values(llm_enriched=True, fit_score=fit_score_val)
+        )
+        await session.commit()
         log_ctx.info(
             "llm_enrich.hard_reject_skip",
             reason=reject_reason,
