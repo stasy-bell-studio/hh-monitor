@@ -7,7 +7,7 @@ fields for backward compatibility with existing tests and DB-stored portraits.
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -71,6 +71,8 @@ class Weights(BaseModel):
     ifl_experience: int = 7
     top4_competitor_experience: int = 6
     higher_specialized_education: int = 5
+    # Raw points deducted from total when forbidden_industry_mode="soft" fires.
+    forbidden_industry_soft_penalty: int = 9
 
 
 # ── Main portrait model ───────────────────────────────────────────────────────
@@ -121,6 +123,10 @@ class Portrait(BaseModel):
     # ── Scoring structure ────────────────────────────────────────────────────
     filters: Filters = Field(default_factory=Filters)
     weights: Weights = Field(default_factory=Weights)
+    # "soft" (default) → signal recorded in breakdown, candidate not skipped.
+    # "hard" → restores old hard-reject behaviour for that signal.
+    role_match_mode: Literal["soft", "hard"] = "soft"
+    forbidden_industry_mode: Literal["soft", "hard"] = "soft"
     stop_words: list[str] = []
     must_have_keywords: list[str] = []
     nice_to_have_keywords: list[str] = []

@@ -14,7 +14,7 @@ Principles preserved from v1 tests:
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -46,6 +46,8 @@ def _portrait(
     min_tenure_last_job_months: int = 0,
     bonus_companies: list[str] | None = None,
     preferred_education_fields: list[str] | None = None,
+    forbidden_industry_mode: Literal["soft", "hard"] = "soft",
+    role_match_mode: Literal["soft", "hard"] = "soft",
 ) -> Portrait:
     return Portrait(
         position_code="test",
@@ -60,6 +62,8 @@ def _portrait(
         bonus_companies=bonus_companies or [],
         preferred_education_fields=preferred_education_fields or [],
         forbidden_industries=forbidden_industries or [],
+        forbidden_industry_mode=forbidden_industry_mode,
+        role_match_mode=role_match_mode,
         filters=Filters(
             age_range=age_range,
             regions=RegionFilters(
@@ -321,8 +325,8 @@ def test_stop_region_substring_match() -> None:
 
 
 def test_hard_reject_forbidden_industry_last_job() -> None:
-    """Most recent job in forbidden industry → hard rejected."""
-    p = _portrait(forbidden_industries=["банк"])
+    """Most recent job in forbidden industry (hard mode) → hard rejected."""
+    p = _portrait(forbidden_industries=["банк"], forbidden_industry_mode="hard")
     payload = {
         "experience": [
             {
@@ -847,10 +851,11 @@ def test_hard_stop_candidate_scores_zero() -> None:
 
 
 def _role_filter_portrait() -> Portrait:
-    """Portrait with synonyms (activates current_role filter) and no other hard filters."""
+    """Portrait with synonyms, hard role mode (tests the legacy hard-reject path)."""
     return Portrait(
         position_code="test_role",
         position_name="Директор филиала",
+        role_match_mode="hard",
         position_synonyms=[
             "Руководитель филиала",
             "Региональный директор",
@@ -1206,11 +1211,12 @@ def test_hard_reject_last_job_tenure_current_position() -> None:
 # ── Path (c): current_role_mismatch title fallback ────────────────────────────
 
 
-def _underwriter_portrait() -> Portrait:
+def _underwriter_portrait(role_match_mode: Literal["soft", "hard"] = "hard") -> Portrait:
     """Portrait with underwriter synonyms — mirrors underwriter_21vek subset."""
     return Portrait(
         position_code="uw_test",
         position_name="Андеррайтер (тест)",
+        role_match_mode=role_match_mode,
         position_synonyms=[
             "Андеррайтер",
             "Ведущий андеррайтер",
@@ -1300,3 +1306,175 @@ def test_motor_experience_required_still_hard() -> None:
     score, bd = compute(payload, p)
     assert score == 0
     assert bd["hard_reject_reason"] == "motor_experience"
+
+
+# ══ CC-15: Soft role & industry signals ══════════════════════════════════════
+
+
+def _soft_role_portrait() -> Portrait:
+    """Portrait with synonyms and role_match_mode='soft' (default)."""
+    return Portrait(
+        position_code="soft_role_test",
+        position_name="Директор филиала",
+        role_match_mode="soft",
+        position_synonyms=["Руководитель филиала", "Региональный директор"],
+        filters=Filters(
+            regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])
+        ),
+    )
+
+
+def test_soft_role_mismatch_score_positive() -> None:
+    """Soft mode: wrong current role but has region points → score > 0, not rejected."""
+    p = _soft_role_portrait()
+    payload = {
+        "id": "soft_role_1",
+        "area": {"name": "Санкт-Петербург"},  # primary region → +8
+        "experience": [
+            {
+                "company": "СК Тест",
+                "position": "Территориальный менеджер",  # no branch keyword → mismatch
+                "start": "2020-01",
+                "end": None,
+                "description": "",
+            }
+        ],
+    }
+    score, bd = compute(payload, p)
+    assert "hard_reject_reasons" not in bd
+    assert "hard_reject_reason" not in bd
+    assert score > 0
+
+
+def test_soft_role_mismatch_breakdown_recorded() -> None:
+    """Soft mode: role mismatch sets breakdown['role_match'] = False."""
+    p = _soft_role_portrait()
+    payload = _role_resume("Территориальный менеджер")
+    _, bd = compute(payload, p)
+    assert bd.get("role_match") is False
+
+
+def test_soft_role_unknown_score_positive() -> None:
+    """Soft mode: no title/experience available → not skipped, breakdown recorded."""
+    p = _soft_role_portrait()
+    # Primary region gives points so score > 0
+    payload = {"id": "soft_unknown", "area": {"name": "Санкт-Петербург"}}
+    score, bd = compute(payload, p)
+    assert "hard_reject_reasons" not in bd
+    assert bd.get("role_match") is False
+    assert bd.get("current_role_unknown") is True
+    assert score > 0
+
+
+def test_soft_forbidden_industry_penalty_applied() -> None:
+    """Soft mode: forbidden industry reduces score by penalty but does not zero it."""
+    p = Portrait(
+        position_code="soft_ind_test",
+        position_name="Директор",
+        forbidden_industries=["банк"],
+        forbidden_industry_mode="soft",
+        filters=Filters(regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])),
+    )
+    # Candidate has ОСАГО (+9) and primary region (+8) = 17 raw → ~38 score without penalty.
+    # Penalty deducts 9 raw → 8 raw → ~18 score.
+    payload = {
+        "area": {"name": "Санкт-Петербург"},
+        "experience": [
+            {
+                "company": "Сбербанк",  # triggers forbidden_industry
+                "position": "Менеджер",
+                "start": "2022-01",
+                "end": None,
+                "description": "ОСАГО и КАСКО",
+            }
+        ],
+    }
+    score_with_penalty, bd = compute(payload, p)
+    assert "hard_reject_reasons" not in bd
+    assert bd.get("forbidden_industry_recent") is True
+    assert score_with_penalty > 0
+    # Confirm penalty actually reduced the score vs the same candidate without industry flag
+    p_no_industry = Portrait(
+        position_code="soft_ind_test",
+        position_name="Директор",
+        forbidden_industries=[],
+        filters=Filters(regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])),
+    )
+    score_no_penalty, _ = compute(payload, p_no_industry)
+    assert score_with_penalty < score_no_penalty
+
+
+def test_soft_forbidden_industry_breakdown_recorded() -> None:
+    """Soft mode (default): forbidden_industry_recent is set, no hard rejection."""
+    p = _portrait(forbidden_industries=["банк"])  # forbidden_industry_mode="soft" by default
+    payload = {
+        "experience": [
+            {
+                "company": "Сбербанк",
+                "position": "Менеджер",
+                "start": "2022-01",
+                "end": None,
+                "description": "Кредитование",
+            }
+        ]
+    }
+    _, bd = compute(payload, p)
+    assert bd.get("forbidden_industry_recent") is True
+    assert "hard_reject_reasons" not in bd
+
+
+def test_hard_mode_role_still_rejects() -> None:
+    """role_match_mode='hard': role mismatch → score=0, hard_reject_reason set."""
+    p = Portrait(
+        position_code="hard_role_test",
+        position_name="Директор филиала",
+        role_match_mode="hard",
+        position_synonyms=["Руководитель филиала"],
+        filters=Filters(regions=RegionFilters(primary=[], adjacent=[], stop=[])),
+    )
+    score, bd = compute(_role_resume("Территориальный менеджер"), p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "current_role_mismatch"
+
+
+def test_hard_mode_forbidden_industry_still_rejects() -> None:
+    """forbidden_industry_mode='hard': forbidden industry → score=0, reason set."""
+    p = _portrait(forbidden_industries=["банк"], forbidden_industry_mode="hard")
+    payload = {
+        "experience": [
+            {
+                "company": "Сбербанк",
+                "position": "Менеджер",
+                "start": "2022-01",
+                "end": None,
+                "description": "Кредитование",
+            }
+        ]
+    }
+    score, bd = compute(payload, p)
+    assert score == 0
+    assert bd["hard_reject_reason"] == "forbidden_industry"
+
+
+# ── _ROLE_GROUP_B extended stems ──────────────────────────────────────────────
+
+
+def test_group_b_matches_obosoblennoye_podrazdelenie() -> None:
+    """'Директор обособленного подразделения' → Group A + Group B → role match."""
+    p = _role_filter_portrait()  # hard mode so a mismatch would produce score=0
+    _, bd = compute(_role_resume("Директор обособленного подразделения"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_group_b_matches_dopolnitelnoye_podrazdelenie() -> None:
+    """'Руководитель дополнительного подразделения' → Group A + Group B → role match."""
+    p = _role_filter_portrait()
+    _, bd = compute(_role_resume("Руководитель дополнительного подразделения"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")
+
+
+def test_group_b_matches_podrazdelenie_alone() -> None:
+    """'Начальник подразделения' → начальник(A) + подразделени(B) → role match."""
+    p = _role_filter_portrait()
+    _, bd = compute(_role_resume("Начальник подразделения"), p)
+    assert bd.get("hard_reject_reason") not in ("current_role_mismatch", "current_role_unknown")

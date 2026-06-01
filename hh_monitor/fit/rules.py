@@ -3,27 +3,31 @@
 Pure module — no I/O, no side effects except debug-level structlog calls.
 
 Scoring v2 (Lesnitskaya etalon v1, session 5.7):
-  1. Eight hard filters run in full — ALL triggered reasons are collected
-     (no early return).  If any fire → fit_score=0.
+  1. Hard filters run in full — ALL triggered reasons are collected (no early
+     return).  If any fire → fit_score=0.
      breakdown["hard_reject_reasons"] — list of all triggered reason codes.
      breakdown["hard_reject_reason"]  — first reason (backward-compatible alias).
   2. Six weighted scored criteria; max achievable raw sum = 45.
   3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
 
-Scoring v1 (legacy) — salary fit removed in 5.7 per Lesnitskaya etalon.
-  Legacy breakdown keys (title_match, experience_keywords, etc.) are no
-  longer computed; the new keys replace them.
+Soft signals (default since CC-15):
+  "forbidden_industry"    — when portrait.forbidden_industry_mode="soft" (default)
+                            the candidate is NOT skipped; instead a point penalty
+                            (portrait.weights.forbidden_industry_soft_penalty, default 9)
+                            is subtracted from total_raw and breakdown["forbidden_industry_recent"]
+                            is set to True.  Set mode="hard" to restore old behaviour.
+  "current_role_mismatch" — when portrait.role_match_mode="soft" (default) the
+  "current_role_unknown"    candidate is NOT skipped; breakdown["role_match"]=False
+                            is recorded (and breakdown["current_role_unknown"]=True for
+                            the unknown variant).  Set mode="hard" to restore.
 
-Hard reject reason codes (may appear in hard_reject_reasons list):
+Hard reject reason codes (appear in hard_reject_reasons when mode="hard" or always-hard):
   "age"                   — candidate age outside portrait.filters.age_range
   "education"             — higher_education_required=True but no higher edu
   "stop_region"           — candidate area in filters.regions.stop
-  "forbidden_industry"    — most recent job in portrait.forbidden_industries
-  "current_role_unknown"  — portrait has synonyms but experience empty and no
-                            resume.title; we cannot determine current role
-  "current_role_mismatch" — latest position title does not match portrait
-                            synonyms or the manager+branch combo rule;
-                            activated only when portrait.position_synonyms ≠ []
+  "forbidden_industry"    — only when portrait.forbidden_industry_mode="hard"
+  "current_role_unknown"  — only when portrait.role_match_mode="hard"
+  "current_role_mismatch" — only when portrait.role_match_mode="hard"
   "career_gap"            — longest gap > portrait.max_career_gap_months
   "total_experience"      — total months < portrait.min_total_months
   "insurance_experience"  — insurance months < portrait.min_insurance_experience_months
@@ -79,7 +83,17 @@ _ROLE_GROUP_A: frozenset[str] = frozenset(
     {"директор", "руководитель", "управляющ", "начальник", "региональн", "менеджер"}
 )
 # Group B — branch / office / subsidiary scope words
-_ROLE_GROUP_B: frozenset[str] = frozenset({"филиал", "отделени", "представительств", "офис"})
+_ROLE_GROUP_B: frozenset[str] = frozenset(
+    {
+        "филиал",
+        "отделени",
+        "представительств",
+        "офис",
+        "подразделени",  # подразделение/ия/ию/ии
+        "обособлен",     # обособленное/ного/ном
+        "дополнительн",  # дополнительный/ого/ом офис
+    }
+)
 
 
 # ── date helpers ──────────────────────────────────────────────────────────────
@@ -292,12 +306,16 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
     """Score a resume against a portrait.  Pure function — no side effects.
 
     Scoring v2 (Lesnitskaya etalon v1):
-      1. All eight hard filters run — ALL triggered reasons are collected into
+      1. Hard filters run — ALL triggered reasons are collected into
          ``breakdown["hard_reject_reasons"]`` (list).  If any fired → score=0.
          ``breakdown["hard_reject_reason"]`` contains the first reason string
          for backward compatibility with callers that check that key.
+         ``forbidden_industry`` and ``current_role_*`` are soft by default —
+         see module docstring for how mode fields control this.
       2. Six weighted criteria with a raw max of 45.
-      3. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
+      3. Soft penalties (e.g. forbidden_industry_recent) are subtracted from
+         total_raw before normalization.
+      4. fit_score = round(total_raw / 45 * 100), clamped to [0, 100].
 
     Returns:
         ``(score, breakdown)`` where *score* is in ``[0, 100]``.
@@ -306,6 +324,10 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
         additionally have:
           ``breakdown["hard_reject_reasons"]`` — list[str] of all triggered codes
           ``breakdown["hard_reject_reason"]``  — str, first element (compat alias)
+        Soft-signal resumes may have:
+          ``breakdown["role_match"]``              — False when role not matched (soft)
+          ``breakdown["current_role_unknown"]``    — True when role unknown (soft)
+          ``breakdown["forbidden_industry_recent"]`` — True when soft industry hit
     """
     breakdown: dict[str, Any] = {}
     resume_id: str = resume_payload.get("id") or resume_payload.get("hh_resume_id", "")
@@ -361,12 +383,20 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
             ).lower()
             for industry in portrait.forbidden_industries:
                 if industry.lower() in latest_text:
-                    hard_reject_reasons.append("forbidden_industry")
-                    logger.debug(
-                        "fit.hard_reject.forbidden_industry",
-                        industry=industry,
-                        resume_id=resume_id,
-                    )
+                    if portrait.forbidden_industry_mode == "hard":
+                        hard_reject_reasons.append("forbidden_industry")
+                        logger.debug(
+                            "fit.hard_reject.forbidden_industry",
+                            industry=industry,
+                            resume_id=resume_id,
+                        )
+                    else:
+                        breakdown["forbidden_industry_recent"] = True
+                        logger.debug(
+                            "fit.soft_penalty.forbidden_industry",
+                            industry=industry,
+                            resume_id=resume_id,
+                        )
                     break  # one match per resume is enough; avoid double-counting
 
     # 1e. Current role mismatch
@@ -396,8 +426,13 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
         _current_title: str | None = _exp_title or _resume_title
 
         if not _current_title:
-            hard_reject_reasons.append("current_role_unknown")
-            logger.debug("fit.hard_reject.current_role_unknown", resume_id=resume_id)
+            if portrait.role_match_mode == "hard":
+                hard_reject_reasons.append("current_role_unknown")
+                logger.debug("fit.hard_reject.current_role_unknown", resume_id=resume_id)
+            else:
+                breakdown["role_match"] = False
+                breakdown["current_role_unknown"] = True
+                logger.debug("fit.soft.current_role_unknown", resume_id=resume_id)
         elif not _matches_role(_current_title, portrait):
             # Path (c): experience position failed — try resume.title vs synonyms.
             _title_fallback_matched = False
@@ -414,12 +449,20 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
                         )
                         break
             if not _title_fallback_matched:
-                hard_reject_reasons.append("current_role_mismatch")
-                logger.debug(
-                    "fit.hard_reject.current_role_mismatch",
-                    current_role=_current_title,
-                    resume_id=resume_id,
-                )
+                if portrait.role_match_mode == "hard":
+                    hard_reject_reasons.append("current_role_mismatch")
+                    logger.debug(
+                        "fit.hard_reject.current_role_mismatch",
+                        current_role=_current_title,
+                        resume_id=resume_id,
+                    )
+                else:
+                    breakdown["role_match"] = False
+                    logger.debug(
+                        "fit.soft.current_role_mismatch",
+                        current_role=_current_title,
+                        resume_id=resume_id,
+                    )
 
     # 1f. Career gap
     if portrait.max_career_gap_months > 0:
@@ -597,5 +640,7 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
         "higher_specialized_education",
     }
     total_raw = sum(int(breakdown[k]) for k in scored_keys)
+    if breakdown.get("forbidden_industry_recent"):
+        total_raw = max(0, total_raw - portrait.weights.forbidden_industry_soft_penalty)
     fit_score = round(total_raw / _MAX_RAW * 100)
     return max(0, min(100, fit_score)), breakdown
