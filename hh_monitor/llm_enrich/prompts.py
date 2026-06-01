@@ -118,7 +118,8 @@ def parse_dossier(raw: str) -> dict[str, Any]:
                 data = json.loads(m.group(0))
 
     if data is None:
-        log.warning("llm_enrich.dossier_json_decode_error", raw_preview=raw[:200])
+        log.warning("llm_enrich.dossier_json_decode_error")
+        log.debug("llm_enrich.dossier_json_decode_error.detail", raw_preview=raw[:200])
         return {
             "real_role": "",
             "facts_confirmed": None,
@@ -253,11 +254,8 @@ def extract_llm_score(dossier: dict[str, Any], resume_id: str) -> int:
 
     vl = verdict_text.lower()
     if not any(kw in vl for kw in _VERDICT_KEYWORDS):
-        log.warning(
-            "llm_enrich.score_parse_fallback",
-            resume_id=resume_id,
-            verdict_preview=verdict_text[:100],
-        )
+        log.warning("llm_enrich.score_parse_fallback", resume_id=resume_id)
+        log.debug("llm_enrich.score_parse_fallback.detail", verdict_preview=verdict_text[:100])
         return 0
 
     verdict_class = derive_verdict_class(verdict_text)

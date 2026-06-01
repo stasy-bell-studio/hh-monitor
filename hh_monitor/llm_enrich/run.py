@@ -85,7 +85,8 @@ def _safe_flat_list(v: object) -> list[str] | None:
     if isinstance(v, str):
         return [v] if v.strip() else None
     if isinstance(v, dict):
-        log.warning("llm_enrich.flat_list_unexpected_dict", value_preview=str(v)[:80])
+        log.warning("llm_enrich.flat_list_unexpected_dict")
+        log.debug("llm_enrich.flat_list_unexpected_dict.detail", value_preview=str(v)[:80])
         return [str(v)]
     if isinstance(v, list):
         flat: list[str] = []
