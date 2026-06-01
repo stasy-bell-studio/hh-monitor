@@ -82,6 +82,19 @@ def _admin_true() -> Any:
         yield
 
 
+# ── Entry: /add in group (regression CC-12) ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_group_add_command_starts_wizard() -> None:
+    """/add in group admin topic must still reach the wizard (not DM redirect)."""
+    fsm = FakeFSM()
+    msg = _msg("/add")
+    await h.handle_add_command(msg, fsm)  # type: ignore[arg-type]
+    assert fsm.state == AddVacancy.S1_name
+    msg.answer.assert_called_once()
+
+
 # ── S1 ──────────────────────────────────────────────────────────────────────────
 
 

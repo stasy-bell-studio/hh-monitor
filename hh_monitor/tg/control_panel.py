@@ -15,7 +15,6 @@ import structlog
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import BaseFilter, Command
-from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     ForceReply,
@@ -44,7 +43,6 @@ cp_router.message.filter(F.chat.type == ChatType.PRIVATE)
 def _main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🆕 Добавить вакансию")],
             [KeyboardButton(text="📋 Активные вакансии")],
             [KeyboardButton(text="📊 Статистика")],
             [KeyboardButton(text="⚙️ Настройки")],
@@ -372,14 +370,19 @@ async def handle_dm_settings(message: Message) -> None:
     await message.answer(settings_text, reply_markup=keyboard)
 
 
-# ── 🆕 Добавить вакансию ─────────────────────────────────────────────────────
+# ── 🆕 Добавить вакансию (DM — redirect only; wizard is group-only) ──────────
+
+_ADD_VACANCY_DM_REDIRECT = "Добавление вакансий доступно в группе, в топике «Управление»."
 
 
 @cp_router.message(F.text == "🆕 Добавить вакансию")
-async def handle_dm_add_vacancy(message: Message, state: FSMContext) -> None:
-    from hh_monitor.tg.add_vacancy.handlers import _start_wizard
+async def handle_dm_add_vacancy(message: Message) -> None:
+    await message.answer(_ADD_VACANCY_DM_REDIRECT)
 
-    await _start_wizard(state, message)
+
+@cp_router.message(Command("add"))
+async def handle_dm_add_command(message: Message) -> None:
+    await message.answer(_ADD_VACANCY_DM_REDIRECT)
 
 
 # ── ❓ Помощь ─────────────────────────────────────────────────────────────────

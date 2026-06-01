@@ -71,15 +71,15 @@ async def test_start_sends_reply_keyboard() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_keyboard_has_all_five_buttons() -> None:
+async def test_start_keyboard_has_four_buttons() -> None:
     keyboard = _main_menu_keyboard()
     all_texts = [btn.text for row in keyboard.keyboard for btn in row]
-    assert "🆕 Добавить вакансию" in all_texts
+    assert "🆕 Добавить вакансию" not in all_texts, "add-vacancy must be hidden in DM (CC-12)"
     assert "📋 Активные вакансии" in all_texts
     assert "📊 Статистика" in all_texts
     assert "⚙️ Настройки" in all_texts
     assert "❓ Помощь" in all_texts
-    assert len(all_texts) == 5
+    assert len(all_texts) == 4
 
 
 @pytest.mark.asyncio
