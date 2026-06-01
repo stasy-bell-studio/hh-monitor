@@ -162,6 +162,7 @@ async def test_pipeline_excludes_hard_rejected_from_top_n(
         "position_code": "branch_dir",
         "position_name": "Директор филиала",
         "position_synonyms": ["Руководитель филиала"],
+        "role_match_mode": "hard",
     }
     s = Search(
         position_code="branch_dir",
@@ -255,6 +256,7 @@ async def test_pipeline_zero_passing_candidates_no_crash(
         "position_code": "branch_dir2",
         "position_name": "Директор филиала",
         "position_synonyms": ["Руководитель филиала"],
+        "role_match_mode": "hard",
     }
     s = Search(
         position_code="branch_dir2",
