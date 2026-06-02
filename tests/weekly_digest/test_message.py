@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from hh_monitor.weekly_digest.run import (
     _build_hr_message,
     _empty_digest_text,
+    _pending_block,
 )
 
 
@@ -57,7 +58,6 @@ def _data(**kw: object) -> dict[str, object]:
             }
         ],
         "candidates_all": [],
-        "top": [_candidate()],
         "pending": [_candidate(age_days=4), _candidate(age_days=1, score_total=70)],
         "parser_stats": {
             "runs": 5,
@@ -98,11 +98,10 @@ def test_message_pending_empty_all_resolved() -> None:
     assert "✅ Все разобраны" in msg
 
 
-def test_message_has_pre_table_and_top() -> None:
+def test_message_has_pre_table() -> None:
     msg = _build_hr_message(_data(), [], 23, _FROM, _NOW)  # type: ignore[arg-type]
     assert "<pre>" in msg and "</pre>" in msg
     assert "Позиция" in msg and "Найд" in msg
-    assert "🏆" in msg
     assert "hh.ru" in msg
 
 
@@ -130,3 +129,55 @@ def test_empty_week_text() -> None:
     assert "Еженедельная сводка" in text
     assert "7 прогонов" in text
     assert "312 резюме" in text
+
+
+# ── Pending block: verdict filter (Commit A) ─────────────────────────────────
+
+
+def test_pending_verdict_filter() -> None:
+    pending = [
+        _candidate(llm_verdict="подходит", position_name="Alpha", age_days=1),
+        _candidate(llm_verdict="спорно", position_name="Beta", age_days=2),
+        _candidate(llm_verdict="мимо", position_name="Gamma", age_days=1),
+    ]
+    block = _pending_block(pending)  # type: ignore[arg-type]
+    assert "Alpha" in block
+    assert "Beta" in block
+    assert "Gamma" not in block
+    assert "🔴 +1 с вердиктом «мимо» — в Excel" in block
+
+
+def test_pending_invariant() -> None:
+    pending = [
+        _candidate(llm_verdict="подходит", age_days=1),
+        _candidate(llm_verdict="мимо", age_days=2),
+        _candidate(llm_verdict="мимо", age_days=3),
+    ]
+    block = _pending_block(pending)  # type: ignore[arg-type]
+    shown_count = sum(1 for line in block.splitlines() if "hh.ru" in line)
+    import re
+    m = re.search(r"🔴 \+(\d+)", block)
+    miss_count = int(m.group(1)) if m else 0
+    assert shown_count + miss_count == len(pending)
+
+
+def test_pending_all_miss() -> None:
+    pending = [
+        _candidate(llm_verdict="мимо", age_days=5),
+        _candidate(llm_verdict="мимо", age_days=3),
+    ]
+    block = _pending_block(pending)  # type: ignore[arg-type]
+    assert block == "🔴 +2 с вердиктом «мимо» — в Excel"
+    assert "hh.ru" not in block
+    assert "⚠️" not in block
+
+
+def test_pending_warning_on_oldest_shown() -> None:
+    pending = [
+        _candidate(llm_verdict="мимо", age_days=10),  # hidden, should NOT trigger ⚠️
+        _candidate(llm_verdict="подходит", age_days=4),  # oldest shown → gets ⚠️
+        _candidate(llm_verdict="спорно", age_days=1),
+    ]
+    block = _pending_block(pending)  # type: ignore[arg-type]
+    lines = block.splitlines()
+    assert any("⚠️" in line and "4 дн" in line for line in lines)

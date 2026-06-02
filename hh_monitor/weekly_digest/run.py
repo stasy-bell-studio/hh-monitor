@@ -137,7 +137,6 @@ class _DigestData(TypedDict):
     funnel: _Funnel
     per_position: list[_PerPosition]
     candidates_all: list[_Candidate]
-    top: list[_Candidate]
     pending: list[_Candidate]
     parser_stats: _ParserStats
 
@@ -274,7 +273,6 @@ async def _collect_data(
         funnel=funnel,
         per_position=per_position,
         candidates_all=candidates_all,
-        top=candidates_all[:7],
         pending=pending,
         parser_stats=await _collect_parser_stats(session, date_from, date_to),
     )
@@ -377,13 +375,20 @@ def _name_role(position: str, real_role: str) -> str:
     return _esc(position)
 
 
+_SHOWN_VERDICTS = {"подходит", "спорно"}
+
+
 def _pending_block(pending: list[_Candidate]) -> str:
     if not pending:
         return "✅ Все разобраны"
-    max_age = max((c["age_days"] or 0) for c in pending)
+    shown = [c for c in pending if (c["llm_verdict"] or "").lower().strip() in _SHOWN_VERDICTS]
+    miss_count = len(pending) - len(shown)
+    if not shown:
+        return f"🔴 +{miss_count} с вердиктом «мимо» — в Excel"
+    max_age = max((c["age_days"] or 0) for c in shown)
     marked = False
     lines: list[str] = []
-    for c in pending:
+    for c in shown:
         prefix = ""
         if not marked and max_age >= 3 and (c["age_days"] or 0) == max_age:
             prefix = "⚠️ "
@@ -394,6 +399,8 @@ def _pending_block(pending: list[_Candidate]) -> str:
             f"{_name_role(c['position_name'], c['llm_real_role'])} · "
             f'висит {age} дн · <a href="{c["url"]}">hh.ru</a>'
         )
+    if miss_count > 0:
+        lines.append(f"🔴 +{miss_count} с вердиктом «мимо» — в Excel")
     return "\n".join(lines)
 
 
@@ -408,22 +415,6 @@ def _positions_table(per_position: list[_PerPosition]) -> str:
         )
     return _esc("\n".join(rows))
 
-
-def _top_block(top: list[_Candidate]) -> str:
-    lines: list[str] = []
-    for c in top[:5]:
-        head = (
-            f"{_verdict_emoji(c['llm_verdict'])} {c['score_total']} · "
-            f"{_name_role(c['position_name'], c['llm_real_role'])}"
-        )
-        concl = _one_line(c["conclusion"])
-        sub = (
-            f'   <i>{_esc(concl)}</i> · <a href="{c["url"]}">hh.ru</a>'
-            if concl
-            else (f'   <a href="{c["url"]}">hh.ru</a>')
-        )
-        lines.append(f"{head}\n{sub}")
-    return "\n".join(lines)
 
 
 def _build_hr_message(
@@ -455,10 +446,6 @@ def _build_hr_message(
         "📋 <b>По позициям:</b>",
         f"<pre>{_positions_table(data['per_position'])}</pre>",
     ]
-
-    top = _top_block(data["top"])
-    if top:
-        parts += ["", "🏆 <b>Топ недели:</b>", top]
 
     parts += ["", "📎 Полный список, воронка и динамика — в Excel ниже"]
     return "\n".join(parts)

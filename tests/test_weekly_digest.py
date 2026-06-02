@@ -25,7 +25,6 @@ def _run_data(found: int = 3) -> dict[str, object]:
         },
         "per_position": [],
         "candidates_all": [],
-        "top": [],
         "pending": [],
         "parser_stats": {
             "runs": 0,
