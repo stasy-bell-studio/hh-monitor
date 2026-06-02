@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from hh_monitor.weekly_digest.run import (
     _build_hr_message,
     _empty_digest_text,
+    _parser_ops_text,
     _pending_block,
+    _stats_from_runs,
 )
 
 
@@ -63,7 +66,9 @@ def _data(**kw: object) -> dict[str, object]:
             "runs": 5,
             "snapshots_inserted": 120,
             "dedup_rate": 18,
-            "errors": 0,
+            "partial": 0,
+            "limit": 0,
+            "broken": 0,
             "resumes_viewed": 240,
         },
     }
@@ -121,7 +126,9 @@ def test_empty_week_text() -> None:
         "runs": 7,
         "snapshots_inserted": 0,
         "dedup_rate": 0,
-        "errors": 0,
+        "partial": 0,
+        "limit": 0,
+        "broken": 0,
         "resumes_viewed": 312,
     }
     text = _empty_digest_text(_FROM, _NOW, stats)  # type: ignore[arg-type]
@@ -155,7 +162,6 @@ def test_pending_invariant() -> None:
     ]
     block = _pending_block(pending)  # type: ignore[arg-type]
     shown_count = sum(1 for line in block.splitlines() if "hh.ru" in line)
-    import re
     m = re.search(r"🔴 \+(\d+)", block)
     miss_count = int(m.group(1)) if m else 0
     assert shown_count + miss_count == len(pending)
@@ -181,3 +187,97 @@ def test_pending_warning_on_oldest_shown() -> None:
     block = _pending_block(pending)  # type: ignore[arg-type]
     lines = block.splitlines()
     assert any("⚠️" in line and "4 дн" in line for line in lines)
+
+
+# ── Parser stats: bucketing + admin message (Commit B) ───────────────────────
+
+
+def _make_run(
+    status: str,
+    finished_at: datetime | None = datetime(2026, 6, 1, tzinfo=UTC),
+    snapshots_inserted: int = 0,
+    snapshots_skipped: int = 0,
+    resumes_viewed: int = 0,
+) -> object:
+    from unittest.mock import MagicMock
+
+    r = MagicMock()
+    r.status = status
+    r.finished_at = finished_at
+    r.snapshots_inserted = snapshots_inserted
+    r.snapshots_skipped = snapshots_skipped
+    r.resumes_viewed = resumes_viewed
+    return r
+
+
+def test_stats_from_runs_bucketing() -> None:
+    runs = [
+        _make_run("ok"),
+        _make_run("ok"),
+        _make_run("partial_errors"),
+        _make_run("quota_exceeded"),
+        _make_run("view_limit_exhausted"),
+        _make_run("cancelled"),
+        _make_run("running", finished_at=None),
+    ]
+    stats = _stats_from_runs(runs)  # type: ignore[arg-type]
+    assert stats["partial"] == 1
+    assert stats["limit"] == 2
+    assert stats["broken"] == 2
+    assert stats["runs"] == 7
+
+
+def test_stats_from_runs_ok_not_counted_as_bad() -> None:
+    runs = [_make_run("ok"), _make_run("ok")]
+    stats = _stats_from_runs(runs)  # type: ignore[arg-type]
+    assert stats["partial"] == 0
+    assert stats["limit"] == 0
+    assert stats["broken"] == 0
+
+
+def test_parser_ops_text_no_broken() -> None:
+    stats = {
+        "runs": 10,
+        "snapshots_inserted": 200,
+        "dedup_rate": 15,
+        "partial": 3,
+        "limit": 1,
+        "broken": 0,
+        "resumes_viewed": 0,
+    }
+    text = _parser_ops_text(23, stats)  # type: ignore[arg-type]
+    assert "Сбоев нет" in text
+    assert "⚠️" not in text
+
+
+def test_parser_ops_text_with_broken() -> None:
+    stats = {
+        "runs": 10,
+        "snapshots_inserted": 200,
+        "dedup_rate": 15,
+        "partial": 0,
+        "limit": 0,
+        "broken": 2,
+        "resumes_viewed": 0,
+    }
+    text = _parser_ops_text(23, stats)  # type: ignore[arg-type]
+    assert "Прерванных запусков: 2" in text
+    assert "Сбоев нет" not in text
+
+
+def test_parser_ops_text_labels() -> None:
+    stats = {
+        "runs": 5,
+        "snapshots_inserted": 120,
+        "dedup_rate": 18,
+        "partial": 2,
+        "limit": 1,
+        "broken": 0,
+        "resumes_viewed": 0,
+    }
+    text = _parser_ops_text(23, stats)  # type: ignore[arg-type]
+    assert "Проверок hh.ru: 5" in text
+    assert "собрано резюме: 120" in text
+    assert "повторов пропущено: 18%" in text
+    assert "Недоступных резюме (удалены/скрыты): 2" in text
+    assert "дневной лимит hh.ru: 1" in text

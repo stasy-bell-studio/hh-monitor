@@ -21,13 +21,14 @@ def _make_data(total_candidates: int) -> dict[str, object]:
         },
         "per_position": [],
         "candidates_all": [],
-        "top": [],
         "pending": [],
         "parser_stats": {
             "runs": 0,
             "snapshots_inserted": 0,
             "dedup_rate": 0,
-            "errors": 0,
+            "partial": 0,
+            "limit": 0,
+            "broken": 0,
             "resumes_viewed": 0,
         },
     }
@@ -67,7 +68,7 @@ async def test_empty_digest_sends_text_not_pdf() -> None:
     assert digest_call["message_thread_id"] == 7
 
     admin_call = mock_bot.send_message.call_args_list[1][1]
-    assert "🛠" in admin_call["text"]
+    assert "🔍" in admin_call["text"]
     assert admin_call["message_thread_id"] == 9
 
 
@@ -108,5 +109,5 @@ async def test_non_empty_digest_sends_message_and_document() -> None:
     assert mock_bot.send_document.call_args[1]["message_thread_id"] == 7
 
     admin_call = mock_bot.send_message.call_args_list[1][1]
-    assert "🛠" in admin_call["text"]
+    assert "🔍" in admin_call["text"]
     assert admin_call["message_thread_id"] == 9

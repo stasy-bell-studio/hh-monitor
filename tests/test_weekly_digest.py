@@ -30,7 +30,9 @@ def _run_data(found: int = 3) -> dict[str, object]:
             "runs": 0,
             "snapshots_inserted": 0,
             "dedup_rate": 0,
-            "errors": 0,
+            "partial": 0,
+            "limit": 0,
+            "broken": 0,
             "resumes_viewed": 0,
         },
     }

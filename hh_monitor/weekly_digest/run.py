@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
@@ -129,7 +130,9 @@ class _ParserStats(TypedDict):
     runs: int
     snapshots_inserted: int
     dedup_rate: int
-    errors: int
+    partial: int
+    limit: int
+    broken: int
     resumes_viewed: int
 
 
@@ -278,6 +281,30 @@ async def _collect_data(
     )
 
 
+def _stats_from_runs(runs: Sequence[ParserRun]) -> _ParserStats:
+    inserted = sum(r.snapshots_inserted for r in runs)
+    skipped = sum(r.snapshots_skipped for r in runs)
+    dedup = round(skipped / (inserted + skipped) * 100) if (inserted + skipped) > 0 else 0
+    partial = sum(1 for r in runs if r.status == "partial_errors")
+    limit = sum(
+        1 for r in runs if r.status in ("quota_exceeded", "view_limit_exhausted")
+    )
+    broken = sum(
+        1
+        for r in runs
+        if r.status == "cancelled" or (r.status == "running" and r.finished_at is None)
+    )
+    return _ParserStats(
+        runs=len(runs),
+        snapshots_inserted=inserted,
+        dedup_rate=dedup,
+        partial=partial,
+        limit=limit,
+        broken=broken,
+        resumes_viewed=sum(r.resumes_viewed for r in runs),
+    )
+
+
 async def _collect_parser_stats(
     session: AsyncSession, date_from: datetime, date_to: datetime
 ) -> _ParserStats:
@@ -288,17 +315,7 @@ async def _collect_parser_stats(
         .order_by(ParserRun.started_at.desc())
     )
     runs = (await session.execute(ps_stmt)).scalars().all()
-    inserted = sum(r.snapshots_inserted for r in runs)
-    skipped = sum(r.snapshots_skipped for r in runs)
-    dedup = round(skipped / (inserted + skipped) * 100) if (inserted + skipped) > 0 else 0
-    errors = sum(1 for r in runs if r.status != "ok")
-    return _ParserStats(
-        runs=len(runs),
-        snapshots_inserted=inserted,
-        dedup_rate=dedup,
-        errors=errors,
-        resumes_viewed=sum(r.resumes_viewed for r in runs),
-    )
+    return _stats_from_runs(runs)
 
 
 async def _collect_weekly_series(session: AsyncSession, weeks: int = 4) -> list[_WeekPoint]:
@@ -463,10 +480,18 @@ def _empty_digest_text(date_from: datetime, date_to: datetime, stats: _ParserSta
 
 
 def _parser_ops_text(week_num: int, stats: _ParserStats) -> str:
+    health_line = (
+        "✅ Сбоев нет — система работает штатно."
+        if stats["broken"] == 0
+        else f"⚠️ Прерванных запусков: {stats['broken']} — разберусь, что случилось."
+    )
     return (
-        f"🛠 Парсер за неделю {week_num}\n"
-        f"Прогонов: {stats['runs']} · снапшотов: {stats['snapshots_inserted']} · "
-        f"дедуп: {stats['dedup_rate']}% · ошибок: {stats['errors']}"
+        f"🔍 Автопоиск резюме · неделя {week_num}\n"
+        f"Проверок hh.ru: {stats['runs']} · собрано резюме: {stats['snapshots_inserted']} · "
+        f"повторов пропущено: {stats['dedup_rate']}%\n"
+        f"{health_line}\n"
+        f"Недоступных резюме (удалены/скрыты): {stats['partial']} · "
+        f"дневной лимит hh.ru: {stats['limit']} — это норма"
     )
 
 
