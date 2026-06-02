@@ -473,6 +473,26 @@ def _empty_digest_text(date_from: datetime, date_to: datetime, stats: _ParserSta
     )
 
 
+def _parser_ops_text(week_num: int, stats: _ParserStats) -> str:
+    return (
+        f"🛠 Парсер за неделю {week_num}\n"
+        f"Прогонов: {stats['runs']} · снапшотов: {stats['snapshots_inserted']} · "
+        f"дедуп: {stats['dedup_rate']}% · ошибок: {stats['errors']}"
+    )
+
+
+async def _send_parser_ops(bot: Bot, week_num: int, stats: _ParserStats) -> None:
+    """Best-effort ops line to the admin topic — never raises."""
+    try:
+        await bot.send_message(
+            chat_id=settings.telegram_hr_group_id,
+            text=_parser_ops_text(week_num, stats),
+            message_thread_id=settings.telegram_admin_topic_id or None,
+        )
+    except Exception as exc:  # best-effort: must not break the digest
+        logger.warning("weekly_digest_parser_ops_failed", error=str(exc))
+
+
 async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
     if not send_enabled(settings):
         logger.info("tg.send.skipped", reason="send_disabled", env=settings.env)
@@ -492,6 +512,7 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
             message_thread_id=settings.telegram_digest_topic_id or None,
         )
         logger.info("weekly_digest_empty", week=week_num)
+        await _send_parser_ops(bot, week_num, data["parser_stats"])
         return
 
     weekly_series = await _collect_weekly_series(session)
@@ -514,3 +535,4 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
         message_thread_id=settings.telegram_digest_topic_id or None,
     )
     logger.info("weekly_digest_sent", week=week_num, filename=filename)
+    await _send_parser_ops(bot, week_num, data["parser_stats"])

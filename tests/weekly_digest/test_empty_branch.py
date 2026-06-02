@@ -52,18 +52,23 @@ async def test_empty_digest_sends_text_not_pdf() -> None:
         ms.env = "production"
         ms.telegram_send_enabled = None
         ms.telegram_hr_group_id = -100
-        ms.telegram_digest_topic_id = 0
+        ms.telegram_digest_topic_id = 7
+        ms.telegram_admin_topic_id = 9
         await run_weekly_digest(mock_session, mock_bot)
 
-    mock_bot.send_message.assert_called_once()
+    # Empty week: HR reassurance text + admin parser line; NO document.
+    assert mock_bot.send_message.call_count == 2
     mock_bot.send_document.assert_not_called()
 
-    call_kwargs = mock_bot.send_message.call_args[1]
-    text_sent: str = call_kwargs["text"]
+    digest_call = mock_bot.send_message.call_args_list[0][1]
+    text_sent: str = digest_call["text"]
     assert "📭" in text_sent
     assert "Еженедельная сводка" in text_sent
-    # Topic routing: digest goes to DIGEST_TOPIC
-    assert "message_thread_id" in call_kwargs
+    assert digest_call["message_thread_id"] == 7
+
+    admin_call = mock_bot.send_message.call_args_list[1][1]
+    assert "🛠" in admin_call["text"]
+    assert admin_call["message_thread_id"] == 9
 
 
 @pytest.mark.asyncio
@@ -90,11 +95,18 @@ async def test_non_empty_digest_sends_message_and_document() -> None:
         ms.env = "production"
         ms.telegram_send_enabled = None
         ms.telegram_hr_group_id = -100
-        ms.telegram_digest_topic_id = 0
+        ms.telegram_digest_topic_id = 7
+        ms.telegram_admin_topic_id = 9
         await run_weekly_digest(mock_session, mock_bot)
 
-    mock_bot.send_message.assert_called_once()
+    # Normal week: HR message + admin parser line (2 send_message) + 1 document.
+    assert mock_bot.send_message.call_count == 2
     mock_bot.send_document.assert_called_once()
-    # Topic routing: both go to DIGEST_TOPIC
-    assert "message_thread_id" in mock_bot.send_message.call_args[1]
-    assert "message_thread_id" in mock_bot.send_document.call_args[1]
+
+    digest_call = mock_bot.send_message.call_args_list[0][1]
+    assert digest_call["message_thread_id"] == 7
+    assert mock_bot.send_document.call_args[1]["message_thread_id"] == 7
+
+    admin_call = mock_bot.send_message.call_args_list[1][1]
+    assert "🛠" in admin_call["text"]
+    assert admin_call["message_thread_id"] == 9
