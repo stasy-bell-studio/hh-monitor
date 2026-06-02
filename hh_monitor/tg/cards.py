@@ -20,6 +20,18 @@ def _verdict_emoji(v: str | None) -> str:
     return _VERDICT_EMOJI.get(v.lower().strip(), "🔴")
 
 
+def _plural_years(n: int) -> str:
+    n = abs(int(n))
+    if 11 <= n % 100 <= 14:
+        return "лет"
+    last = n % 10
+    if last == 1:
+        return "год"
+    if 2 <= last <= 4:
+        return "года"
+    return "лет"
+
+
 def safe(value: Any, default: str = "") -> str:
     if value is None or value == "":
         return default
@@ -104,9 +116,11 @@ def build_card_html(
     if snap.get("region"):
         geo_parts.append(safe(snap["region"]))
     if snap.get("age"):
-        geo_parts.append(f"{safe(snap['age'])} лет")
+        age_n = int(snap["age"])
+        geo_parts.append(f"{age_n} {_plural_years(age_n)}")
     if snap.get("experience_years"):
-        geo_parts.append(f"опыт {safe(snap['experience_years'])} лет")
+        exp_n = int(snap["experience_years"])
+        geo_parts.append(f"опыт {exp_n} {_plural_years(exp_n)}")
     if snap.get("education"):
         geo_parts.append(safe(snap["education"]))
     if geo_parts:
@@ -115,7 +129,8 @@ def build_card_html(
         )
 
     if snap.get("salary"):
-        lines.append(f"<b>ЗП:</b> {safe(snap['salary'])} ₽")
+        salary_fmt = f"{int(snap['salary']):,} ₽".replace(",", " ")
+        lines.append(f"<b>ЗП:</b> {salary_fmt}")
 
     # ── Risks ─────────────────────────────────────────────────────────────────
     if red_flags_raw:
@@ -131,7 +146,7 @@ def build_card_html(
     if comment and verdict and verdict.lower() != "мимо":
         lines.append(f"<i>{safe(comment)}</i>")
 
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip()
 
 
 def build_inline_keyboard(event_id: int, resume_url: str) -> InlineKeyboardMarkup:

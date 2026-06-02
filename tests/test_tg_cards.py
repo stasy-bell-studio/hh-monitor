@@ -7,7 +7,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from hh_monitor.db.models import Event, Resume, Search
-from hh_monitor.tg.cards import build_card_html, build_inline_keyboard, safe
+from hh_monitor.tg.cards import (
+    _plural_years,
+    build_card_html,
+    build_inline_keyboard,
+    safe,
+)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -86,6 +91,62 @@ def test_safe_none_returns_default() -> None:
 
 def test_safe_empty_string_returns_default() -> None:
     assert safe("") == ""
+
+
+# ── Tests: _plural_years() declension ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "n,expected",
+    [
+        (1, "год"),
+        (2, "года"),
+        (3, "года"),
+        (4, "года"),
+        (5, "лет"),
+        (11, "лет"),
+        (12, "лет"),
+        (14, "лет"),
+        (21, "год"),
+        (22, "года"),
+        (34, "года"),
+        (111, "лет"),
+    ],
+)
+def test_plural_years(n: int, expected: str) -> None:
+    assert _plural_years(n) == expected
+
+
+def test_card_age_declension_34_goda() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap(age=34))
+    assert "34 года" in html
+
+
+def test_card_experience_declension_8_let() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap(exp_months=96))
+    assert "опыт 8 лет" in html
+
+
+def test_card_salary_thousands_separator() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap(salary=120000))
+    assert "120 000 ₽" in html
+
+
+def test_card_edge_no_trailing_blank_line() -> None:
+    res = _resume(
+        score_total=None,
+        fit_score=None,
+        llm_score=40,
+        llm_verdict=None,
+        llm_real_role=None,
+        llm_comment=None,
+        llm_red_flags=None,
+    )
+    ev = _event(llm_verdict=None, llm_red_flags=None)
+    html = build_card_html(res, ev, _search(), snapshot_payload=None)
+    assert not html.endswith("\n")
+    assert not html.endswith("\n\n")
+    assert html == html.rstrip()
 
 
 # ── Tests: build_card_html() — anchor line ────────────────────────────────────
@@ -221,7 +282,7 @@ def test_card_geo_line_contains_all_present_parts() -> None:
 
 def test_card_salary_shown_when_rur() -> None:
     html = build_card_html(_resume(), _event(), _search(), _snap(salary=150000))
-    assert "150000" in html
+    assert "150 000" in html
     assert "₽" in html
 
 
