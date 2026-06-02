@@ -402,7 +402,7 @@ async def handle_digest(message: Message) -> None:
         bot_obj: Bot = message.bot  # type: ignore[assignment]
         async with factory() as session:
             await run_weekly_digest(session, bot_obj)
-        await message.reply("Дайджест отправлен")
+        await message.reply("Сводка отправлена")
         return
 
     # quick digest: top-5 candidates in last 24h
@@ -430,7 +430,7 @@ async def handle_digest(message: Message) -> None:
         verdict = res.llm_verdict or ev.llm_verdict or "—"
         url = f"https://hh.ru/resume/{res.hh_resume_id}"
         lines.append(
-            f'{i}. <a href="{url}">{srch.position_name}</a> — score {res.score_total}, {verdict}'
+            f'{i}. <a href="{url}">{srch.position_name}</a> — рейтинг {res.score_total}, {verdict}'
         )
     await message.reply("\n".join(lines))
 
@@ -442,10 +442,10 @@ async def handle_digest(message: Message) -> None:
 async def handle_help(message: Message) -> None:
     text_help = (
         "<b>Команды hh-monitor бота:</b>\n\n"
-        "/threshold — показать текущий порог score\n"
+        "/threshold — показать текущий порог рейтинга\n"
         "/threshold N — установить порог (0–100), только для админов\n"
         "/digest — топ-5 кандидатов за 24ч\n"
-        "/digest force — отправить PDF-дайджест сейчас, только для админов\n"
+        "/digest force — отправить PDF-сводку сейчас, только для админов\n"
         "/help — эта справка"
     )
     await message.reply(text_help)

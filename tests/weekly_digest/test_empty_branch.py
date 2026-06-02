@@ -45,7 +45,7 @@ async def test_empty_digest_sends_text_not_pdf() -> None:
     call_kwargs = mock_bot.send_message.call_args[1]
     text_sent: str = call_kwargs["text"]
     assert "📭" in text_sent
-    assert "Weekly Digest" in text_sent
+    assert "Еженедельная сводка" in text_sent
     # Topic routing: digest goes to DIGEST_TOPIC
     assert "message_thread_id" in call_kwargs
 

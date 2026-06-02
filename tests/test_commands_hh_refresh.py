@@ -65,7 +65,7 @@ async def test_hh_refresh_success() -> None:
     assert "28.05.2026" in text
     assert "27.05.2026" in text
     assert "МСК" in text
-    assert "TTL:" in text
+    assert "Действует ещё:" in text
 
 
 @pytest.mark.asyncio
@@ -115,7 +115,7 @@ async def test_hh_refresh_hh_error() -> None:
 
     msg.answer.assert_awaited_once()
     text: str = msg.answer.call_args[0][0]
-    assert "❌ Refresh failed" in text
+    assert "❌ Не удалось обновить токен hh.ru" in text
     assert "Token refresh failed" in text
 
 
@@ -218,7 +218,7 @@ async def test_hh_refresh_genuine_invalid_grant() -> None:
         await handle_hh_refresh(msg)  # type: ignore[arg-type]
 
     text: str = msg.answer.call_args[0][0]
-    assert "❌ Refresh failed" in text
+    assert "❌ Не удалось обновить токен hh.ru" in text
 
 
 @pytest.mark.asyncio

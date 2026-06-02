@@ -175,7 +175,7 @@ async def test_run_weekly_digest_calls_send_document() -> None:
     call_kwargs = mock_bot.send_document.call_args[1]
     assert "document" in call_kwargs
     assert "caption" in call_kwargs
-    assert "дайджест" in call_kwargs["caption"].lower()
+    assert "сводка" in call_kwargs["caption"].lower()
 
 
 @pytest.mark.asyncio
@@ -272,3 +272,24 @@ async def test_run_weekly_digest_dev_opt_in() -> None:
         await run_weekly_digest(MagicMock(), bot)
 
     bot.send_document.assert_awaited_once()
+
+
+def test_template_title_is_svodka() -> None:
+    """HTML title must say 'Еженедельная сводка', not 'Дайджест'."""
+    html = _render_html(_synthetic_context())
+    assert "Еженедельная сводка hh-monitor" in html
+    assert "Дайджест hh-monitor" not in html
+
+
+def test_template_h1_is_svodka() -> None:
+    """<h1> must say 'Еженедельная сводка hh-monitor', not 'Еженедельный дайджест'."""
+    html = _render_html(_synthetic_context())
+    assert "<h1>Еженедельная сводка hh-monitor</h1>" in html
+    assert "Еженедельный дайджест" not in html
+
+
+def test_template_header_column_is_rating() -> None:
+    """Table header for average score must say 'Средний рейтинг', not 'Средний score'."""
+    html = _render_html(_synthetic_context())
+    assert "Средний рейтинг" in html
+    assert "Средний score" not in html

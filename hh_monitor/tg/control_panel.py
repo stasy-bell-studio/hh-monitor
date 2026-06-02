@@ -109,7 +109,7 @@ def _render_cp_active_card(
     status_label = "Активный" if is_active else "Приостановлен"
     card_text = (
         f"{emoji} <b>{position_name}</b> [{status_label}]\n"
-        f"code={position_code} | total={total} | 7д={week7} | avg={avg_score}"
+        f"код={position_code} | всего={total} | за 7д={week7} | ср.рейтинг={avg_score}"
     )
     return card_text, _cp_search_action_keyboard(search_id, is_active)
 
@@ -336,11 +336,11 @@ async def handle_dm_stats(message: Message) -> None:
         "<b>📊 Статистика hh-monitor</b>\n\n"
         "<b>Кандидатов отправлено:</b>\n"
         f"  24ч: {h24} | 7д: {d7} | 30д: {d30}\n\n"
-        f"<b>Порог score_total:</b> {threshold}\n\n"
+        f"<b>Порог рейтинга:</b> {threshold}\n\n"
         "<b>По позициям (30д):</b>\n"
         f"{pos_lines}\n\n"
         "<b>Парсер за 7д:</b>\n"
-        f"  ✅ ok={p_success} | ❌ fail={p_fail} | 🚫 quota={p_quota}\n\n"
+        f"  ✅ успешно={p_success} | ❌ ошибки={p_fail} | 🚫 лимит={p_quota}\n\n"
         "<b>Топ-5 причин скрининга (30д):</b>\n"
         f"{reason_lines}"
     )
@@ -359,8 +359,8 @@ async def handle_dm_settings(message: Message) -> None:
     admin_ids_str = settings.telegram_admin_user_ids or "не задано"
     settings_text = (
         "<b>⚙️ Настройки hh-monitor</b>\n\n"
-        f"Порог score_total: <b>{threshold}</b>\n"
-        f"Дайджест: <code>{settings.weekly_digest_cron}</code> "
+        f"Порог рейтинга: <b>{threshold}</b>\n"
+        f"Еженедельная сводка: <code>{settings.weekly_digest_cron}</code> "
         f"({settings.weekly_digest_tz})\n"
         f"Админы: <code>{admin_ids_str}</code>"
     )
@@ -476,9 +476,9 @@ async def handle_cp_detail(callback: CallbackQuery) -> None:
         f"Статус: {status_label} | активен {days_active}д\n\n"
         "<b>Кандидаты:</b>\n"
         f"  всего={total} | 7д={cand_d7} | 30д={cand_d30}\n\n"
-        "<b>Распределение score:</b>\n"
+        "<b>Распределение рейтинга:</b>\n"
         f"  60-69: {s60} | 70-79: {s70} | 80-89: {s80} | 90+: {s90}\n\n"
-        "<b>LLM:</b>\n"
+        "<b>Оценка ИИ:</b>\n"
         f"  обогащено={enriched} | ожидает={pending}\n\n"
         "<b>Последний парсер (глобально):</b>\n"
         f"{parser_line}\n\n"

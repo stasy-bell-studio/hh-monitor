@@ -226,8 +226,8 @@ async def test_stats_renders_periods_and_parser_runs() -> None:
     text_out: str = msg.answer.call_args[0][0]
     assert "24ч: 3" in text_out
     assert "7д: 10" in text_out
-    assert "ok=7" in text_out
-    assert "fail=1" in text_out
+    assert "успешно=7" in text_out
+    assert "ошибки=1" in text_out
 
 
 @pytest.mark.asyncio

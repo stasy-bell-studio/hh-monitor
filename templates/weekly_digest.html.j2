@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<title>Дайджест hh-monitor — неделя {{ week_number }}</title>
+<title>Еженедельная сводка hh-monitor — неделя {{ week_number }}</title>
 <style>
   body { font-family: Arial, sans-serif; font-size: 11px; color: #222; margin: 20px; }
   h1 { font-size: 16px; color: #1a3c6e; border-bottom: 2px solid #1a3c6e; padding-bottom: 6px; }
@@ -22,7 +22,7 @@
 </head>
 <body>
 
-<h1>Еженедельный дайджест hh-monitor</h1>
+<h1>Еженедельная сводка hh-monitor</h1>
 <p>Неделя <b>{{ week_number }}</b> · {{ date_from }} — {{ date_to }} · Всего кандидатов: <b>{{ total_candidates }}</b></p>
 
 {% if positions %}
@@ -31,7 +31,7 @@
   <tr>
     <th>Позиция</th>
     <th>Новых</th>
-    <th>Средний score</th>
+    <th>Средний рейтинг</th>
   </tr>
   {% for pos in positions %}
   <tr>

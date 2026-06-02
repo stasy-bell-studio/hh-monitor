@@ -154,7 +154,7 @@ def _render_active_card(
     status_label = "Активный" if is_active else "Приостановлен"
     text = (
         f"{emoji} <b>{position_name}</b> [{status_label}]\n"
-        f"code={position_code} | total={total} | 7d={week7} | avg={avg_score}"
+        f"код={position_code} | всего={total} | за 7д={week7} | ср.рейтинг={avg_score}"
     )
     return text, _search_action_keyboard(search_id, is_active)
 
@@ -169,7 +169,7 @@ def _render_archived_card(
     date_str = archived_at.strftime("%d.%m.%Y")
     text = (
         f"📦 <b>{position_name}</b>\n"
-        f"code={position_code} | archived={date_str} | total={total}"
+        f"код={position_code} | архив={date_str} | всего={total}"
     )
     return text, _archived_card_keyboard(search_id)
 
@@ -404,8 +404,8 @@ async def handle_stats(message: Message) -> None:
         "<b>📊 Статистика hh-monitor</b>\n\n"
         "<b>Уведомлений отправлено:</b>\n"
         f"  24ч: {h24} | 7д: {d7} | 30д: {d30}\n\n"
-        f"<b>Текущий порог score_total:</b> {threshold}\n\n"
-        "<b>Гистограмма score (7д):</b>\n"
+        f"<b>Текущий порог рейтинга:</b> {threshold}\n\n"
+        "<b>Гистограмма рейтинга (7д):</b>\n"
         f"{hist_lines}\n\n"
         "<b>Топ-5 позиций (30д):</b>\n"
         f"{pos_lines}\n\n"
@@ -431,8 +431,8 @@ async def handle_settings(message: Message) -> None:
     admin_ids_str = settings.telegram_admin_user_ids or "не задано"
     settings_text = (
         "<b>⚙️ Настройки hh-monitor</b>\n\n"
-        f"Порог score_total: <b>{threshold}</b>\n"
-        f"Дайджест: <code>{settings.weekly_digest_cron}</code> "
+        f"Порог рейтинга: <b>{threshold}</b>\n"
+        f"Еженедельная сводка: <code>{settings.weekly_digest_cron}</code> "
         f"({settings.weekly_digest_tz})\n"
         f"Админы: <code>{admin_ids_str}</code>"
     )
@@ -516,7 +516,8 @@ async def handle_hh_refresh(message: Message) -> None:
                 return
 
             await message.answer(
-                f"❌ Refresh failed: {exc.message[:300]}\n\n"
+                "❌ Не удалось обновить токен hh.ru — нужна переавторизация.\n\n"
+                f"{exc.message[:300]}\n\n"
                 "refresh_token мог быть отозван. Запусти локально:\n"
                 "<code>poetry run hh-monitor hh auth</code>",
                 reply_markup=_close_keyboard(),
@@ -525,7 +526,7 @@ async def handle_hh_refresh(message: Message) -> None:
         except httpx.HTTPError as exc:
             err = f"{type(exc).__name__}: {exc}"[:200]
             await message.answer(
-                f"❌ Сетевая ошибка при refresh: {err}\n"
+                f"❌ Сетевая ошибка при обновлении токена: {err}\n"
                 "Повтори через минуту.",
                 reply_markup=_close_keyboard(),
             )
@@ -548,7 +549,7 @@ async def handle_hh_refresh(message: Message) -> None:
             "Стало:\n"
             f"  expires_at: {_fmt_msk(updated.expires_at)}\n"
             f"  updated_at: {_fmt_msk(updated.updated_at)}\n\n"
-            f"TTL: {_format_ttl(ttl)}"
+            f"Действует ещё: {_format_ttl(ttl)}"
         )
         await message.answer(reply, reply_markup=_close_keyboard())
 

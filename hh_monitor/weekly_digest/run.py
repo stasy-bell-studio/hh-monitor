@@ -127,7 +127,7 @@ def _empty_digest_text(date_from: datetime, date_to: datetime) -> str:
     d1 = date_from.strftime("%d.%m")
     d2 = date_to.strftime("%d.%m")
     return (
-        f"📭 Weekly Digest {d1}–{d2}\n\n"
+        f"📭 Еженедельная сводка {d1}–{d2}\n\n"
         "За неделю не было одобренных кандидатов (статус ✅ Подходит). "
         "Если что-то по работе — нажми на карточку в этой группе или напиши Лукину."
     )
@@ -164,12 +164,12 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
     )
 
     pdf_bytes = HTML(string=html_content).write_pdf()
-    filename = f"digest_week_{week_num}.pdf"
+    filename = f"svodka_week_{week_num}.pdf"
 
     await bot.send_document(
         chat_id=settings.telegram_hr_group_id,
         document=BufferedInputFile(pdf_bytes, filename=filename),
-        caption=f"Еженедельный дайджест hh-monitor, неделя {week_num}",
+        caption=f"Еженедельная сводка hh-monitor, неделя {week_num}",
         message_thread_id=settings.telegram_digest_topic_id or None,
     )
     logger.info("weekly_digest_sent", week=week_num, filename=filename)

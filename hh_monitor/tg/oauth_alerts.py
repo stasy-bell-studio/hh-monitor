@@ -61,14 +61,14 @@ async def send_oauth_refresh_failed_alert(
         else "неизвестно"
     )
     text = (
-        "❌ HH OAuth refresh FAILED\n\n"
+        "❌ Не удалось обновить токен hh.ru — нужна переавторизация\n\n"
         f"Причина: {error_message}\n"
         f"HTTP: {status_str}\n"
-        f"access_token истекает: {expires_str}\n\n"
+        f"Токен истекает: {expires_str}\n\n"
         "Что делать:\n"
         "1) На Mac: poetry run hh-monitor hh auth\n"
         "2) Скопируй callback URL из браузера\n"
-        "3) Проверь в admin-топике: /hh_refresh (доступно после CC-3)"
+        "3) Проверь в топике управления: /hh_refresh"
     )
     try:
         from hh_monitor.tg.client import make_bot
@@ -119,26 +119,26 @@ async def send_oauth_expiry_warning_alert(
     _ = expires_at_utc  # CC-4 will use; kept in signature for forward-compat
 
     if expires_in_hours <= 0:
-        header = "⚠️ HH OAuth: токен был просрочен (refresh уже выполнен)"
+        header = "⚠️ Токен hh.ru истёк — авторизация обновлена автоматически"
         expiry_line = (
-            f"  access_token уже истёк (просрочен на {abs(expires_in_hours):.1f} ч)"
+            f"  Токен уже истёк (просрочен на {abs(expires_in_hours):.1f} ч)"
         )
     else:
-        header = "⚠️ HH OAuth: токен скоро истечёт"
-        expiry_line = f"  access_token истекает через: {expires_in_hours:.1f} ч"
+        header = "⚠️ Токен hh.ru скоро истечёт — обновите авторизацию"
+        expiry_line = f"  Токен истекает через: {expires_in_hours:.1f} ч"
 
     text = (
         f"{header}\n\n"
-        "До refresh:\n"
+        "До обновления:\n"
         f"{expiry_line}\n"
-        f"  Последний успешный refresh: {last_refresh_age_hours:.1f} ч назад\n\n"
-        "Refresh уже выполнен автоматически.\n\n"
+        f"  Последнее успешное обновление: {last_refresh_age_hours:.1f} ч назад\n\n"
+        "Авторизация обновлена автоматически.\n\n"
         "Возможные причины:\n"
-        "  — фоновое задание refresh не запускалось > 24 ч\n"
-        "  — или ручной refresh в этот момент не выполнялся\n\n"
+        "  — фоновое задание обновления не запускалось > 24 ч\n"
+        "  — или ручное обновление в этот момент не выполнялось\n\n"
         "Что делать:\n"
-        "  — проверь логи приложения (последний hh.oauth.refresh.* event)\n"
-        "  — если фоновое задание не настроено — это нормально до CC-4"
+        "  — проверь логи приложения (события hh.oauth.refresh.*)\n"
+        "  — если фоновое задание не настроено — это нормально"
     )
     try:
         from hh_monitor.tg.client import make_bot
