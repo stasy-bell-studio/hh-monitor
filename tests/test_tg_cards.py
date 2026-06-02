@@ -14,9 +14,9 @@ from hh_monitor.tg.cards import build_card_html, build_inline_keyboard, safe
 
 def _resume(
     hh_resume_id: str = "abc123",
-    score_total: int = 75,
-    fit_score: int = 70,
-    llm_score: int = 80,
+    score_total: int | None = 75,
+    fit_score: int | None = 70,
+    llm_score: int | None = 80,
     llm_verdict: str | None = "подходит",
     llm_real_role: str | None = "Директор филиала",
     llm_comment: str | None = "Хороший опыт",
@@ -88,81 +88,223 @@ def test_safe_empty_string_returns_default() -> None:
     assert safe("") == ""
 
 
-# ── Tests: build_card_html() ──────────────────────────────────────────────────
+# ── Tests: build_card_html() — anchor line ────────────────────────────────────
 
 
-def test_card_html_basic_render() -> None:
+def test_card_anchor_contains_rating() -> None:
+    html = build_card_html(_resume(score_total=75), _event(), _search(), _snap())
+    first_line = html.splitlines()[0]
+    assert "Рейтинг 75/100" in first_line
+
+
+def test_card_anchor_score_none_shows_dash() -> None:
+    html = build_card_html(_resume(score_total=None), _event(), _search(), _snap())
+    first_line = html.splitlines()[0]
+    assert "Рейтинг —/100" in first_line
+
+
+def test_card_anchor_verdict_подходит_emoji() -> None:
+    html = build_card_html(_resume(llm_verdict="подходит"), _event(), _search(), _snap())
+    assert html.splitlines()[0].startswith("🟢")
+
+
+def test_card_anchor_verdict_спорно_emoji() -> None:
+    html = build_card_html(_resume(llm_verdict="спорно"), _event(), _search(), _snap())
+    assert html.splitlines()[0].startswith("🟡")
+
+
+def test_card_anchor_verdict_мимо_emoji() -> None:
+    html = build_card_html(_resume(llm_verdict="мимо"), _event(), _search(), _snap())
+    assert html.splitlines()[0].startswith("🔴")
+
+
+def test_card_anchor_verdict_none_is_red() -> None:
+    res = _resume(llm_verdict=None)
+    ev = _event(llm_verdict=None)
+    html = build_card_html(res, ev, _search(), _snap())
+    assert html.splitlines()[0].startswith("🔴")
+
+
+def test_card_anchor_contains_position_name() -> None:
+    html = build_card_html(_resume(), _event(), _search("Ведущий аналитик"), _snap())
+    assert "Ведущий аналитик" in html.splitlines()[0]
+
+
+# ── Tests: secondary score breakdown line ─────────────────────────────────────
+
+
+def test_card_secondary_line_both_present() -> None:
+    html = build_card_html(_resume(fit_score=70, llm_score=80), _event(), _search(), _snap())
+    assert "соответствие портрету 70 · оценка ИИ 80" in html
+
+
+def test_card_secondary_line_only_fit() -> None:
+    html = build_card_html(_resume(fit_score=70, llm_score=None), _event(), _search(), _snap())
+    assert "соответствие портрету 70" in html
+    assert "·" not in html.splitlines()[1]
+
+
+def test_card_secondary_line_only_llm() -> None:
+    html = build_card_html(_resume(fit_score=None, llm_score=80), _event(), _search(), _snap())
+    assert "оценка ИИ 80" in html
+    assert "·" not in html.splitlines()[1]
+
+
+def test_card_secondary_line_both_none_omitted() -> None:
+    html = build_card_html(_resume(fit_score=None, llm_score=None), _event(), _search(), _snap())
+    assert "соответствие портрету" not in html
+    assert "оценка ИИ" not in html
+
+
+def test_card_secondary_not_in_anchor() -> None:
+    html = build_card_html(_resume(fit_score=70, llm_score=80), _event(), _search(), _snap())
+    assert "соответствие" not in html.splitlines()[0]
+    assert "оценка" not in html.splitlines()[0]
+
+
+# ── Tests: no old English labels ─────────────────────────────────────────────
+
+
+def test_card_no_score_label_line() -> None:
     html = build_card_html(_resume(), _event(), _search(), _snap())
-    assert "Директор филиала" in html
-    assert "75/100" in html
-    assert "подходит" in html
-    assert "Директор филиала" in html  # real_role
-    assert "Минск" in html
+    assert "<b>Score:</b>" not in html
+
+
+def test_card_no_latin_fit_label() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap())
+    # "fit" as standalone label (Latin) must not appear
+    assert "fit " not in html and " fit" not in html.lower().replace("соответствие портрету", "")
+
+
+def test_card_no_latin_llm_label() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap())
+    assert "LLM " not in html
+
+
+def test_card_no_red_flags_label() -> None:
+    res = _resume(llm_red_flags=["частые смены"])
+    html = build_card_html(res, _event(), _search(), _snap())
+    assert "Red flags" not in html
+    assert "Риски" in html
+
+
+# ── Tests: facts block ────────────────────────────────────────────────────────
+
+
+def test_card_verdict_line_present() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap())
+    assert "<b>Вердикт:</b>" in html
+
+
+def test_card_no_должность_label_for_verdict() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap())
+    assert "<b>Должность:</b>" not in html
+
+
+def test_card_education_folded_into_geo_line() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap(education="Высшее"))
+    assert "<b>Образование:</b>" not in html
     assert "Высшее" in html
-    assert "https://hh.ru/resume/abc123" in html
+    # education appears in the combined geo line
+    assert "Регион · возраст · опыт · образование" in html
 
 
-def test_card_html_salary_shown_when_rur() -> None:
+def test_card_geo_line_contains_all_present_parts() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap(
+        region="Минск", age=35, exp_months=96, education="Высшее"
+    ))
+    assert "Минск" in html
+    assert "35 лет" in html
+    assert "опыт 8 лет" in html
+    assert "Высшее" in html
+
+
+def test_card_salary_shown_when_rur() -> None:
     html = build_card_html(_resume(), _event(), _search(), _snap(salary=150000))
     assert "150000" in html
     assert "₽" in html
 
 
-def test_card_html_no_salary_line_when_absent() -> None:
+def test_card_no_salary_line_when_absent() -> None:
     html = build_card_html(_resume(), _event(), _search(), _snap(salary=None))
     assert "₽" not in html
 
 
-def test_card_html_no_snapshot_fields_skipped() -> None:
+def test_card_no_snapshot_fields_skipped() -> None:
     html = build_card_html(_resume(), _event(), _search(), snapshot_payload=None)
     assert "Регион" not in html
     assert "ЗП" not in html
     assert "Образование" not in html
-    # should still have required fields
-    assert "75/100" in html
-    assert "https://hh.ru/resume/abc123" in html
+    assert "Рейтинг 75/100" in html
 
 
-def test_card_html_red_flags_list() -> None:
+# ── Tests: risks block ────────────────────────────────────────────────────────
+
+
+def test_card_risks_list() -> None:
     res = _resume(llm_red_flags=["частые смены", "нет опыта"])
     html = build_card_html(res, _event(), _search(), _snap())
     assert "частые смены" in html
     assert "нет опыта" in html
     assert "⚠️" in html
+    assert "Риски" in html
 
 
-def test_card_html_red_flags_text_from_event() -> None:
+def test_card_risks_from_event() -> None:
     res = _resume(llm_red_flags=None)
     ev = _event(llm_red_flags="нет опыта вождения")
     html = build_card_html(res, ev, _search(), _snap())
     assert "нет опыта вождения" in html
 
 
-def test_card_html_no_red_flags_no_warning() -> None:
+def test_card_no_risks_no_warning() -> None:
     res = _resume(llm_red_flags=None)
     ev = _event(llm_red_flags=None)
     html = build_card_html(res, ev, _search(), _snap())
     assert "⚠️" not in html
 
 
-def test_card_html_escapes_special_chars_in_position() -> None:
-    srch = _search(position_name="Директор <ОП> & CEO")
-    # position_name with injected tags should not break rendering
-    html2 = build_card_html(_resume(), _event(), srch, _snap())
-    assert "&lt;ОП&gt;" in html2
-    assert "&amp;" in html2
+def test_card_risks_appear_after_geo_line() -> None:
+    res = _resume(llm_red_flags=["риск1"])
+    html = build_card_html(res, _event(), _search(), _snap())
+    lines = html.splitlines()
+    geo_idx = next(i for i, ln in enumerate(lines) if "Регион" in ln)
+    risk_idx = next(i for i, ln in enumerate(lines) if "Риски" in ln)
+    assert risk_idx > geo_idx
 
 
-def test_card_html_comment_hidden_when_verdict_mимо() -> None:
+# ── Tests: comment ────────────────────────────────────────────────────────────
+
+
+def test_card_comment_hidden_when_verdict_мимо() -> None:
     res = _resume(llm_verdict="мимо", llm_comment="Не подходит совсем")
     html = build_card_html(res, _event(), _search(), _snap())
     assert "Не подходит совсем" not in html
 
 
-def test_card_html_comment_shown_when_verdict_not_mимо() -> None:
+def test_card_comment_shown_when_verdict_not_мимо() -> None:
     res = _resume(llm_verdict="подходит", llm_comment="Хороший опыт")
     html = build_card_html(res, _event(), _search(), _snap())
     assert "Хороший опыт" in html
+
+
+# ── Tests: no body link ───────────────────────────────────────────────────────
+
+
+def test_card_no_body_link() -> None:
+    html = build_card_html(_resume(), _event(), _search(), _snap())
+    assert "Открыть на hh.ru" not in html
+    assert "<a href=" not in html
+
+
+# ── Tests: HTML safety ────────────────────────────────────────────────────────
+
+
+def test_card_escapes_special_chars_in_position() -> None:
+    srch = _search(position_name="Директор <ОП> & CEO")
+    html = build_card_html(_resume(), _event(), srch, _snap())
+    assert "&lt;ОП&gt;" in html
+    assert "&amp;" in html
 
 
 # ── Tests: build_inline_keyboard() ───────────────────────────────────────────

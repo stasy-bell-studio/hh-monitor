@@ -7,6 +7,18 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from hh_monitor.db.models import Event, Resume, Search
 
+_VERDICT_EMOJI: dict[str, str] = {
+    "подходит": "🟢",
+    "спорно": "🟡",
+    "мимо": "🔴",
+}
+
+
+def _verdict_emoji(v: str | None) -> str:
+    if v is None:
+        return "🔴"
+    return _VERDICT_EMOJI.get(v.lower().strip(), "🔴")
+
 
 def safe(value: Any, default: str = "") -> str:
     if value is None or value == "":
@@ -53,64 +65,71 @@ def build_card_html(
     snapshot_payload: dict[str, Any] | None = None,
 ) -> str:
     snap = _extract_snapshot_fields(snapshot_payload) if snapshot_payload else {}
-    resume_url = f"https://hh.ru/resume/{resume.hh_resume_id}"
 
     verdict = resume.llm_verdict or event.llm_verdict
     real_role = resume.llm_real_role
     red_flags_raw: list[str] | str | None = resume.llm_red_flags or event.llm_red_flags
 
-    lines: list[str] = []
-
-    lines.append(f"<b>Должность:</b> {safe(search.position_name)}")
-
     score_total = resume.score_total
     fit = resume.fit_score
     llm_s = resume.llm_score
-    score_parts = []
-    if fit is not None:
-        score_parts.append(f"fit {fit}")
-    if llm_s is not None:
-        score_parts.append(f"LLM {llm_s}")
-    score_str = f"{score_total}/100"
-    if score_parts:
-        score_str += f" ({', '.join(score_parts)})"
-    lines.append(f"<b>Score:</b> {score_str}")
 
+    lines: list[str] = []
+
+    # ── Line 1: anchor ────────────────────────────────────────────────────────
+    emoji = _verdict_emoji(verdict)
+    score_str = f"Рейтинг {score_total}/100" if score_total is not None else "Рейтинг —/100"
+    lines.append(f"{emoji} <b>Кандидат на «{safe(search.position_name)}»</b> — {score_str}")
+
+    # ── Line 2: secondary score breakdown ─────────────────────────────────────
+    breakdown_parts: list[str] = []
+    if fit is not None:
+        breakdown_parts.append(f"соответствие портрету {fit}")
+    if llm_s is not None:
+        breakdown_parts.append(f"оценка ИИ {llm_s}")
+    if breakdown_parts:
+        lines.append(f"<i>{' · '.join(breakdown_parts)}</i>")
+
+    # blank separator
+    lines.append("")
+
+    # ── Facts block ───────────────────────────────────────────────────────────
     if verdict:
         verdict_line = safe(verdict)
         if real_role:
             verdict_line += f" — {safe(real_role)}"
         lines.append(f"<b>Вердикт:</b> {verdict_line}")
 
-    geo_parts = []
+    geo_parts: list[str] = []
     if snap.get("region"):
         geo_parts.append(safe(snap["region"]))
     if snap.get("age"):
         geo_parts.append(f"{safe(snap['age'])} лет")
     if snap.get("experience_years"):
         geo_parts.append(f"опыт {safe(snap['experience_years'])} лет")
+    if snap.get("education"):
+        geo_parts.append(safe(snap["education"]))
     if geo_parts:
-        lines.append(f"<b>Регион / возраст / опыт:</b> {' / '.join(geo_parts)}")
+        lines.append(
+            f"<b>Регион · возраст · опыт · образование:</b> {' · '.join(geo_parts)}"
+        )
 
     if snap.get("salary"):
         lines.append(f"<b>ЗП:</b> {safe(snap['salary'])} ₽")
 
-    if snap.get("education"):
-        lines.append(f"<b>Образование:</b> {safe(snap['education'])}")
-
+    # ── Risks ─────────────────────────────────────────────────────────────────
     if red_flags_raw:
         if isinstance(red_flags_raw, list):
             flags_text = ", ".join(safe(f) for f in red_flags_raw if f)
         else:
             flags_text = safe(red_flags_raw)
         if flags_text:
-            lines.append(f"⚠️ <b>Red flags:</b> {flags_text}")
+            lines.append(f"⚠️ <b>Риски:</b> {flags_text}")
 
+    # ── Comment (hidden for мимо) ─────────────────────────────────────────────
     comment = resume.llm_comment
     if comment and verdict and verdict.lower() != "мимо":
         lines.append(f"<i>{safe(comment)}</i>")
-
-    lines.append(f'<a href="{html.escape(resume_url)}">Открыть на hh.ru</a>')
 
     return "\n".join(lines)
 
