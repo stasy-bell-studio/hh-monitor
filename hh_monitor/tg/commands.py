@@ -34,6 +34,7 @@ from hh_monitor.db.models import OAuthToken
 from hh_monitor.errors import HHOAuthError
 from hh_monitor.hh.oauth import refresh_access_token
 from hh_monitor.tg.client import get_session_factory, is_admin
+from hh_monitor.tg.search_detail import render_search_detail
 from hh_monitor.tg.sender import get_current_threshold, upsert_app_config
 
 logger = structlog.get_logger(__name__)
@@ -772,7 +773,16 @@ async def handle_detail(callback: CallbackQuery) -> None:
     if not _require_admin_callback(callback):
         await callback.answer("Нет прав", show_alert=True)
         return
-    await callback.answer("Подробная статистика — скоро (Сессия 9+)", show_alert=True)
+    search_id = int((callback.data or "").split(":", 2)[2])
+    factory = get_session_factory()
+    async with factory() as session:
+        detail_text = await render_search_detail(session, search_id)
+    if detail_text is None:
+        await callback.answer("Поиск не найден", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.answer(detail_text)
+    await callback.answer()
 
 
 @admin_router.callback_query(F.data == "adm:threshold")

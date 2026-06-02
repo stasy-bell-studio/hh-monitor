@@ -586,20 +586,105 @@ async def test_cancel_archive_rerenders_card() -> None:
     assert "Директор" in text_out
 
 
-# ── Detail stub ───────────────────────────────────────────────────────────────
+# ── Detail ────────────────────────────────────────────────────────────────────
+
+
+def _make_detail_session() -> AsyncMock:
+    search_row = MagicMock()
+    search_row.position_name = "Андеррайтер"
+    search_row.position_code = "underwriter"
+    search_row.active = True
+    search_row.archived_at = None
+    search_row.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    counts_row = MagicMock()
+    counts_row.total, counts_row.d7, counts_row.d30 = 50, 5, 20
+
+    score_row = MagicMock()
+    score_row.s45, score_row.s60, score_row.s70, score_row.s80, score_row.s90 = 3, 2, 10, 15, 8
+
+    llm_row = MagicMock()
+    llm_row.enriched, llm_row.pending = 40, 5
+
+    parser_row = MagicMock()
+    parser_row.started_at = datetime(2026, 5, 27, 10, 0, tzinfo=UTC)
+    parser_row.status = "ok"
+    parser_row.resumes_seen = 100
+    parser_row.snapshots_inserted = 3
+    parser_row.error = None
+
+    reason_row = MagicMock()
+    reason_row.reason_code = "relevant_exp"
+    reason_row.cnt = 8
+
+    results = []
+    for row, method in [
+        (search_row, "fetchone"),
+        (counts_row, "fetchone"),
+        (score_row, "fetchone"),
+        (llm_row, "fetchone"),
+        (parser_row, "fetchone"),
+        (reason_row, "fetchall"),
+    ]:
+        r = MagicMock()
+        if method == "fetchone":
+            r.fetchone.return_value = row
+        else:
+            r.fetchall.return_value = [row]
+        results.append(r)
+
+    mock_session = AsyncMock(spec=AsyncSession)
+    mock_session.execute = AsyncMock(side_effect=results)
+    return mock_session
 
 
 @pytest.mark.asyncio
-async def test_detail_shows_stub_alert() -> None:
-    cb = _cb("adm:detail:1")
-
-    with patch("hh_monitor.tg.commands.is_admin", return_value=True):
+async def test_detail_non_admin_denied() -> None:
+    cb = _cb("adm:detail:1", user_id=999)
+    with patch("hh_monitor.tg.commands.is_admin", return_value=False):
         await handle_detail(cb)  # type: ignore[arg-type]
-
     cb.answer.assert_called_once()
     args, kwargs = cb.answer.call_args
     assert kwargs.get("show_alert") is True
-    assert "Сессия 9" in args[0]
+    assert "Нет прав" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_detail_renders_and_answers() -> None:
+    cb = _cb("adm:detail:1")
+    mock_session = _make_detail_session()
+    with (
+        patch("hh_monitor.tg.commands.is_admin", return_value=True),
+        patch("hh_monitor.tg.commands.get_session_factory", return_value=_sf(mock_session)),
+    ):
+        await handle_detail(cb)  # type: ignore[arg-type]
+    cb.message.answer.assert_called_once()
+    text_out: str = cb.message.answer.call_args[0][0]
+    assert "Андеррайтер" in text_out
+    assert "underwriter" in text_out
+    assert "50" in text_out
+    assert "relevant_exp" in text_out
+    cb.answer.assert_called_once()
+    _, kwargs = cb.answer.call_args
+    assert not kwargs.get("show_alert")
+
+
+@pytest.mark.asyncio
+async def test_detail_not_found_shows_alert() -> None:
+    cb = _cb("adm:detail:999")
+    not_found_result = MagicMock()
+    not_found_result.fetchone.return_value = None
+    mock_session = AsyncMock(spec=AsyncSession)
+    mock_session.execute = AsyncMock(return_value=not_found_result)
+    with (
+        patch("hh_monitor.tg.commands.is_admin", return_value=True),
+        patch("hh_monitor.tg.commands.get_session_factory", return_value=_sf(mock_session)),
+    ):
+        await handle_detail(cb)  # type: ignore[arg-type]
+    cb.answer.assert_called_once()
+    args, kwargs = cb.answer.call_args
+    assert kwargs.get("show_alert") is True
+    assert "не найден" in args[0]
 
 
 # ── Close callback ────────────────────────────────────────────────────────────

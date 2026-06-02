@@ -343,7 +343,7 @@ def _make_detail_session() -> AsyncMock:
     counts_row.total, counts_row.d7, counts_row.d30 = 50, 5, 20
 
     score_row = MagicMock()
-    score_row.s60, score_row.s70, score_row.s80, score_row.s90 = 2, 10, 15, 8
+    score_row.s45, score_row.s60, score_row.s70, score_row.s80, score_row.s90 = 3, 2, 10, 15, 8
 
     llm_row = MagicMock()
     llm_row.enriched, llm_row.pending = 40, 5
