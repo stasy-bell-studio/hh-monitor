@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import html
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import TypedDict
 
 import structlog
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
-from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from weasyprint import HTML  # type: ignore[import-untyped]
 
 from hh_monitor.config import settings
 from hh_monitor.db.enums import ScreeningStatus
@@ -26,8 +23,6 @@ from hh_monitor.db.models import (
 from hh_monitor.tg.send_guard import send_enabled
 
 logger = structlog.get_logger(__name__)
-
-_TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 
 _REJECTED_STATUSES = {ScreeningStatus.REJECT.value, ScreeningStatus.STOP_LIST.value}
 
@@ -478,35 +473,6 @@ def _empty_digest_text(date_from: datetime, date_to: datetime, stats: _ParserSta
     )
 
 
-def _pdf_positions(data: _DigestData) -> list[dict[str, object]]:
-    """Transitional adapter: build the legacy PDF template context from the new
-    data shape. Removed in the Excel commit when the PDF flow is retired."""
-    by_pos: dict[str, list[_Candidate]] = {}
-    for c in data["candidates_all"]:
-        by_pos.setdefault(c["position_name"], []).append(c)
-    out: list[dict[str, object]] = []
-    for pp in data["per_position"]:
-        cands = by_pos.get(pp["position_name"], [])[:5]
-        out.append(
-            {
-                "position_name": pp["position_name"],
-                "count": pp["count"],
-                "avg_score": pp["avg_score"],
-                "top_candidates": [
-                    {
-                        "score_total": c["score_total"],
-                        "verdict": c["llm_verdict"] or "—",
-                        "real_role": c["llm_real_role"],
-                        "comment": c["conclusion"],
-                        "url": c["url"],
-                    }
-                    for c in cands
-                ],
-            }
-        )
-    return out
-
-
 async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
     if not send_enabled(settings):
         logger.info("tg.send.skipped", reason="send_disabled", env=settings.env)
@@ -536,25 +502,15 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
         message_thread_id=settings.telegram_digest_topic_id or None,
     )
 
-    env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
-    template = env.get_template("weekly_digest.html.j2")
-    html_content = template.render(
-        week_number=week_num,
-        date_from=date_from.strftime("%d.%m.%Y"),
-        date_to=date_to.strftime("%d.%m.%Y"),
-        generated_at=now.strftime("%d.%m.%Y %H:%M UTC"),
-        positions=_pdf_positions(data),
-        total_candidates=data["funnel"]["found"],
-        parser_stats=data["parser_stats"],
-    )
+    from hh_monitor.weekly_digest.excel import build_digest_workbook
 
-    pdf_bytes = HTML(string=html_content).write_pdf()
-    filename = f"svodka_week_{week_num}.pdf"
+    xlsx_bytes = build_digest_workbook(data, weekly_series)
+    filename = f"svodka_week_{week_num}.xlsx"
 
     await bot.send_document(
         chat_id=settings.telegram_hr_group_id,
-        document=BufferedInputFile(pdf_bytes, filename=filename),
-        caption=f"Еженедельная сводка hh-monitor, неделя {week_num}",
+        document=BufferedInputFile(xlsx_bytes, filename=filename),
+        caption="Полная выгрузка: кандидаты, воронка, динамика",
         message_thread_id=settings.telegram_digest_topic_id or None,
     )
     logger.info("weekly_digest_sent", week=week_num, filename=filename)
