@@ -130,6 +130,10 @@
   - Commit: afa8eb6.
   - Event.score_total column + migration 20260529000000 (down_revision=20260527010000).
   - Enrich from own snapshot (curr_snapshot_id); close below-threshold events; send gate on Event.score_total.
-  - Тестов: 691 (+6 новых). **Актуальный baseline — 691.**
   - Deploy: alembic upgrade head ПЕРЕД рестартом сервиса.
-  - Следующая сессия: Сессия 7 — deployment (systemd, .env, server setup); или Сессия 9 — adm:detail подробная статистика.
+
+- F7+F8 closed (2026-06-02): candidate-card redesign + weekly digest.
+  - Commits: eb2c7aa, f92a49a, 5610e2f, d6d2e0a, 79c80ee (+5 ранее: ab9a958, bc3aee7, 1449420, df51bcf, 7cd9bc7).
+  - Candidate card: strengths/weak spots/risks/conclusion, кнопка «Подробный анализ» → full dossier, RU-локализация.
+  - Weekly digest: data layer (воронка/позиции/история/ожидание), HR-сообщение action-first, Excel 4-sheet workbook; parser stats → admin topic.
+  - **Актуальный baseline — 813.**
