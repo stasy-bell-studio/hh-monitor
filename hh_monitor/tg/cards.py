@@ -38,6 +38,31 @@ def safe(value: Any, default: str = "") -> str:
     return html.escape(str(value))
 
 
+def _short(text: str | None, limit: int = 140) -> str:
+    """Collapse whitespace, keep the first sentence, cap at limit chars (HTML-safe)."""
+    if not text:
+        return ""
+    collapsed = " ".join(str(text).split())
+    first_end = len(collapsed)
+    for i, ch in enumerate(collapsed):
+        if ch in ".!?":
+            first_end = i + 1
+            break
+    candidate = collapsed[:first_end]
+    if len(candidate) > limit:
+        candidate = candidate[:limit].rstrip() + "…"
+    return safe(candidate)
+
+
+def _red_flags_text(raw: list[str] | str | None) -> str:
+    """Normalise red flags (JSONB list on Resume, Text on Event) to one string."""
+    if not raw:
+        return ""
+    if isinstance(raw, list):
+        return ", ".join(str(f) for f in raw if f)
+    return str(raw)
+
+
 def _extract_snapshot_fields(payload: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
 
@@ -80,7 +105,6 @@ def build_card_html(
 
     verdict = resume.llm_verdict or event.llm_verdict
     real_role = resume.llm_real_role
-    red_flags_raw: list[str] | str | None = resume.llm_red_flags or event.llm_red_flags
 
     score_total = resume.score_total
     fit = resume.fit_score
@@ -105,12 +129,9 @@ def build_card_html(
     # blank separator
     lines.append("")
 
-    # ── Facts block ───────────────────────────────────────────────────────────
-    if verdict:
-        verdict_line = safe(verdict)
-        if real_role:
-            verdict_line += f" — {safe(real_role)}"
-        lines.append(f"<b>Вердикт:</b> {verdict_line}")
+    # ── Identity block ────────────────────────────────────────────────────────
+    if real_role:
+        lines.append(f"Реальная роль: {safe(real_role)}")
 
     geo_parts: list[str] = []
     if snap.get("region"):
@@ -124,27 +145,31 @@ def build_card_html(
     if snap.get("education"):
         geo_parts.append(safe(snap["education"]))
     if geo_parts:
-        lines.append(
-            f"<b>Регион · возраст · опыт · образование:</b> {' · '.join(geo_parts)}"
-        )
+        lines.append(" · ".join(geo_parts))
 
     if snap.get("salary"):
         salary_fmt = f"{int(snap['salary']):,} ₽".replace(",", " ")
-        lines.append(f"<b>ЗП:</b> {salary_fmt}")
+        lines.append(f"ЗП: {salary_fmt}")
 
-    # ── Risks ─────────────────────────────────────────────────────────────────
-    if red_flags_raw:
-        if isinstance(red_flags_raw, list):
-            flags_text = ", ".join(safe(f) for f in red_flags_raw if f)
-        else:
-            flags_text = safe(red_flags_raw)
-        if flags_text:
-            lines.append(f"⚠️ <b>Риски:</b> {flags_text}")
+    # ── Dossier: strengths / weak spots / risks / conclusion ──────────────────
+    red_text = _red_flags_text(resume.llm_red_flags or event.llm_red_flags)
+    dossier: list[str] = []
+    if event.llm_facts_confirmed:
+        dossier.append(f"✅ Сильные стороны: {_short(event.llm_facts_confirmed)}")
+    if event.llm_weak_spots:
+        dossier.append(f"⚠️ Слабые места: {_short(event.llm_weak_spots)}")
+    if red_text:
+        dossier.append(f"🚩 Риски: {_short(red_text)}")
+    if event.llm_verdict_text:
+        dossier.append(f"Вывод: {_short(event.llm_verdict_text)}")
 
-    # ── Comment (hidden for мимо) ─────────────────────────────────────────────
-    comment = resume.llm_comment
-    if comment and verdict and verdict.lower() != "мимо":
-        lines.append(f"<i>{safe(comment)}</i>")
+    if not dossier and resume.llm_comment:
+        dossier.append(f"Вывод: {_short(resume.llm_comment)}")
+
+    if dossier:
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.extend(dossier)
 
     return "\n".join(lines).rstrip()
 

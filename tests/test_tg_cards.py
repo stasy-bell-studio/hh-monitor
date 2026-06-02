@@ -43,11 +43,19 @@ def _event(
     id_: int = 1,
     llm_verdict: str | None = None,
     llm_red_flags: str | None = None,
+    llm_facts_confirmed: str | None = None,
+    llm_weak_spots: str | None = None,
+    llm_verdict_text: str | None = None,
+    llm_interview_questions: list[str] | None = None,
 ) -> Event:
     e = MagicMock(spec=Event)
     e.id = id_
     e.llm_verdict = llm_verdict
     e.llm_red_flags = llm_red_flags
+    e.llm_facts_confirmed = llm_facts_confirmed
+    e.llm_weak_spots = llm_weak_spots
+    e.llm_verdict_text = llm_verdict_text
+    e.llm_interview_questions = llm_interview_questions
     return e
 
 
@@ -252,22 +260,30 @@ def test_card_no_red_flags_label() -> None:
 # ── Tests: facts block ────────────────────────────────────────────────────────
 
 
-def test_card_verdict_line_present() -> None:
-    html = build_card_html(_resume(), _event(), _search(), _snap())
-    assert "<b>Вердикт:</b>" in html
-
-
 def test_card_no_должность_label_for_verdict() -> None:
     html = build_card_html(_resume(), _event(), _search(), _snap())
     assert "<b>Должность:</b>" not in html
+
+
+def test_card_no_verdict_label_line() -> None:
+    # Verdict is encoded by the anchor emoji; no "Вердикт:" label line anymore.
+    html = build_card_html(_resume(), _event(), _search(), _snap())
+    assert "<b>Вердикт:</b>" not in html
+
+
+def test_card_real_role_line_present() -> None:
+    html = build_card_html(
+        _resume(llm_real_role="Директор филиала"), _event(), _search(), _snap()
+    )
+    assert "Реальная роль: Директор филиала" in html
 
 
 def test_card_education_folded_into_geo_line() -> None:
     html = build_card_html(_resume(), _event(), _search(), _snap(education="Высшее"))
     assert "<b>Образование:</b>" not in html
     assert "Высшее" in html
-    # education appears in the combined geo line
-    assert "Регион · возраст · опыт · образование" in html
+    # education appears in the combined bare geo line (no long label anymore)
+    assert "Регион · возраст · опыт · образование" not in html
 
 
 def test_card_geo_line_contains_all_present_parts() -> None:
@@ -307,7 +323,7 @@ def test_card_risks_list() -> None:
     html = build_card_html(res, _event(), _search(), _snap())
     assert "частые смены" in html
     assert "нет опыта" in html
-    assert "⚠️" in html
+    assert "🚩" in html
     assert "Риски" in html
 
 
@@ -318,18 +334,18 @@ def test_card_risks_from_event() -> None:
     assert "нет опыта вождения" in html
 
 
-def test_card_no_risks_no_warning() -> None:
+def test_card_no_risks_no_flag_emoji() -> None:
     res = _resume(llm_red_flags=None)
     ev = _event(llm_red_flags=None)
     html = build_card_html(res, ev, _search(), _snap())
-    assert "⚠️" not in html
+    assert "🚩" not in html
 
 
 def test_card_risks_appear_after_geo_line() -> None:
     res = _resume(llm_red_flags=["риск1"])
     html = build_card_html(res, _event(), _search(), _snap())
     lines = html.splitlines()
-    geo_idx = next(i for i, ln in enumerate(lines) if "Регион" in ln)
+    geo_idx = next(i for i, ln in enumerate(lines) if "Минск" in ln)
     risk_idx = next(i for i, ln in enumerate(lines) if "Риски" in ln)
     assert risk_idx > geo_idx
 
@@ -337,16 +353,66 @@ def test_card_risks_appear_after_geo_line() -> None:
 # ── Tests: comment ────────────────────────────────────────────────────────────
 
 
-def test_card_comment_hidden_when_verdict_мимо() -> None:
-    res = _resume(llm_verdict="мимо", llm_comment="Не подходит совсем")
-    html = build_card_html(res, _event(), _search(), _snap())
-    assert "Не подходит совсем" not in html
+def test_card_conclusion_visible_when_verdict_мимо() -> None:
+    # Reason is now always shown via "Вывод:" — no hide-on-мимо rule.
+    res = _resume(llm_verdict="мимо", llm_comment=None)
+    ev = _event(llm_verdict_text="Не подходит совсем", llm_red_flags="нет лицензии")
+    html = build_card_html(res, ev, _search(), _snap())
+    assert "🚩 Риски: нет лицензии" in html
+    assert "Вывод: Не подходит совсем" in html
 
 
 def test_card_comment_shown_when_verdict_not_мимо() -> None:
     res = _resume(llm_verdict="подходит", llm_comment="Хороший опыт")
     html = build_card_html(res, _event(), _search(), _snap())
     assert "Хороший опыт" in html
+
+
+# ── Tests: dossier block (strengths / weak spots / risks / conclusion) ────────
+
+
+def test_card_dossier_full_card_shows_four_blocks() -> None:
+    res = _resume(llm_verdict="подходит", llm_red_flags=None)
+    ev = _event(
+        llm_facts_confirmed="10 лет в рознице, рост выручки 30%.",
+        llm_weak_spots="Нет опыта в логистике.",
+        llm_red_flags="Частые смены работодателей.",
+        llm_verdict_text="Сильный кандидат, рекомендуем на собеседование.",
+    )
+    html = build_card_html(res, ev, _search(), _snap())
+    assert "✅ Сильные стороны: 10 лет в рознице, рост выручки 30%." in html
+    assert "⚠️ Слабые места: Нет опыта в логистике." in html
+    assert "🚩 Риски: Частые смены работодателей." in html
+    assert "Вывод: Сильный кандидат, рекомендуем на собеседование." in html
+
+
+def test_card_dossier_omits_empty_blocks() -> None:
+    res = _resume(llm_verdict="подходит", llm_comment=None, llm_red_flags=None)
+    ev = _event(llm_facts_confirmed="Есть управленческий опыт.")
+    html = build_card_html(res, ev, _search(), _snap())
+    assert "✅ Сильные стороны: Есть управленческий опыт." in html
+    assert "Слабые места" not in html
+    assert "🚩 Риски" not in html
+    assert "Вывод:" not in html
+
+
+def test_card_dossier_long_facts_truncated() -> None:
+    long_facts = "слово " * 60  # ~360 chars, no sentence break
+    res = _resume(llm_verdict="подходит", llm_red_flags=None)
+    ev = _event(llm_facts_confirmed=long_facts)
+    html = build_card_html(res, ev, _search(), _snap())
+    assert "…" in html
+    facts_line = next(ln for ln in html.splitlines() if "Сильные стороны" in ln)
+    assert len(facts_line) < len("✅ Сильные стороны: ") + 160
+
+
+def test_card_dossier_legacy_event_falls_back_to_comment() -> None:
+    # Pre-9.3 event: no dossier fields → fall back to resume.llm_comment as Вывод.
+    res = _resume(llm_verdict="подходит", llm_comment="Старый комментарий", llm_red_flags=None)
+    ev = _event()  # all dossier fields None
+    html = build_card_html(res, ev, _search(), _snap())
+    assert "Вывод: Старый комментарий" in html
+    assert "Сильные стороны" not in html
 
 
 # ── Tests: no body link ───────────────────────────────────────────────────────
