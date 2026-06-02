@@ -11,8 +11,18 @@ from hh_monitor.weekly_digest.run import run_weekly_digest
 
 def _make_data(total_candidates: int) -> dict[str, object]:
     return {
-        "positions": [],
-        "total_candidates": total_candidates,
+        "funnel": {
+            "found": total_candidates,
+            "sent": 0,
+            "approved": 0,
+            "rejected": 0,
+            "doubt": 0,
+            "pending": 0,
+        },
+        "per_position": [],
+        "candidates_all": [],
+        "top": [],
+        "pending": [],
         "parser_stats": {"runs": 0, "snapshots_inserted": 0, "dedup_rate": 0, "errors": 0},
     }
 

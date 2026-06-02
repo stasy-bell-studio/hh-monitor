@@ -69,6 +69,25 @@ def _render_html(context: dict[str, object]) -> str:
     return template.render(**context)
 
 
+def _run_data(found: int = 3) -> dict[str, object]:
+    """Minimal new-shape _collect_data return for run_weekly_digest integration tests."""
+    return {
+        "funnel": {
+            "found": found,
+            "sent": 0,
+            "approved": 0,
+            "rejected": 0,
+            "doubt": 0,
+            "pending": 0,
+        },
+        "per_position": [],
+        "candidates_all": [],
+        "top": [],
+        "pending": [],
+        "parser_stats": {"runs": 0, "snapshots_inserted": 0, "dedup_rate": 0, "errors": 0},
+    }
+
+
 # ── Tests: template rendering ─────────────────────────────────────────────────
 
 
@@ -151,18 +170,12 @@ async def test_run_weekly_digest_calls_send_document() -> None:
     mock_bot = AsyncMock()
     mock_bot.send_document = AsyncMock()
 
-    synthetic_data = {
-        "positions": _synthetic_context()["positions"],
-        "total_candidates": 3,
-        "parser_stats": _synthetic_context()["parser_stats"],
-    }
-
     with (
         patch("hh_monitor.weekly_digest.run.settings") as ms,
         patch(
             "hh_monitor.weekly_digest.run._collect_data",
             new_callable=AsyncMock,
-            return_value=synthetic_data,
+            return_value=_run_data(3),
         ),
     ):
         ms.env = "production"
@@ -189,23 +202,12 @@ async def test_run_weekly_digest_pdf_content() -> None:
     mock_bot = AsyncMock()
     mock_bot.send_document = AsyncMock()
 
-    synthetic_data = {
-        "positions": [],
-        "total_candidates": 1,  # non-zero → PDF branch (not empty branch)
-        "parser_stats": {
-            "runs": 0,
-            "snapshots_inserted": 0,
-            "dedup_rate": 0,
-            "errors": 0,
-        },
-    }
-
     with (
         patch("hh_monitor.weekly_digest.run.settings") as ms,
         patch(
             "hh_monitor.weekly_digest.run._collect_data",
             new_callable=AsyncMock,
-            return_value=synthetic_data,
+            return_value=_run_data(1),
         ),
     ):
         ms.env = "production"
@@ -251,18 +253,12 @@ async def test_run_weekly_digest_dev_opt_in() -> None:
     bot = AsyncMock()
     bot.send_document = AsyncMock()
 
-    synthetic_data = {
-        "positions": _synthetic_context()["positions"],
-        "total_candidates": 3,
-        "parser_stats": _synthetic_context()["parser_stats"],
-    }
-
     with (
         patch("hh_monitor.weekly_digest.run.settings") as ms,
         patch(
             "hh_monitor.weekly_digest.run._collect_data",
             new_callable=AsyncMock,
-            return_value=synthetic_data,
+            return_value=_run_data(3),
         ),
     ):
         ms.env = "local"
