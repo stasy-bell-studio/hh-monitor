@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TypedDict
@@ -134,6 +135,7 @@ class _ParserStats(TypedDict):
     snapshots_inserted: int
     dedup_rate: int
     errors: int
+    resumes_viewed: int
 
 
 class _DigestData(TypedDict):
@@ -302,6 +304,7 @@ async def _collect_parser_stats(
         snapshots_inserted=inserted,
         dedup_rate=dedup,
         errors=errors,
+        resumes_viewed=sum(r.resumes_viewed for r in runs),
     )
 
 
@@ -343,13 +346,135 @@ async def _collect_weekly_series(session: AsyncSession, weeks: int = 4) -> list[
     return out
 
 
-def _empty_digest_text(date_from: datetime, date_to: datetime) -> str:
+def _esc(value: str) -> str:
+    return html.escape(value)
+
+
+def _delta(curr: int, prev: int | None) -> str:
+    if prev is None:
+        return "—"
+    d = curr - prev
+    if d > 0:
+        return f"↑{d}"
+    if d < 0:
+        return f"↓{abs(d)}"
+    return "="
+
+
+def _conversion(approved: int, sent: int) -> str:
+    return f"{round(approved / sent * 100)}%" if sent else "—"
+
+
+def _trunc(s: str, n: int) -> str:
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _one_line(text: str, limit: int = 90) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) > limit:
+        collapsed = collapsed[:limit].rstrip() + "…"
+    return collapsed
+
+
+def _name_role(position: str, real_role: str) -> str:
+    if real_role:
+        return f"{_esc(position)} — {_esc(real_role)}"
+    return _esc(position)
+
+
+def _pending_block(pending: list[_Candidate]) -> str:
+    if not pending:
+        return "✅ Все разобраны"
+    max_age = max((c["age_days"] or 0) for c in pending)
+    marked = False
+    lines: list[str] = []
+    for c in pending:
+        prefix = ""
+        if not marked and max_age >= 3 and (c["age_days"] or 0) == max_age:
+            prefix = "⚠️ "
+            marked = True
+        age = c["age_days"] if c["age_days"] is not None else 0
+        lines.append(
+            f"{prefix}{_verdict_emoji(c['llm_verdict'])} {c['score_total']} · "
+            f"{_name_role(c['position_name'], c['llm_real_role'])} · "
+            f"висит {age} дн · <a href=\"{c['url']}\">hh.ru</a>"
+        )
+    return "\n".join(lines)
+
+
+def _positions_table(per_position: list[_PerPosition]) -> str:
+    header = f"{'Позиция':<16} {'Найд':>4} {'Подх':>4} {'Спор':>4} {'Мимо':>4} {'Ср':>4}"
+    rows = [header]
+    for pp in per_position:
+        name = f"{_trunc(pp['position_name'], 16):<16}"
+        rows.append(
+            f"{name} {pp['count']:>4} {pp['n_fit']:>4} {pp['n_doubt']:>4} "
+            f"{pp['n_miss']:>4} {pp['avg_score']:>4}"
+        )
+    return _esc("\n".join(rows))
+
+
+def _top_block(top: list[_Candidate]) -> str:
+    lines: list[str] = []
+    for c in top[:5]:
+        head = (
+            f"{_verdict_emoji(c['llm_verdict'])} {c['score_total']} · "
+            f"{_name_role(c['position_name'], c['llm_real_role'])}"
+        )
+        concl = _one_line(c["conclusion"])
+        sub = f"   <i>{_esc(concl)}</i> · <a href=\"{c['url']}\">hh.ru</a>" if concl else (
+            f"   <a href=\"{c['url']}\">hh.ru</a>"
+        )
+        lines.append(f"{head}\n{sub}")
+    return "\n".join(lines)
+
+
+def _build_hr_message(
+    data: _DigestData,
+    weekly_series: list[_WeekPoint],
+    week_num: int,
+    date_from: datetime,
+    date_to: datetime,
+) -> str:
+    f = data["funnel"]
+    prev = weekly_series[-2] if len(weekly_series) >= 2 else None
+    d1, d2 = date_from.strftime("%d.%m"), date_to.strftime("%d.%m")
+
+    parts: list[str] = [
+        f"📊 <b>Еженедельная сводка · неделя {week_num}</b> · {d1}–{d2}",
+        "",
+        f"🔎 Найдено: {f['found']} {_delta(f['found'], prev['found'] if prev else None)}",
+        (
+            f"📩 Отправлено: {f['sent']} {_delta(f['sent'], prev['sent'] if prev else None)} · "
+            f"✅ Одобрено: {f['approved']} "
+            f"{_delta(f['approved'], prev['approved'] if prev else None)} · "
+            f"❌ Отклонено: {f['rejected']} · 🤔 Спорно: {f['doubt']} · ⏳ Ждут: {f['pending']}"
+        ),
+        f"📈 Конверсия отправлено→одобрено: {_conversion(f['approved'], f['sent'])}",
+        "",
+        f"⏳ <b>Требуют решения ({f['pending']}):</b>",
+        _pending_block(data["pending"]),
+        "",
+        "📋 <b>По позициям:</b>",
+        f"<pre>{_positions_table(data['per_position'])}</pre>",
+    ]
+
+    top = _top_block(data["top"])
+    if top:
+        parts += ["", "🏆 <b>Топ недели:</b>", top]
+
+    parts += ["", "📎 Полный список, воронка и динамика — в Excel ниже"]
+    return "\n".join(parts)
+
+
+def _empty_digest_text(date_from: datetime, date_to: datetime, stats: _ParserStats) -> str:
     d1 = date_from.strftime("%d.%m")
     d2 = date_to.strftime("%d.%m")
     return (
-        f"📭 Еженедельная сводка {d1}–{d2}\n\n"
-        "За неделю не было одобренных кандидатов (статус ✅ Подходит). "
-        "Если что-то по работе — нажми на карточку в этой группе или напиши Лукину."
+        f"📭 <b>Еженедельная сводка</b> {d1}–{d2}\n"
+        "Кандидатов выше порога не было.\n"
+        f"Парсер отработал {stats['runs']} прогонов, "
+        f"{stats['resumes_viewed']} резюме просмотрено — система работает."
     )
 
 
@@ -396,11 +521,20 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
     if data["funnel"]["found"] == 0:
         await bot.send_message(
             chat_id=settings.telegram_hr_group_id,
-            text=_empty_digest_text(date_from, date_to),
+            text=_empty_digest_text(date_from, date_to, data["parser_stats"]),
+            parse_mode="HTML",
             message_thread_id=settings.telegram_digest_topic_id or None,
         )
         logger.info("weekly_digest_empty", week=week_num)
         return
+
+    weekly_series = await _collect_weekly_series(session)
+    await bot.send_message(
+        chat_id=settings.telegram_hr_group_id,
+        text=_build_hr_message(data, weekly_series, week_num, date_from, date_to),
+        parse_mode="HTML",
+        message_thread_id=settings.telegram_digest_topic_id or None,
+    )
 
     env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
     template = env.get_template("weekly_digest.html.j2")

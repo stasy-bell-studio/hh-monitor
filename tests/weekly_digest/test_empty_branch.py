@@ -23,7 +23,13 @@ def _make_data(total_candidates: int) -> dict[str, object]:
         "candidates_all": [],
         "top": [],
         "pending": [],
-        "parser_stats": {"runs": 0, "snapshots_inserted": 0, "dedup_rate": 0, "errors": 0},
+        "parser_stats": {
+            "runs": 0,
+            "snapshots_inserted": 0,
+            "dedup_rate": 0,
+            "errors": 0,
+            "resumes_viewed": 0,
+        },
     }
 
 
@@ -61,8 +67,8 @@ async def test_empty_digest_sends_text_not_pdf() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_empty_digest_sends_pdf_not_text() -> None:
-    """1+ candidates → send_document called, send_message NOT called."""
+async def test_non_empty_digest_sends_message_and_document() -> None:
+    """1+ candidates → HR message + Excel/PDF document both sent to digest topic."""
     mock_session = MagicMock()
     mock_bot = AsyncMock()
     mock_bot.send_message = AsyncMock()
@@ -75,6 +81,11 @@ async def test_non_empty_digest_sends_pdf_not_text() -> None:
             new_callable=AsyncMock,
             return_value=_make_data(3),
         ),
+        patch(
+            "hh_monitor.weekly_digest.run._collect_weekly_series",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
     ):
         ms.env = "production"
         ms.telegram_send_enabled = None
@@ -82,7 +93,8 @@ async def test_non_empty_digest_sends_pdf_not_text() -> None:
         ms.telegram_digest_topic_id = 0
         await run_weekly_digest(mock_session, mock_bot)
 
+    mock_bot.send_message.assert_called_once()
     mock_bot.send_document.assert_called_once()
-    mock_bot.send_message.assert_not_called()
-    # Topic routing: digest goes to DIGEST_TOPIC
+    # Topic routing: both go to DIGEST_TOPIC
+    assert "message_thread_id" in mock_bot.send_message.call_args[1]
     assert "message_thread_id" in mock_bot.send_document.call_args[1]

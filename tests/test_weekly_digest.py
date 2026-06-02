@@ -84,7 +84,13 @@ def _run_data(found: int = 3) -> dict[str, object]:
         "candidates_all": [],
         "top": [],
         "pending": [],
-        "parser_stats": {"runs": 0, "snapshots_inserted": 0, "dedup_rate": 0, "errors": 0},
+        "parser_stats": {
+            "runs": 0,
+            "snapshots_inserted": 0,
+            "dedup_rate": 0,
+            "errors": 0,
+            "resumes_viewed": 0,
+        },
     }
 
 
@@ -177,6 +183,11 @@ async def test_run_weekly_digest_calls_send_document() -> None:
             new_callable=AsyncMock,
             return_value=_run_data(3),
         ),
+        patch(
+            "hh_monitor.weekly_digest.run._collect_weekly_series",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
     ):
         ms.env = "production"
         ms.telegram_send_enabled = None
@@ -208,6 +219,11 @@ async def test_run_weekly_digest_pdf_content() -> None:
             "hh_monitor.weekly_digest.run._collect_data",
             new_callable=AsyncMock,
             return_value=_run_data(1),
+        ),
+        patch(
+            "hh_monitor.weekly_digest.run._collect_weekly_series",
+            new_callable=AsyncMock,
+            return_value=[],
         ),
     ):
         ms.env = "production"
@@ -259,6 +275,11 @@ async def test_run_weekly_digest_dev_opt_in() -> None:
             "hh_monitor.weekly_digest.run._collect_data",
             new_callable=AsyncMock,
             return_value=_run_data(3),
+        ),
+        patch(
+            "hh_monitor.weekly_digest.run._collect_weekly_series",
+            new_callable=AsyncMock,
+            return_value=[],
         ),
     ):
         ms.env = "local"
