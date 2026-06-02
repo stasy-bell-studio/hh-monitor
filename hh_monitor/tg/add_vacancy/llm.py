@@ -186,7 +186,7 @@ _GAP_FIELDS: tuple[tuple[str, str], ...] = (
     ("position_description", "Описание позиции"),
     ("evaluation_focus", "Критерии оценки"),
     ("position_synonyms", "Синонимы роли (для поиска)"),
-    ("must_have_keywords", "Обязательные требования (must-have)"),
+    ("must_have_keywords", "Обязательные требования"),
     ("nice_to_have_keywords", "Желательные требования"),
     ("stop_words", "Стоп-слова"),
     ("forbidden_industries", "Запретные индустрии"),
