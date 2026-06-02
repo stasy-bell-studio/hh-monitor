@@ -63,9 +63,7 @@ async def _run_initial_scan(search_code: str, admin_user_id: int) -> None:
         async with factory() as session:
             row = (
                 await session.execute(
-                    select(Search.id, Search.position_name).where(
-                        Search.search_code == search_code
-                    )
+                    select(Search.id, Search.position_name).where(Search.search_code == search_code)
                 )
             ).one_or_none()
             if row is not None:
@@ -83,8 +81,7 @@ async def _run_initial_scan(search_code: str, admin_user_id: int) -> None:
     except Exception as exc:
         log.exception("add_vacancy.initial_scan_failed")
         await _notify_admin(
-            f"⚠️ Первичный скан вакансии «{name}» упал: "
-            f"{type(exc).__name__}. Подробности в логах."
+            f"⚠️ Первичный скан вакансии «{name}» упал: {type(exc).__name__}. Подробности в логах."
         )
         return
 

@@ -26,9 +26,7 @@ def test_parse_prompt_forbidden_block_does_not_mention_new_fields() -> None:
     start = _PARSE_PROMPT.index(marker)
     # Slice to the next blank line (or end of string)
     end_offset = _PARSE_PROMPT.find("\n\n", start)
-    forbidden_block = (
-        _PARSE_PROMPT[start:end_offset] if end_offset != -1 else _PARSE_PROMPT[start:]
-    )
+    forbidden_block = _PARSE_PROMPT[start:end_offset] if end_offset != -1 else _PARSE_PROMPT[start:]
     for field in _NEW_FIELDS:
         assert field not in forbidden_block, (
             f"'{field}' must NOT appear in the forbidden-keys sentence"

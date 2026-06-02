@@ -690,11 +690,7 @@ def pipeline_run_all(
     """
     from hh_monitor.pipeline.run_all import run_all
 
-    codes = (
-        [c.strip() for c in search_codes.split(",") if c.strip()]
-        if search_codes
-        else None
-    )
+    codes = [c.strip() for c in search_codes.split(",") if c.strip()] if search_codes else None
     result = asyncio.run(
         run_all(
             async_session_factory,
@@ -1214,11 +1210,7 @@ def llm_run_all(
     """
     from hh_monitor.llm_enrich.run_all import run_all
 
-    codes = (
-        [c.strip() for c in search_codes.split(",") if c.strip()]
-        if search_codes
-        else None
-    )
+    codes = [c.strip() for c in search_codes.split(",") if c.strip()] if search_codes else None
     result = asyncio.run(
         run_all(
             async_session_factory,

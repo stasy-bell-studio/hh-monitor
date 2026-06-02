@@ -319,9 +319,9 @@ async def test_stats_renders_periods_and_histogram() -> None:
     # Execute returns different results per call
     call_results = [
         MagicMock(**{"fetchone.return_value": periods_row}),  # periods
-        MagicMock(**{"fetchall.return_value": [pos_row]}),    # top positions
+        MagicMock(**{"fetchall.return_value": [pos_row]}),  # top positions
         MagicMock(**{"fetchall.return_value": histogram_rows}),  # histogram
-        MagicMock(**{"fetchall.return_value": [reason_row]}),   # reasons
+        MagicMock(**{"fetchall.return_value": [reason_row]}),  # reasons
     ]
 
     # get_current_threshold is called via sender.get_current_threshold
@@ -649,9 +649,7 @@ async def test_threshold_reply_valid_updates_config() -> None:
     with (
         patch("hh_monitor.tg.commands.get_session_factory", return_value=_sf(mock_session)),
         patch("hh_monitor.tg.commands.get_current_threshold", return_value=60),
-        patch(
-            "hh_monitor.tg.commands.upsert_app_config", new_callable=AsyncMock
-        ) as mock_upsert,
+        patch("hh_monitor.tg.commands.upsert_app_config", new_callable=AsyncMock) as mock_upsert,
     ):
         await handle_threshold_reply(msg)  # type: ignore[arg-type]
 
@@ -758,18 +756,20 @@ async def test_admin_router_wins_help_in_admin_topic() -> None:
     bot = AsyncMock()
     bot.id = 42
 
-    update = Update.model_validate({
-        "update_id": 1,
-        "message": {
-            "message_id": 1,
-            "from": {"id": 100, "is_bot": False, "first_name": "Admin"},
-            "chat": {"id": -1001, "type": "supergroup", "title": "HR"},
-            "message_thread_id": _ADMIN_TOPIC_ID,
-            "date": 1234567890,
-            "text": "/help",
-            "entities": [{"type": "bot_command", "offset": 0, "length": 5}],
-        },
-    })
+    update = Update.model_validate(
+        {
+            "update_id": 1,
+            "message": {
+                "message_id": 1,
+                "from": {"id": 100, "is_bot": False, "first_name": "Admin"},
+                "chat": {"id": -1001, "type": "supergroup", "title": "HR"},
+                "message_thread_id": _ADMIN_TOPIC_ID,
+                "date": 1234567890,
+                "text": "/help",
+                "entities": [{"type": "bot_command", "offset": 0, "length": 5}],
+            },
+        }
+    )
 
     with (
         patch("hh_monitor.tg.commands.settings") as ms,

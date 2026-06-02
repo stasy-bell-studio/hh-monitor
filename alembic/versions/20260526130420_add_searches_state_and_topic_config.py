@@ -20,9 +20,7 @@ depends_on = None
 def upgrade() -> None:
     op.execute("ALTER TABLE searches ADD COLUMN archived_at TIMESTAMPTZ")
     op.execute("ALTER TABLE searches ADD COLUMN created_by_tg_user_id BIGINT")
-    op.execute(
-        "CREATE INDEX ix_searches_active_archived ON searches (active, archived_at)"
-    )
+    op.execute("CREATE INDEX ix_searches_active_archived ON searches (active, archived_at)")
 
 
 def downgrade() -> None:

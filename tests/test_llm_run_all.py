@@ -234,9 +234,7 @@ async def test_llm_run_all_search_codes_missing(db_session: AsyncSession) -> Non
         new_callable=AsyncMock,
     ) as mock_run:
         mock_run.return_value = _ok_summary()
-        result = await run_all(
-            factory, search_codes=["sc_exists", "sc_ghost"]
-        )
+        result = await run_all(factory, search_codes=["sc_exists", "sc_ghost"])
 
     assert "sc_ghost" in result["skipped_codes"]
     assert result["failed"] == 0

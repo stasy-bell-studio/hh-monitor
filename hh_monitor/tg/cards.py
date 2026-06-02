@@ -229,9 +229,7 @@ def build_detail_html(resume: Resume, event: Event, search: Search) -> str:
     sections: list[str] = []
 
     if event.llm_facts_confirmed:
-        sections.append(
-            f"✅ <b>Подтверждённые факты:</b>\n{safe(event.llm_facts_confirmed)}"
-        )
+        sections.append(f"✅ <b>Подтверждённые факты:</b>\n{safe(event.llm_facts_confirmed)}")
     if event.llm_weak_spots:
         sections.append(f"⚠️ <b>Слабые места:</b>\n{safe(event.llm_weak_spots)}")
 
@@ -241,9 +239,7 @@ def build_detail_html(resume: Resume, event: Event, search: Search) -> str:
 
     questions = event.llm_interview_questions
     if questions:
-        numbered = "\n".join(
-            f"{i}. {safe(q)}" for i, q in enumerate(questions, start=1) if q
-        )
+        numbered = "\n".join(f"{i}. {safe(q)}" for i, q in enumerate(questions, start=1) if q)
         if numbered:
             sections.append(f"❓ <b>Вопросы на интервью:</b>\n{numbered}")
 
@@ -251,10 +247,7 @@ def build_detail_html(resume: Resume, event: Event, search: Search) -> str:
         sections.append(f"🧭 <b>Вердикт:</b>\n{safe(event.llm_verdict_text)}")
 
     if not sections:
-        return (
-            f"{lines[0]}\n\n"
-            "Подробных данных по этому кандидату нет (обогащено старой версией)."
-        )
+        return f"{lines[0]}\n\nПодробных данных по этому кандидату нет (обогащено старой версией)."
 
     lines.append("\n\n".join(sections))
     return "\n".join(lines).rstrip()

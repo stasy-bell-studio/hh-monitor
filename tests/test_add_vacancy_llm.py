@@ -228,9 +228,7 @@ async def test_null_nested_filter_ok() -> None:
 @pytest.mark.asyncio
 async def test_null_nested_region_fields_ok() -> None:
     """AC4b: null two levels deep (regions.adjacent, regions.stop) → Pydantic defaults []."""
-    payload = (
-        '{"filters": {"regions": {"primary": ["Москва"], "adjacent": null, "stop": null}}}'
-    )
+    payload = '{"filters": {"regions": {"primary": ["Москва"], "adjacent": null, "stop": null}}}'
     with _patch_llm({"choices": [{"message": {"content": payload}}], "usage": {}}):
         result = await parse_to_portrait_dict("текст", "Роль")
     portrait = Portrait.model_validate(result)

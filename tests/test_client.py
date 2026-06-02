@@ -106,9 +106,7 @@ def _make_client_with_refresh() -> tuple[HHClient, list[int]]:
 async def test_401_force_refresh_retry_success() -> None:
     """401 → force_refresh called once → retry returns 200."""
     client, refresh_calls = _make_client_with_refresh()
-    respx.get(f"{_BASE}/me").mock(
-        side_effect=[Response(401), Response(200, json={"id": "ok"})]
-    )
+    respx.get(f"{_BASE}/me").mock(side_effect=[Response(401), Response(200, json={"id": "ok"})])
     result = await client.get("/me")
     assert result == {"id": "ok"}
     assert len(refresh_calls) == 1
@@ -130,6 +128,7 @@ async def test_401_force_refresh_still_401_raises() -> None:
 @pytest.mark.asyncio
 async def test_401_force_refresh_raises_propagates() -> None:
     """force_refresh raises HHOAuthError (revoked) → propagated, not swallowed."""
+
     async def bad_refresh() -> OAuthToken:
         raise HHOAuthError("invalid_grant", 400, "")
 

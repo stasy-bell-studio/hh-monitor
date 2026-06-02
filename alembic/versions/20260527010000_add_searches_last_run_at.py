@@ -21,12 +21,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE searches ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ NULL"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_searches_last_run_at ON searches (last_run_at)"
-    )
+    op.execute("ALTER TABLE searches ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ NULL")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_searches_last_run_at ON searches (last_run_at)")
 
 
 def downgrade() -> None:

@@ -66,9 +66,7 @@ async def extract_text(mime: str, file_bytes: bytes) -> str:
         UnsupportedFileType: if *mime* is not PDF/DOCX/TXT.
     """
     if len(file_bytes) > MAX_FILE_SIZE_BYTES:
-        raise FileTooLarge(
-            f"File is {len(file_bytes)} bytes, limit is {MAX_FILE_SIZE_BYTES}"
-        )
+        raise FileTooLarge(f"File is {len(file_bytes)} bytes, limit is {MAX_FILE_SIZE_BYTES}")
 
     if mime == MIME_PDF:
         return await extract_text_from_pdf(file_bytes)

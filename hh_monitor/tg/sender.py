@@ -95,7 +95,10 @@ async def send_new_candidate_card(session: AsyncSession, bot: Bot, event_id: int
     keyboard = build_inline_keyboard(event_id, resume_url)
 
     msg = await send_card(
-        bot, settings.telegram_hr_group_id, html_text, keyboard,
+        bot,
+        settings.telegram_hr_group_id,
+        html_text,
+        keyboard,
         message_thread_id=settings.telegram_cards_topic_id or None,
     )
     tg_message_id = msg.message_id  # capture before commit

@@ -96,9 +96,9 @@ _ROLE_GROUP_B: frozenset[str] = frozenset(
         "представительств",
         "офис",
         "подразделени",  # подразделение/ия/ию/ии
-        "обособлен",     # обособленное/ного/ном
+        "обособлен",  # обособленное/ного/ном
         "дополнительн",  # дополнительный/ого/ом офис
-        "управлени",     # управление/ия (CC-16b: "Руководитель управления страхования")
+        "управлени",  # управление/ия (CC-16b: "Руководитель управления страхования")
     }
 )
 
@@ -669,9 +669,7 @@ def compute(resume_payload: dict[str, Any], portrait: Portrait) -> tuple[int, di
     if portrait.motor_experience_preferred:
         motor = _motor_experience_months(experiences)
         breakdown["motor_experience"] = (
-            w.motor_experience
-            if motor >= 24
-            else (w.motor_experience // 2 if motor >= 12 else 0)
+            w.motor_experience if motor >= 24 else (w.motor_experience // 2 if motor >= 12 else 0)
         )
 
     # ── STEP 3: Normalize to 0-100 ───────────────────────────────────────────

@@ -543,8 +543,11 @@ async def _seed_hard_reject(session: Any) -> tuple[int, int]:
     session.add(Snapshot(hh_resume_id=resume_id, payload=payload, content_hash=_hash(payload)))
     await session.flush()
     event = Event(
-        hh_resume_id=resume_id, event_type="NEW", search_id=search.id,
-        fit_score=None, llm_enriched=False,
+        hh_resume_id=resume_id,
+        event_type="NEW",
+        search_id=search.id,
+        fit_score=None,
+        llm_enriched=False,
     )
     session.add(event)
     await session.flush()
@@ -1288,9 +1291,7 @@ async def test_enriched_event_has_per_event_scores(
 
 
 @pytest.mark.asyncio
-async def test_enrich_uses_own_snapshot(
-    db_session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_enrich_uses_own_snapshot(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Event with curr_snapshot_id in details is scored from its own snapshot, not latest."""
     monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
@@ -1313,18 +1314,14 @@ async def test_enrich_uses_own_snapshot(
         "area": {"id": "63", "name": "Самара"},
         "experience": [],
     }
-    snap1 = Snapshot(
-        hh_resume_id="r_own_snap", payload=s1_payload, content_hash=_hash(s1_payload)
-    )
+    snap1 = Snapshot(hh_resume_id="r_own_snap", payload=s1_payload, content_hash=_hash(s1_payload))
     db_session.add(snap1)
     await db_session.flush()
 
     # S2: a newer snapshot (simulates the candidate updating their resume later)
     s2_payload = dict(s1_payload)
     s2_payload["title"] = "директор агентской сети страхование ОСАГО КАСКО"
-    snap2 = Snapshot(
-        hh_resume_id="r_own_snap", payload=s2_payload, content_hash=_hash(s2_payload)
-    )
+    snap2 = Snapshot(hh_resume_id="r_own_snap", payload=s2_payload, content_hash=_hash(s2_payload))
     db_session.add(snap2)
     await db_session.flush()
 

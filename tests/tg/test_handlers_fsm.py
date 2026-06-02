@@ -331,14 +331,10 @@ async def test_fsm_preset_happy_path_integration(test_engine: AsyncEngine) -> No
                 text("DELETE FROM notifications_sent WHERE event_id = :eid"), {"eid": event_id}
             )
             await session.execute(
-                text(
-                    "DELETE FROM events WHERE hh_resume_id = 'fsm_test_resume_001'"
-                )
+                text("DELETE FROM events WHERE hh_resume_id = 'fsm_test_resume_001'")
             )
             await session.execute(
-                text(
-                    "DELETE FROM snapshots WHERE hh_resume_id = 'fsm_test_resume_001'"
-                )
+                text("DELETE FROM snapshots WHERE hh_resume_id = 'fsm_test_resume_001'")
             )
             await session.execute(
                 text("DELETE FROM resumes WHERE hh_resume_id = 'fsm_test_resume_001'")
@@ -356,6 +352,7 @@ async def test_fsm_race_two_users_status(test_engine: AsyncEngine) -> None:
     event_id = await _seed_event_and_ns(factory)
 
     try:
+
         async def do_update(status: str) -> bool:
             async with factory() as session:
                 result = await session.execute(

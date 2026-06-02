@@ -88,9 +88,7 @@ async def _seed_fsm_search(db_session: Any) -> tuple[Search, Event]:
         "total_experience": {"months": 60},
         "experience": [],
     }
-    db_session.add(
-        Snapshot(hh_resume_id=resume_id, payload=payload, content_hash=_hash(payload))
-    )
+    db_session.add(Snapshot(hh_resume_id=resume_id, payload=payload, content_hash=_hash(payload)))
     await db_session.flush()
 
     event = Event(

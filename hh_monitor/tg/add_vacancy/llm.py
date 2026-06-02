@@ -141,9 +141,7 @@ def _strip_forbidden(data: dict[str, Any]) -> dict[str, Any]:
     cleaned: dict[str, Any] = {k: v for k, v in data.items() if k in _ALLOWED_KEYS}
     filters = cleaned.get("filters")
     if isinstance(filters, dict):
-        cleaned["filters"] = {
-            k: v for k, v in filters.items() if k in _ALLOWED_FILTER_KEYS
-        }
+        cleaned["filters"] = {k: v for k, v in filters.items() if k in _ALLOWED_FILTER_KEYS}
     return _drop_none_values(cleaned)
 
 

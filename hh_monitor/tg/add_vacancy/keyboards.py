@@ -69,12 +69,8 @@ def kb_review_with_unknown() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="✏️ Исправить портрет", callback_data="av:review:more"
-                ),
-                InlineKeyboardButton(
-                    text="⚠️ Запустить без региона", callback_data="av:review:ok"
-                ),
+                InlineKeyboardButton(text="✏️ Исправить портрет", callback_data="av:review:more"),
+                InlineKeyboardButton(text="⚠️ Запустить без региона", callback_data="av:review:ok"),
             ],
             [_CANCEL_BTN],
         ]

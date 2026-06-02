@@ -157,9 +157,7 @@ async def test_pending_age_days(db_session: AsyncSession) -> None:
     now = datetime.now(UTC)
     date_from, date_to = now - timedelta(days=7), now
     sc = await _seed_search(db_session, "Директор филиала")
-    await _seed_candidate(
-        db_session, sc, sent=True, status=None, sent_at=now - timedelta(days=5)
-    )
+    await _seed_candidate(db_session, sc, sent=True, status=None, sent_at=now - timedelta(days=5))
 
     data = await _collect_data(db_session, date_from, date_to)
     assert len(data["pending"]) == 1

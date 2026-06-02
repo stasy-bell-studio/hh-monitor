@@ -317,7 +317,10 @@ async def test_run_all_sends_view_limit_notification(db_session: AsyncSession) -
             "resume_ids": [],
         }
         mock_send.return_value = {
-            "sent": 0, "skipped_threshold": 0, "skipped_duplicate": 0, "errors": 0
+            "sent": 0,
+            "skipped_threshold": 0,
+            "skipped_duplicate": 0,
+            "errors": 0,
         }
         result = await run_all(factory, _notify=True)
 
@@ -362,7 +365,10 @@ async def test_run_all_no_view_limit_notification_on_success(db_session: AsyncSe
             "resume_ids": [],
         }
         mock_send.return_value = {
-            "sent": 0, "skipped_threshold": 0, "skipped_duplicate": 0, "errors": 0
+            "sent": 0,
+            "skipped_threshold": 0,
+            "skipped_duplicate": 0,
+            "errors": 0,
         }
         await run_all(factory, _notify=True)
 

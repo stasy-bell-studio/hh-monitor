@@ -341,8 +341,8 @@ async def _enrich_one(
             llm_weak_spots=weak_text,
             llm_red_flags=red_text,
             llm_interview_questions=_safe_flat_list(dossier.get("interview_questions")),
-            llm_verdict=llm_verdict_class,       # enum only: подходит/спорно/мимо/стоп-сигнал
-            llm_verdict_text=verdict_text,        # full free-form LLM text
+            llm_verdict=llm_verdict_class,  # enum only: подходит/спорно/мимо/стоп-сигнал
+            llm_verdict_text=verdict_text,  # full free-form LLM text
         )
     )
 

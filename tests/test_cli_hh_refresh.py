@@ -152,7 +152,7 @@ async def test_refresh_ok_logs_expires_in_seconds(db_session: AsyncSession) -> N
     assert abs(ev["expires_in_seconds"] - 1209600) <= 5
 
     # CC-2 Part C item 3: additional field coverage
-    assert "expires_at" in ev        # ISO-formatted string present
+    assert "expires_at" in ev  # ISO-formatted string present
     assert ev["scope"] == "resumes"  # scope field propagated
 
     # CC-2 Part C item 4: log ordering
@@ -200,7 +200,7 @@ async def test_refresh_failed_calls_critical_alert(db_session: AsyncSession) -> 
 @pytest.mark.asyncio
 async def test_refresh_ok_warning_fired_when_stale(db_session: AsyncSession) -> None:
     """Warning alert fires when pre-refresh token is near-expiry AND stale > 24 h."""
-    near_expiry_at = datetime.now(UTC) + timedelta(hours=5)   # < 24 h left
+    near_expiry_at = datetime.now(UTC) + timedelta(hours=5)  # < 24 h left
     stale_updated_at = datetime.now(UTC) - timedelta(hours=30)  # > 24 h since last refresh
 
     token = OAuthToken(
@@ -311,9 +311,7 @@ async def test_refresh_if_due_refreshes_when_ttl_below_threshold(
         patch(
             "hh_monitor.cli.send_oauth_refresh_failed_alert", new_callable=AsyncMock
         ) as mock_fail,
-        patch(
-            "hh_monitor.cli.send_oauth_expiry_warning_alert", new_callable=AsyncMock
-        ),
+        patch("hh_monitor.cli.send_oauth_expiry_warning_alert", new_callable=AsyncMock),
     ):
         await _do_refresh(if_due=True, threshold_hours=72)
 

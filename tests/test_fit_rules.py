@@ -1404,9 +1404,7 @@ def _soft_role_portrait() -> Portrait:
         position_name="Директор филиала",
         role_match_mode="soft",
         position_synonyms=["Руководитель филиала", "Региональный директор"],
-        filters=Filters(
-            regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])
-        ),
+        filters=Filters(regions=RegionFilters(primary=["Санкт-Петербург"], adjacent=[], stop=[])),
     )
 
 
@@ -1840,9 +1838,9 @@ def _region_only_payload() -> dict[str, Any]:
     ("insurance", "motor", "denom", "expected_fit"),
     [
         (False, False, 45, 18),  # round(8/45*100)
-        (False, True, 51, 16),   # round(8/51*100)
-        (True, False, 57, 14),   # round(8/57*100)
-        (True, True, 63, 13),    # round(8/63*100)
+        (False, True, 51, 16),  # round(8/51*100)
+        (True, False, 57, 14),  # round(8/57*100)
+        (True, True, 63, 13),  # round(8/63*100)
     ],
 )
 def test_dynamic_denominator(insurance: bool, motor: bool, denom: int, expected_fit: int) -> None:

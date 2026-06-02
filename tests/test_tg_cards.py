@@ -274,9 +274,7 @@ def test_card_no_verdict_label_line() -> None:
 
 
 def test_card_real_role_line_present() -> None:
-    html = build_card_html(
-        _resume(llm_real_role="Директор филиала"), _event(), _search(), _snap()
-    )
+    html = build_card_html(_resume(llm_real_role="Директор филиала"), _event(), _search(), _snap())
     assert "Реальная роль: Директор филиала" in html
 
 
@@ -289,9 +287,12 @@ def test_card_education_folded_into_geo_line() -> None:
 
 
 def test_card_geo_line_contains_all_present_parts() -> None:
-    html = build_card_html(_resume(), _event(), _search(), _snap(
-        region="Минск", age=35, exp_months=96, education="Высшее"
-    ))
+    html = build_card_html(
+        _resume(),
+        _event(),
+        _search(),
+        _snap(region="Минск", age=35, exp_months=96, education="Высшее"),
+    )
     assert "Минск" in html
     assert "35 лет" in html
     assert "опыт 8 лет" in html

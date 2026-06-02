@@ -392,7 +392,7 @@ def _pending_block(pending: list[_Candidate]) -> str:
         lines.append(
             f"{prefix}{_verdict_emoji(c['llm_verdict'])} {c['score_total']} · "
             f"{_name_role(c['position_name'], c['llm_real_role'])} · "
-            f"висит {age} дн · <a href=\"{c['url']}\">hh.ru</a>"
+            f'висит {age} дн · <a href="{c["url"]}">hh.ru</a>'
         )
     return "\n".join(lines)
 
@@ -417,8 +417,10 @@ def _top_block(top: list[_Candidate]) -> str:
             f"{_name_role(c['position_name'], c['llm_real_role'])}"
         )
         concl = _one_line(c["conclusion"])
-        sub = f"   <i>{_esc(concl)}</i> · <a href=\"{c['url']}\">hh.ru</a>" if concl else (
-            f"   <a href=\"{c['url']}\">hh.ru</a>"
+        sub = (
+            f'   <i>{_esc(concl)}</i> · <a href="{c["url"]}">hh.ru</a>'
+            if concl
+            else (f'   <a href="{c["url"]}">hh.ru</a>')
         )
         lines.append(f"{head}\n{sub}")
     return "\n".join(lines)

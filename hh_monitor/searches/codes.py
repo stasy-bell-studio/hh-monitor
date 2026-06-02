@@ -26,11 +26,39 @@ from hh_monitor.db.models import Search
 
 # GOST 7.79-2000 System B-ish transliteration; pragmatic, lossy, ASCII-only output.
 _TRANSLIT: dict[str, str] = {
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
-    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
-    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
-    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "g",
+    "д": "d",
+    "е": "e",
+    "ё": "e",
+    "ж": "zh",
+    "з": "z",
+    "и": "i",
+    "й": "y",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "h",
+    "ц": "ts",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "sch",
+    "ъ": "",
+    "ы": "y",
+    "ь": "",
+    "э": "e",
+    "ю": "yu",
+    "я": "ya",
 }
 
 _SLUG_MAX_LEN = 40
@@ -68,11 +96,7 @@ async def next_unique_search_code(session: AsyncSession, base: str) -> str:
     ``_SLUG_MAX_LEN`` by the suffix length — acceptable, the column is unbounded Text.
     """
     existing = set(
-        (
-            await session.execute(
-                select(Search.search_code).where(Search.search_code.is_not(None))
-            )
-        )
+        (await session.execute(select(Search.search_code).where(Search.search_code.is_not(None))))
         .scalars()
         .all()
     )

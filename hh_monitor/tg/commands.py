@@ -88,13 +88,9 @@ def _search_action_keyboard(search_id: int, is_active: bool) -> InlineKeyboardMa
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="📊 Подробно", callback_data=f"adm:detail:{search_id}"
-                ),
+                InlineKeyboardButton(text="📊 Подробно", callback_data=f"adm:detail:{search_id}"),
                 pause_or_resume,
-                InlineKeyboardButton(
-                    text="🗑 Архив", callback_data=f"adm:archive:{search_id}"
-                ),
+                InlineKeyboardButton(text="🗑 Архив", callback_data=f"adm:archive:{search_id}"),
             ],
             _close_button(),
         ]
@@ -105,12 +101,8 @@ def _archive_confirm_keyboard(search_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="✅ Да", callback_data=f"adm:yes_arch:{search_id}"
-                ),
-                InlineKeyboardButton(
-                    text="❌ Отмена", callback_data=f"adm:no_arch:{search_id}"
-                ),
+                InlineKeyboardButton(text="✅ Да", callback_data=f"adm:yes_arch:{search_id}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"adm:no_arch:{search_id}"),
             ]
         ]
     )
@@ -167,10 +159,7 @@ def _render_archived_card(
     total: int,
 ) -> tuple[str, InlineKeyboardMarkup]:
     date_str = archived_at.strftime("%d.%m.%Y")
-    text = (
-        f"📦 <b>{position_name}</b>\n"
-        f"код={position_code} | архив={date_str} | всего={total}"
-    )
+    text = f"📦 <b>{position_name}</b>\nкод={position_code} | архив={date_str} | всего={total}"
     return text, _archived_card_keyboard(search_id)
 
 
@@ -187,11 +176,7 @@ def _panel_keyboard() -> InlineKeyboardMarkup:
     """Admin panel keyboard with the Add Vacancy entry button (Session 12)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="➕ Добавить вакансию", callback_data="add_vacancy:start"
-                )
-            ],
+            [InlineKeyboardButton(text="➕ Добавить вакансию", callback_data="add_vacancy:start")],
             _close_button(),
         ]
     )
@@ -248,7 +233,7 @@ async def handle_active(message: Message) -> None:
         await message.answer(
             "Нет активных или приостановленных поисков.",
             reply_markup=_close_keyboard(),
-            )
+        )
         return
 
     for row in rows:
@@ -264,7 +249,7 @@ async def handle_active(message: Message) -> None:
         await message.answer(
             card_text,
             reply_markup=keyboard,
-            )
+        )
         await asyncio.sleep(0.05)
 
 
@@ -296,7 +281,7 @@ async def handle_archive(message: Message) -> None:
         await message.answer(
             "Нет архивных поисков.",
             reply_markup=_close_keyboard(),
-            )
+        )
         return
 
     for row in rows:
@@ -310,7 +295,7 @@ async def handle_archive(message: Message) -> None:
         await message.answer(
             card_text,
             reply_markup=keyboard,
-            )
+        )
         await asyncio.sleep(0.05)
 
 
@@ -386,19 +371,19 @@ async def handle_stats(message: Message) -> None:
         if row.bucket in counts:
             counts[row.bucket] = int(row.cnt)
     max_cnt = max(counts.values()) if counts.values() else 1
-    hist_lines = "\n".join(
-        f"  {b}: {_bar(c, max_cnt)} {c}" for b, c in counts.items()
-    )
+    hist_lines = "\n".join(f"  {b}: {_bar(c, max_cnt)} {c}" for b, c in counts.items())
 
     # Top positions
-    pos_lines = "\n".join(
-        f"  {i}. {row.position_code} — {row.cnt}" for i, row in enumerate(top_pos, 1)
-    ) or "  нет данных"
+    pos_lines = (
+        "\n".join(f"  {i}. {row.position_code} — {row.cnt}" for i, row in enumerate(top_pos, 1))
+        or "  нет данных"
+    )
 
     # Top reasons
-    reason_lines = "\n".join(
-        f"  {i}. {row.reason_code} — {row.cnt}" for i, row in enumerate(top_reasons, 1)
-    ) or "  нет данных"
+    reason_lines = (
+        "\n".join(f"  {i}. {row.reason_code} — {row.cnt}" for i, row in enumerate(top_reasons, 1))
+        or "  нет данных"
+    )
 
     stats_text = (
         "<b>📊 Статистика hh-monitor</b>\n\n"
@@ -486,14 +471,8 @@ async def handle_hh_refresh(message: Message) -> None:
             updated = await refresh_access_token(session)
         except HHOAuthError as exc:
             try:
-                body = (
-                    exc.body
-                    if isinstance(exc.body, dict)
-                    else json.loads(exc.body)
-                )
-                not_expired = "not expired" in str(
-                    body.get("error_description", "")
-                ).lower()
+                body = exc.body if isinstance(exc.body, dict) else json.loads(exc.body)
+                not_expired = "not expired" in str(body.get("error_description", "")).lower()
             except Exception:
                 not_expired = False
 
@@ -526,16 +505,14 @@ async def handle_hh_refresh(message: Message) -> None:
         except httpx.HTTPError as exc:
             err = f"{type(exc).__name__}: {exc}"[:200]
             await message.answer(
-                f"❌ Сетевая ошибка при обновлении токена: {err}\n"
-                "Повтори через минуту.",
+                f"❌ Сетевая ошибка при обновлении токена: {err}\nПовтори через минуту.",
                 reply_markup=_close_keyboard(),
             )
             return
         except Exception as exc:
             logger.exception("hh_refresh_unexpected", error=str(exc))
             await message.answer(
-                f"❌ Ошибка: {type(exc).__name__}\n"
-                "Подробности в логах.",
+                f"❌ Ошибка: {type(exc).__name__}\nПодробности в логах.",
                 reply_markup=_close_keyboard(),
             )
             return
@@ -646,9 +623,7 @@ async def handle_stop(callback: CallbackQuery) -> None:
         await session.commit()
 
     if not rows:
-        await callback.answer(
-            "⚠️ Состояние поиска изменилось, обнови /active", show_alert=True
-        )
+        await callback.answer("⚠️ Состояние поиска изменилось, обнови /active", show_alert=True)
         return
 
     async with factory() as session:
@@ -689,9 +664,7 @@ async def handle_resume(callback: CallbackQuery) -> None:
         await session.commit()
 
     if not rows:
-        await callback.answer(
-            "⚠️ Состояние поиска изменилось, обнови /active", show_alert=True
-        )
+        await callback.answer("⚠️ Состояние поиска изменилось, обнови /active", show_alert=True)
         return
 
     async with factory() as session:
@@ -759,16 +732,12 @@ async def handle_confirm_archive(callback: CallbackQuery) -> None:
         await session.commit()
 
     if not row:
-        await callback.answer(
-            "⚠️ Состояние поиска изменилось, обнови /active", show_alert=True
-        )
+        await callback.answer("⚠️ Состояние поиска изменилось, обнови /active", show_alert=True)
         return
 
     name = row.position_name
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            f"✅ «{name}» архивирован.", reply_markup=None
-        )
+        await callback.message.edit_text(f"✅ «{name}» архивирован.", reply_markup=None)
     await callback.answer()
 
 
@@ -851,12 +820,8 @@ _FETCH_ACTIVE_ROW_SQL = """
 """
 
 
-async def _fetch_active_row(
-    session: AsyncSession, search_id: int
-) -> dict[str, Any] | None:
-    row = (
-        await session.execute(text(_FETCH_ACTIVE_ROW_SQL), {"id": search_id})
-    ).fetchone()
+async def _fetch_active_row(session: AsyncSession, search_id: int) -> dict[str, Any] | None:
+    row = (await session.execute(text(_FETCH_ACTIVE_ROW_SQL), {"id": search_id})).fetchone()
     if row is None:
         return None
     return {
@@ -885,6 +850,4 @@ async def register_admin_commands(bot: Bot) -> None:
     ]
     group_id = settings.telegram_hr_group_id
     if group_id:
-        await bot.set_my_commands(
-            commands, scope=BotCommandScopeChat(chat_id=group_id)
-        )
+        await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=group_id))

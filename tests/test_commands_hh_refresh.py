@@ -171,9 +171,7 @@ async def test_hh_refresh_unexpected_error(caplog: pytest.LogCaptureFixture) -> 
 async def test_hh_refresh_token_not_expired() -> None:
     token = _make_token(expires_at=datetime(2026, 6, 10, 12, 0, 0, tzinfo=UTC))
     session = _mock_session(token)
-    not_expired_body = (
-        '{"error":"invalid_grant","error_description":"token not expired"}'
-    )
+    not_expired_body = '{"error":"invalid_grant","error_description":"token not expired"}'
 
     with (
         patch(
@@ -199,9 +197,7 @@ async def test_hh_refresh_token_not_expired() -> None:
 async def test_hh_refresh_genuine_invalid_grant() -> None:
     token = _make_token()
     session = _mock_session(token)
-    genuine_body = (
-        '{"error":"invalid_grant","error_description":"refresh_token is expired"}'
-    )
+    genuine_body = '{"error":"invalid_grant","error_description":"refresh_token is expired"}'
 
     with (
         patch(

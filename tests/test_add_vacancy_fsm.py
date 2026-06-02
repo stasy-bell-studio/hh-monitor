@@ -331,10 +331,10 @@ async def test_s6_launch_inserts_active_and_schedules_scan(db_session: Any) -> N
         await h.handle_s6_launch(_cb("av:launch:go", user_id=555), fsm)  # type: ignore[arg-type]
 
     rows = (
-        await db_session.execute(
-            select(Search).where(Search.position_code == "direktor-filiala")
-        )
-    ).scalars().all()
+        (await db_session.execute(select(Search).where(Search.position_code == "direktor-filiala")))
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1
     assert rows[0].active is True
     assert rows[0].created_by_tg_user_id == 555
@@ -361,8 +361,10 @@ async def test_s6_draft_inserts_inactive_no_scan(db_session: Any) -> None:
         await h.handle_s6_draft(_cb("av:launch:draft"), fsm)  # type: ignore[arg-type]
 
     rows = (
-        await db_session.execute(select(Search).where(Search.position_code == "anderrayter"))
-    ).scalars().all()
+        (await db_session.execute(select(Search).where(Search.position_code == "anderrayter")))
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1
     assert rows[0].active is False
     assert created == []
@@ -378,8 +380,10 @@ async def test_s6_cancel_no_insert(db_session: Any) -> None:
     with patch.object(h, "get_session_factory", return_value=_factory_from(db_session)):
         await h.handle_cancel(_cb("av:cancel"), fsm)  # type: ignore[arg-type]
     rows = (
-        await db_session.execute(select(Search).where(Search.position_code == "ghost"))
-    ).scalars().all()
+        (await db_session.execute(select(Search).where(Search.position_code == "ghost")))
+        .scalars()
+        .all()
+    )
     assert rows == []
     assert fsm.cleared is True
 
@@ -446,9 +450,7 @@ async def test_s3_parse_failure_offers_retry() -> None:
         state=AddVacancy.S3_portrait_raw,
     )
     msg = _msg("текст портрета")
-    with patch.object(
-        h, "parse_to_portrait_dict", new=AsyncMock(side_effect=ValueError("bad"))
-    ):
+    with patch.object(h, "parse_to_portrait_dict", new=AsyncMock(side_effect=ValueError("bad"))):
         await h.handle_s3_text(msg, fsm)  # type: ignore[arg-type]
     # Stays in S3 so the user can retry / cancel
     assert fsm.state == AddVacancy.S3_portrait_raw

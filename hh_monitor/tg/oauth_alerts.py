@@ -120,9 +120,7 @@ async def send_oauth_expiry_warning_alert(
 
     if expires_in_hours <= 0:
         header = "⚠️ Токен hh.ru истёк — авторизация обновлена автоматически"
-        expiry_line = (
-            f"  Токен уже истёк (просрочен на {abs(expires_in_hours):.1f} ч)"
-        )
+        expiry_line = f"  Токен уже истёк (просрочен на {abs(expires_in_hours):.1f} ч)"
     else:
         header = "⚠️ Токен hh.ru скоро истечёт — обновите авторизацию"
         expiry_line = f"  Токен истекает через: {expires_in_hours:.1f} ч"

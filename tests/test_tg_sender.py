@@ -227,8 +227,9 @@ async def test_send_new_candidate_card_dev_opt_in(db_session: AsyncSession) -> N
 
     with (
         patch("hh_monitor.tg.sender.settings") as ms,
-        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock, return_value=msg)
-        as mock_send,
+        patch(
+            "hh_monitor.tg.sender.send_card", new_callable=AsyncMock, return_value=msg
+        ) as mock_send,
     ):
         ms.env = "local"
         ms.telegram_send_enabled = True

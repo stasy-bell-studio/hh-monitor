@@ -169,9 +169,7 @@ async def run_all(
                 await run_detector(session, search_id)
                 # Mark the cooldown timestamp only after a clean parse+detect pass.
                 await session.execute(
-                    update(Search)
-                    .where(Search.id == search_id)
-                    .values(last_run_at=func.now())
+                    update(Search).where(Search.id == search_id).values(last_run_at=func.now())
                 )
                 await session.commit()
             log.info(

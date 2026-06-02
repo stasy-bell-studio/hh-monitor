@@ -339,9 +339,7 @@ async def handle_s4_more(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(visited_review=True, input_mode="text")
     await state.set_state(AddVacancy.S3_portrait_raw)
     if isinstance(callback.message, Message):
-        await callback.message.answer(
-            "Что добавить или уточнить?", reply_markup=kb.kb_cancel()
-        )
+        await callback.message.answer("Что добавить или уточнить?", reply_markup=kb.kb_cancel())
 
 
 async def _enter_critic(

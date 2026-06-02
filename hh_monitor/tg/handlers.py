@@ -387,9 +387,7 @@ async def handle_custom_reason_message(message: Message) -> None:
         return
 
     bot_obj: Bot = message.bot  # type: ignore[assignment]
-    final_text = format_final_text(
-        state.card_original_text, state.status, reason_text, username
-    )
+    final_text = format_final_text(state.card_original_text, state.status, reason_text, username)
     await bot_obj.edit_message_text(
         final_text,
         chat_id=state.card_chat_id,

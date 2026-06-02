@@ -70,9 +70,7 @@ async def test_recent_run_skipped(db_session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_old_run_included(db_session: AsyncSession) -> None:
     """AC9: last_run_at 31 min ago (> 30) → included."""
-    await _add_search(
-        db_session, "sc_old", last_run_at=datetime.now(UTC) - timedelta(minutes=31)
-    )
+    await _add_search(db_session, "sc_old", last_run_at=datetime.now(UTC) - timedelta(minutes=31))
     factory = _make_session_factory(db_session)
     async with _mock_pipeline():
         result = await run_all(factory, _notify=False)
@@ -93,9 +91,7 @@ async def test_null_last_run_included(db_session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_cooldown_applies_before_search_codes_filter(db_session: AsyncSession) -> None:
     """AC9: explicit --search-codes does NOT bypass cooldown."""
-    await _add_search(
-        db_session, "sc_recent", last_run_at=datetime.now(UTC) - timedelta(minutes=5)
-    )
+    await _add_search(db_session, "sc_recent", last_run_at=datetime.now(UTC) - timedelta(minutes=5))
     factory = _make_session_factory(db_session)
     async with _mock_pipeline():
         result = await run_all(factory, _notify=False, search_codes=["sc_recent"])
