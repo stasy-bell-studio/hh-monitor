@@ -281,3 +281,89 @@ async def test_run_all_search_codes_missing(db_session: AsyncSession) -> None:
     assert "sc_ghost" in result["skipped_codes"]
     assert result["failed"] == 0
     assert result["succeeded"] == 1
+
+
+# ── Test 8: view-limit → TG notification sent ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_all_sends_view_limit_notification(db_session: AsyncSession) -> None:
+    """When run_parser returns view_limit_exhausted, one TG message is sent to admin topic."""
+    await _add_search(db_session, "sc_limited")
+    factory = _make_session_factory(db_session)
+
+    from unittest.mock import MagicMock
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    mock_bot.session = MagicMock()
+    mock_bot.session.close = AsyncMock()
+
+    with (
+        patch("hh_monitor.pipeline.run_all.run_parser", new_callable=AsyncMock) as mock_parser,
+        patch("hh_monitor.pipeline.run_all.run_detector", new_callable=AsyncMock),
+        patch("hh_monitor.pipeline.run_all.HHClient"),
+        patch("hh_monitor.pipeline.run_all.get_valid_token", new_callable=AsyncMock),
+        patch("hh_monitor.tg.client.make_bot", return_value=mock_bot),
+        patch("hh_monitor.tg.sender.send_pending_cards", new_callable=AsyncMock) as mock_send,
+    ):
+        mock_parser.return_value = {
+            "status": "view_limit_exhausted",
+            "resumes_seen": 5,
+            "snapshots_inserted": 2,
+            "snapshots_skipped_dedup": 3,
+            "errors": 0,
+            "parser_run_id": 1,
+            "resume_ids": [],
+        }
+        mock_send.return_value = {
+            "sent": 0, "skipped_threshold": 0, "skipped_duplicate": 0, "errors": 0
+        }
+        result = await run_all(factory, _notify=True)
+
+    assert result["succeeded"] == 1
+    mock_bot.send_message.assert_awaited_once()
+    call_kwargs = mock_bot.send_message.call_args
+    sent_text: str = call_kwargs.kwargs.get("text") or ""
+    assert "дневной лимит" in sent_text
+
+
+# ── Test 9: no view-limit → no extra TG message ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_all_no_view_limit_notification_on_success(db_session: AsyncSession) -> None:
+    """When run_parser returns 'ok', the view-limit TG notification is NOT sent."""
+    await _add_search(db_session, "sc_ok2")
+    factory = _make_session_factory(db_session)
+
+    from unittest.mock import MagicMock
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    mock_bot.session = MagicMock()
+    mock_bot.session.close = AsyncMock()
+
+    with (
+        patch("hh_monitor.pipeline.run_all.run_parser", new_callable=AsyncMock) as mock_parser,
+        patch("hh_monitor.pipeline.run_all.run_detector", new_callable=AsyncMock),
+        patch("hh_monitor.pipeline.run_all.HHClient"),
+        patch("hh_monitor.pipeline.run_all.get_valid_token", new_callable=AsyncMock),
+        patch("hh_monitor.tg.client.make_bot", return_value=mock_bot),
+        patch("hh_monitor.tg.sender.send_pending_cards", new_callable=AsyncMock) as mock_send,
+    ):
+        mock_parser.return_value = {
+            "status": "ok",
+            "resumes_seen": 3,
+            "snapshots_inserted": 3,
+            "snapshots_skipped_dedup": 0,
+            "errors": 0,
+            "parser_run_id": 2,
+            "resume_ids": [],
+        }
+        mock_send.return_value = {
+            "sent": 0, "skipped_threshold": 0, "skipped_duplicate": 0, "errors": 0
+        }
+        await run_all(factory, _notify=True)
+
+    mock_bot.send_message.assert_not_awaited()

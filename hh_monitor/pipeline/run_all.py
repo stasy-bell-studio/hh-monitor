@@ -148,6 +148,7 @@ async def run_all(
 
     succeeded = 0
     failures: list[dict[str, str]] = []
+    view_limit_hit = False
 
     for search_id, search_code in search_refs:
         sc = search_code or str(search_id)
@@ -162,7 +163,9 @@ async def run_all(
                     force_refresh=lambda: refresh_access_token(session),
                     user_agent=settings.hh_user_agent,
                 )
-                await run_parser(session, client, search_id, max_pages=max_pages)
+                parser_result = await run_parser(session, client, search_id, max_pages=max_pages)
+                if parser_result.get("status") == "view_limit_exhausted":
+                    view_limit_hit = True
                 await run_detector(session, search_id)
                 # Mark the cooldown timestamp only after a clean parse+detect pass.
                 await session.execute(
@@ -184,7 +187,28 @@ async def run_all(
             )
             failures.append({"search_code": sc, "error": str(exc)})
 
-    # ── 6. Flush pending TG notifications (once, after all searches) ──────
+    # ── 6. Notify admin if HH daily view quota was exhausted ──────────────
+    if view_limit_hit and _notify:
+        try:
+            from hh_monitor.tg.client import make_bot
+
+            _vl_bot = make_bot()
+            try:
+                await _vl_bot.send_message(
+                    chat_id=settings.telegram_hr_group_id,
+                    text=(
+                        "⏳ Достигнут дневной лимит просмотров резюме на hh.ru. "
+                        "Поиск продолжится автоматически завтра."
+                    ),
+                    message_thread_id=settings.telegram_admin_topic_id or None,
+                )
+            finally:
+                await _vl_bot.session.close()
+            logger.info("run_all_view_limit_notified")
+        except Exception as exc:
+            logger.error("run_all_view_limit_notify_failed", error=str(exc))
+
+    # ── 7. Flush pending TG notifications (once, after all searches) ──────
     if _notify:
         try:
             from hh_monitor.tg.client import make_bot
