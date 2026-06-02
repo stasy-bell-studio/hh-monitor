@@ -49,17 +49,13 @@ class Search(Base):
     )
 
     # Session 8: search lifecycle management
-    archived_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_by_tg_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Session 12: per-search cooldown for pipeline.run_all.  NULL = never run /
     # eligible immediately; otherwise pipeline skips the search until
     # NOW() - last_run_at > PIPELINE_SEARCH_COOLDOWN_MINUTES.
-    last_run_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    last_run_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("ix_searches_active_archived", "active", "archived_at"),
@@ -147,7 +143,6 @@ class Event(Base):
     )
     # Renamed from notion_synced — marks whether this event has been LLM-enriched
     llm_enriched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    telegram_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # All hard-filter reasons that fired for this event (populated by fit/rules.py ≥ v2).
     # Deprecated single-string reason is kept in details->>'hard_reject_reason' for compat.
     hard_reject_reasons: Mapped[list[str]] = mapped_column(
@@ -169,11 +164,6 @@ class Event(Base):
             "idx_events_pending_llm",
             "llm_enriched",
             postgresql_where="llm_enriched = FALSE",
-        ),
-        Index(
-            "idx_events_pending_telegram",
-            "telegram_sent",
-            postgresql_where="telegram_sent = FALSE",
         ),
     )
 
@@ -248,9 +238,7 @@ class AppConfig(Base):
 
 class ScreeningReason(Base):
     __tablename__ = "screening_reasons"
-    __table_args__ = (
-        Index("ix_screening_reasons_status_created", "status", "created_at"),
-    )
+    __table_args__ = (Index("ix_screening_reasons_status_created", "status", "created_at"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     event_id: Mapped[int] = mapped_column(

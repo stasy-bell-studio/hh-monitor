@@ -191,18 +191,6 @@ def check_forbidden_phrases(text: str, resume_id: str) -> None:
 # Used to keep resumes.llm_score / resumes.llm_verdict populated for TG bot.
 
 
-def derive_score_from_verdict(verdict: str) -> int:
-    """Heuristically derive a numeric LLM score from free-form verdict text."""
-    v = verdict.lower()
-    if "не рекомендую" in v:
-        return 20
-    if "нужно интервью" in v or "нужна проверка" in v:
-        return 60
-    if "рекомендую" in v:
-        return 80
-    return 50
-
-
 # Keywords that indicate a recognised verdict pattern (used to detect "truly unrecognised")
 _VERDICT_KEYWORDS = (
     "стоп-сигнал",

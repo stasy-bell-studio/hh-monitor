@@ -7,7 +7,6 @@ import pytest
 from hh_monitor.llm_enrich.prompts import (
     UNIVERSAL_CRITIC_PROMPT,
     build_full_prompt,
-    derive_score_from_verdict,
     derive_verdict_class,
     parse_dossier,
 )
@@ -197,22 +196,6 @@ def test_parse_dossier_extra_fields_ignored() -> None:
     assert d["facts_confirmed"] == "Факты."
     # Extra field is still in dict (no stripping)
     assert "unknown_extra" in d
-
-
-# ── Score/verdict derivation ──────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("verdict_text", "expected_score"),
-    [
-        ("Не рекомендую. Кандидат слабый.", 20),
-        ("Нужно интервью для проверки.", 60),
-        ("Рекомендую на следующий этап.", 80),
-        ("Неоднозначная кандидатура.", 50),  # default
-    ],
-)
-def test_derive_score_from_verdict(verdict_text: str, expected_score: int) -> None:
-    assert derive_score_from_verdict(verdict_text) == expected_score
 
 
 @pytest.mark.parametrize(
