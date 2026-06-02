@@ -10,6 +10,8 @@ from hh_monitor.db.models import Event, Resume, Search
 from hh_monitor.tg.cards import (
     _plural_years,
     build_card_html,
+    build_detail_collapse_keyboard,
+    build_detail_html,
     build_inline_keyboard,
     safe,
 )
@@ -451,7 +453,7 @@ def test_keyboard_has_four_action_buttons() -> None:
 def test_keyboard_has_url_button() -> None:
     kb = build_inline_keyboard(42, "https://hh.ru/resume/abc")
     row1 = kb.inline_keyboard[1]
-    assert len(row1) == 1
+    assert len(row1) == 2
     assert row1[0].url == "https://hh.ru/resume/abc"
 
 
@@ -460,3 +462,84 @@ def test_callback_data_fits_64_bytes(status: str) -> None:
     max_bigint = 9_223_372_036_854_775_807
     cb = f"screen:{max_bigint}:{status}"
     assert len(cb.encode()) <= 64, f"callback_data too long: {len(cb.encode())} bytes"
+
+
+# ── Tests: "Подробнее" button + build_detail_html ─────────────────────────────
+
+
+def test_keyboard_has_details_button() -> None:
+    kb = build_inline_keyboard(42, "https://hh.ru/resume/abc")
+    row1 = kb.inline_keyboard[1]
+    cbs = [b.callback_data for b in row1]
+    assert "details:42" in cbs
+    labels = [b.text for b in row1]
+    assert "🔍 Подробнее" in labels
+
+
+def test_details_callback_data_fits_64_bytes() -> None:
+    max_bigint = 9_223_372_036_854_775_807
+    cb = f"details:{max_bigint}"
+    assert len(cb.encode()) <= 64
+
+
+def test_detail_collapse_keyboard_single_button() -> None:
+    kb = build_detail_collapse_keyboard()
+    assert len(kb.inline_keyboard) == 1
+    assert len(kb.inline_keyboard[0]) == 1
+    btn = kb.inline_keyboard[0][0]
+    assert btn.text == "🗑 Свернуть"
+    assert btn.callback_data == "detail_collapse"
+
+
+def test_detail_html_all_sections() -> None:
+    res = _resume(llm_red_flags=None)
+    ev = _event(
+        llm_facts_confirmed="10 лет управленческого опыта.",
+        llm_weak_spots="Нет опыта в FMCG.",
+        llm_red_flags="Частые смены работодателей.",
+        llm_verdict_text="Сильный кандидат.",
+        llm_interview_questions=["Почему ушли с прошлого места?", "Опыт с прибылью?"],
+    )
+    html = build_detail_html(res, ev, _search("Директор филиала"))
+    assert "🔍 <b>Подробный анализ — Директор филиала</b>" in html
+    assert "✅ <b>Подтверждённые факты:</b>\n10 лет управленческого опыта." in html
+    assert "⚠️ <b>Слабые места:</b>\nНет опыта в FMCG." in html
+    assert "🚩 <b>Риски:</b>\nЧастые смены работодателей." in html
+    assert "❓ <b>Вопросы на интервью:</b>" in html
+    assert "1. Почему ушли с прошлого места?" in html
+    assert "2. Опыт с прибылью?" in html
+    assert "🧭 <b>Вердикт:</b>\nСильный кандидат." in html
+
+
+def test_detail_html_no_truncation() -> None:
+    long_facts = "слово " * 60  # ~360 chars
+    res = _resume(llm_red_flags=None)
+    ev = _event(llm_facts_confirmed=long_facts)
+    html = build_detail_html(res, ev, _search())
+    assert "…" not in html
+    assert long_facts.strip() in html
+
+
+def test_detail_html_omits_empty_sections() -> None:
+    res = _resume(llm_red_flags=None)
+    ev = _event(llm_verdict_text="Только вердикт.")
+    html = build_detail_html(res, ev, _search())
+    assert "🧭 <b>Вердикт:</b>" in html
+    assert "Подтверждённые факты" not in html
+    assert "Слабые места" not in html
+    assert "Вопросы на интервью" not in html
+
+
+def test_detail_html_empty_dossier_fallback() -> None:
+    res = _resume(llm_red_flags=None)
+    ev = _event()  # all dossier fields None
+    html = build_detail_html(res, ev, _search())
+    assert "Подробных данных по этому кандидату нет (обогащено старой версией)." in html
+
+
+def test_detail_html_escapes_html() -> None:
+    res = _resume(llm_red_flags=None)
+    ev = _event(llm_facts_confirmed="<script>alert(1)</script>")
+    html = build_detail_html(res, ev, _search())
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html

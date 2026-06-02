@@ -197,6 +197,64 @@ def build_inline_keyboard(event_id: int, resume_url: str) -> InlineKeyboardMarku
             ],
             [
                 InlineKeyboardButton(text="🔗 hh.ru", url=resume_url),
+                InlineKeyboardButton(
+                    text="🔍 Подробнее",
+                    callback_data=f"details:{event_id}",
+                ),
             ],
         ]
     )
+
+
+def build_detail_collapse_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Свернуть",
+                    callback_data="detail_collapse",
+                ),
+            ],
+        ]
+    )
+
+
+def build_detail_html(resume: Resume, event: Event, search: Search) -> str:
+    """Full dossier (no truncation) shown as a separate reply on demand."""
+    lines: list[str] = [
+        f"🔍 <b>Подробный анализ — {safe(search.position_name)}</b>",
+        "",
+    ]
+
+    sections: list[str] = []
+
+    if event.llm_facts_confirmed:
+        sections.append(
+            f"✅ <b>Подтверждённые факты:</b>\n{safe(event.llm_facts_confirmed)}"
+        )
+    if event.llm_weak_spots:
+        sections.append(f"⚠️ <b>Слабые места:</b>\n{safe(event.llm_weak_spots)}")
+
+    red_text = _red_flags_text(resume.llm_red_flags or event.llm_red_flags)
+    if red_text:
+        sections.append(f"🚩 <b>Риски:</b>\n{safe(red_text)}")
+
+    questions = event.llm_interview_questions
+    if questions:
+        numbered = "\n".join(
+            f"{i}. {safe(q)}" for i, q in enumerate(questions, start=1) if q
+        )
+        if numbered:
+            sections.append(f"❓ <b>Вопросы на интервью:</b>\n{numbered}")
+
+    if event.llm_verdict_text:
+        sections.append(f"🧭 <b>Вердикт:</b>\n{safe(event.llm_verdict_text)}")
+
+    if not sections:
+        return (
+            f"{lines[0]}\n\n"
+            "Подробных данных по этому кандидату нет (обогащено старой версией)."
+        )
+
+    lines.append("\n\n".join(sections))
+    return "\n".join(lines).rstrip()

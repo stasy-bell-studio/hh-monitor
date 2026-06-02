@@ -12,7 +12,11 @@ from sqlalchemy import select, text
 
 from hh_monitor.db.enums import ScreeningStatus
 from hh_monitor.db.models import Event, NotificationSent, Resume, ScreeningReason, Search
-from hh_monitor.tg.cards import build_inline_keyboard
+from hh_monitor.tg.cards import (
+    build_detail_collapse_keyboard,
+    build_detail_html,
+    build_inline_keyboard,
+)
 from hh_monitor.tg.client import get_session_factory, is_admin
 from hh_monitor.tg.reasons import (
     CUSTOM_CODE,
@@ -120,6 +124,59 @@ async def handle_screen_callback(callback: CallbackQuery) -> None:
         )
     else:
         await callback.answer("⚠️ Уже заскринено", show_alert=True)
+
+
+# ── Callback: details:{event_id} ─────────────────────────────────────────────
+
+
+@router.callback_query(F.data.startswith("details:"))
+async def handle_details_callback(callback: CallbackQuery) -> None:
+    data = callback.data or ""
+    parts = data.split(":", 1)
+    if len(parts) != 2:
+        await callback.answer("Невалидная команда", show_alert=True)
+        return
+
+    try:
+        event_id = int(parts[1])
+    except ValueError:
+        await callback.answer("Невалидная команда", show_alert=True)
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = (
+            select(Event, Resume, Search)
+            .join(Resume, Resume.hh_resume_id == Event.hh_resume_id)
+            .join(Search, Search.id == Event.search_id)
+            .where(Event.id == event_id)
+        )
+        row = (await session.execute(stmt)).first()
+
+    if row is None:
+        await callback.answer("Кандидат не найден", show_alert=True)
+        return
+
+    event_obj, resume, search = row
+    detail_text = build_detail_html(resume, event_obj, search)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            detail_text,
+            parse_mode="HTML",
+            reply_markup=build_detail_collapse_keyboard(),
+        )
+    await callback.answer()
+
+
+# ── Callback: detail_collapse ────────────────────────────────────────────────
+
+
+@router.callback_query(F.data == "detail_collapse")
+async def handle_detail_collapse_callback(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.delete()
+    await callback.answer()
 
 
 # ── Callback: reason:{event_id}:{status}:{reason_code} ───────────────────────
