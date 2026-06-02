@@ -161,10 +161,10 @@ def build_card_html(
     if red_text:
         dossier.append(f"🚩 Риски: {_short(red_text)}")
     if event.llm_verdict_text:
-        dossier.append(f"Вывод: {_short(event.llm_verdict_text)}")
+        dossier.append(f"🧭 Вывод: {_short(event.llm_verdict_text)}")
 
     if not dossier and resume.llm_comment:
-        dossier.append(f"Вывод: {_short(resume.llm_comment)}")
+        dossier.append(f"🧭 Вывод: {_short(resume.llm_comment)}")
 
     if dossier:
         if lines and lines[-1] != "":

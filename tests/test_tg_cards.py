@@ -361,7 +361,7 @@ def test_card_conclusion_visible_when_verdict_мимо() -> None:
     ev = _event(llm_verdict_text="Не подходит совсем", llm_red_flags="нет лицензии")
     html = build_card_html(res, ev, _search(), _snap())
     assert "🚩 Риски: нет лицензии" in html
-    assert "Вывод: Не подходит совсем" in html
+    assert "🧭 Вывод: Не подходит совсем" in html
 
 
 def test_card_comment_shown_when_verdict_not_мимо() -> None:
@@ -385,7 +385,7 @@ def test_card_dossier_full_card_shows_four_blocks() -> None:
     assert "✅ Сильные стороны: 10 лет в рознице, рост выручки 30%." in html
     assert "⚠️ Слабые места: Нет опыта в логистике." in html
     assert "🚩 Риски: Частые смены работодателей." in html
-    assert "Вывод: Сильный кандидат, рекомендуем на собеседование." in html
+    assert "🧭 Вывод: Сильный кандидат, рекомендуем на собеседование." in html
 
 
 def test_card_dossier_omits_empty_blocks() -> None:
@@ -413,7 +413,7 @@ def test_card_dossier_legacy_event_falls_back_to_comment() -> None:
     res = _resume(llm_verdict="подходит", llm_comment="Старый комментарий", llm_red_flags=None)
     ev = _event()  # all dossier fields None
     html = build_card_html(res, ev, _search(), _snap())
-    assert "Вывод: Старый комментарий" in html
+    assert "🧭 Вывод: Старый комментарий" in html
     assert "Сильные стороны" not in html
 
 
