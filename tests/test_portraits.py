@@ -475,6 +475,18 @@ def test_portrait_forbidden_industries_default_empty() -> None:
     assert p.forbidden_industries == []
 
 
+def test_portrait_domain_governor_mode_default_cap() -> None:
+    """Portrait without domain_governor_mode field defaults to 'cap'."""
+    p = Portrait.model_validate(MINIMAL_DATA)
+    assert p.domain_governor_mode == "cap"
+
+
+def test_portrait_domain_governor_mode_off() -> None:
+    """Portrait with domain_governor_mode='off' validates and stores the value."""
+    p = Portrait.model_validate({**MINIMAL_DATA, "domain_governor_mode": "off"})
+    assert p.domain_governor_mode == "off"
+
+
 def test_portrait_new_etalon_weights_defaults() -> None:
     """New Lesnitskaya-v1 weight fields have correct defaults (sum of max=45)."""
     p = Portrait.model_validate(MINIMAL_DATA)

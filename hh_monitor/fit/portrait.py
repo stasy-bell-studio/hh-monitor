@@ -142,6 +142,9 @@ class Portrait(BaseModel):
     # CC-16b: "soft" (default) → insurance is NOT a hard gate; scored as criterion
     # 2g.  "hard" → hard gate 1h active; 2g disabled (mutually exclusive).
     insurance_experience_mode: Literal["soft", "hard"] = "soft"
+    # "cap" (default) → governor active: off-domain scores capped to floor.
+    # "off" → governor disabled: score_total returned unchanged regardless of insurance_domain.
+    domain_governor_mode: Literal["cap", "off"] = "cap"
     stop_words: list[str] = []
     must_have_keywords: list[str] = []
     nice_to_have_keywords: list[str] = []

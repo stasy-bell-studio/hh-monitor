@@ -50,9 +50,15 @@ _DOMAIN_SCORE_FLOOR = 20
 
 
 def _apply_domain_governor(
-    score_total: int, insurance_domain: str, *, floor: int = _DOMAIN_SCORE_FLOOR
+    score_total: int,
+    insurance_domain: str,
+    *,
+    mode: str = "cap",
+    floor: int = _DOMAIN_SCORE_FLOOR,
 ) -> int:
     """Cap score_total when LLM classifies candidate as off-domain ('partial' or 'no')."""
+    if mode == "off":
+        return score_total
     if insurance_domain in {"partial", "no"} and score_total > floor:
         return floor
     return score_total
@@ -296,7 +302,9 @@ async def _enrich_one(
     score_total = round(0.3 * fit_score_val + 0.7 * llm_score)
 
     _insurance_domain: str = dossier.get("insurance_domain") or "partial"
-    capped = _apply_domain_governor(score_total, _insurance_domain)
+    capped = _apply_domain_governor(
+        score_total, _insurance_domain, mode=portrait.domain_governor_mode
+    )
     if capped != score_total:
         log_ctx.info(
             "llm_enrich.domain_governor",

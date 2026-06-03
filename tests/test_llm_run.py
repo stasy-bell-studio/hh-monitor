@@ -1392,3 +1392,34 @@ def test_governor_no_op_at_floor() -> None:
 def test_governor_no_op_below_floor() -> None:
     """score below floor → returned unchanged (no negative clamping)."""
     assert _apply_domain_governor(15, "no") == 15
+
+
+# mode="off" — AC2: score returned unchanged for all domain values, above and below floor
+
+
+def test_governor_off_passes_yes() -> None:
+    assert _apply_domain_governor(61, "yes", mode="off") == 61
+
+
+def test_governor_off_passes_partial_above_floor() -> None:
+    assert _apply_domain_governor(61, "partial", mode="off") == 61
+
+
+def test_governor_off_passes_no_above_floor() -> None:
+    assert _apply_domain_governor(61, "no", mode="off") == 61
+
+
+def test_governor_off_passes_partial_below_floor() -> None:
+    assert _apply_domain_governor(15, "partial", mode="off") == 15
+
+
+def test_governor_off_passes_no_below_floor() -> None:
+    assert _apply_domain_governor(15, "no", mode="off") == 15
+
+
+# mode="cap" explicit — AC3: identical to calling without mode kwarg
+
+
+def test_governor_cap_explicit_matches_default() -> None:
+    assert _apply_domain_governor(61, "partial", mode="cap") == 20
+    assert _apply_domain_governor(61, "yes", mode="cap") == 61
