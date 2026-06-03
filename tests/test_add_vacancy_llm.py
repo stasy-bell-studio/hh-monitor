@@ -1,7 +1,8 @@
-"""Tests for hh_monitor.tg.add_vacancy.llm (AC15, AC16, AC17, AC8)."""
+"""Tests for hh_monitor.tg.add_vacancy.llm (AC15, AC16, AC17, AC8, Bug A/C)."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -235,3 +236,50 @@ async def test_null_nested_region_fields_ok() -> None:
     assert portrait.filters.regions.primary == ["Москва"]
     assert portrait.filters.regions.adjacent == []
     assert portrait.filters.regions.stop == []
+
+
+# ── Bug A / Bug C fixes ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_age_range_in_filters_stripped() -> None:
+    """AC2: LLM-supplied filters.age_range is stripped; portrait.filters.age_range is None."""
+    payload = json.dumps({"filters": {"age_range": [25, 40], "salary_range": [100000, 200000]}})
+    with _patch_llm({"choices": [{"message": {"content": payload}}], "usage": {}}):
+        result = await parse_to_portrait_dict("нужен кандидат 25-40 лет", "Роль")
+    portrait = Portrait.model_validate(result)
+    assert portrait.filters.age_range is None
+    assert portrait.filters.salary_range == (100000, 200000)
+
+
+@pytest.mark.asyncio
+async def test_target_companies_merged_into_bonus() -> None:
+    """AC4: target_companies_override merged into bonus_companies (deduped, order-preserved)."""
+    payload = json.dumps(
+        {
+            "bonus_companies": ["Согаз", "Ингосстрах"],
+            "target_companies_override": ["Росгосстрах", "Согаз"],  # "Согаз" is a duplicate
+        }
+    )
+    with _patch_llm({"choices": [{"message": {"content": payload}}], "usage": {}}):
+        result = await parse_to_portrait_dict("текст", "Роль")
+    portrait = Portrait.model_validate(result)
+    assert portrait.bonus_companies == ["Согаз", "Ингосстрах", "Росгосстрах"]
+    assert portrait.target_companies_override == []
+
+
+@pytest.mark.asyncio
+async def test_age_and_donors_combined() -> None:
+    """AC5: age mention → filters.age_range is None; donor companies reach bonus_companies."""
+    payload = json.dumps(
+        {
+            "filters": {"age_range": [30, 45]},
+            "target_companies_override": ["Росгосстрах", "Альфастрахование"],
+        }
+    )
+    with _patch_llm({"choices": [{"message": {"content": payload}}], "usage": {}}):
+        result = await parse_to_portrait_dict("кандидат 30-45 лет из Росгосстраха", "Роль")
+    portrait = Portrait.model_validate(result)
+    assert portrait.filters.age_range is None
+    assert "Росгосстрах" in portrait.bonus_companies
+    assert "Альфастрахование" in portrait.bonus_companies

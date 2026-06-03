@@ -53,7 +53,7 @@ _ALLOWED_KEYS: frozenset[str] = frozenset(
 
 # Nested filters keys the LLM may populate (others dropped before validation).
 _ALLOWED_FILTER_KEYS: frozenset[str] = frozenset(
-    {"regions", "salary_range", "age_range", "education_level"}
+    {"regions", "salary_range", "education_level"}
 )
 
 _PARSE_PROMPT = """\
@@ -68,7 +68,6 @@ JSON-объект со следующими допустимыми ключам�
 - filters: object с под-ключами:
     - regions: object { primary: array[string], adjacent: array[string], stop: array[string] }
     - salary_range: [min_rub, max_rub] или null
-    - age_range: [min, max] или null
 - stop_words: array[string] — слова, при наличии которых кандидат отсекается
 - must_have_keywords: array[string] — обязательные требования
 - nice_to_have_keywords: array[string] — желательные требования
@@ -80,7 +79,8 @@ JSON-объект со следующими допустимыми ключам�
 - higher_education_required: bool
 - preferred_education_fields: array[string]
 - citizenship: string или null
-- bonus_companies: array[string] — компании-доноры, дающие плюс
+- bonus_companies: array[string] — все компании-доноры, чьи сотрудники получают \
+плюс при оценке (включай все, из которых HR хочет видеть кандидатов)
 - forbidden_industries: array[string] — индустрии-стоп на последнем месте работы
 - resume_freshness_days: int — давность резюме в днях. Если HR явно \
 указал срок («не старше 14 дней», «свежие», «активные за месяц») — \
@@ -93,10 +93,6 @@ min_insurance_experience_months (опыт именно в страховании
 под эту вакансию (например: ["Капитал Лайф"]). Эти компании \
 ДОБАВЯТСЯ к глобальному стоп-листу, не заменят его. Если HR не \
 называл конкретных стоп-компаний — опусти.
-- target_companies_override: array[string] — компании-доноры, особенно \
-ценимые для этой вакансии (например: ["Росгосстрах", "Согаз", \
-"Ингосстрах"]). Кандидаты оттуда получают плюс. Если HR не называл \
-— опусти.
 
 НЕ возвращай ключи: weights, search_params, critic_lens, position_code, position_name, \
 title_keywords, experience_keywords, \
@@ -172,6 +168,18 @@ async def parse_to_portrait_dict(raw_text: str, position_name: str) -> dict[str,
         raise ValueError(f"LLM portrait is not a JSON object: {type(parsed).__name__}")
 
     cleaned = _strip_forbidden(parsed)
+    # Merge target_companies_override → bonus_companies (Bug C fix).
+    # _ALLOWED_KEYS keeps target_companies_override so _strip_forbidden passes it through;
+    # we consume + remove it here before validation so Portrait never sees it populated.
+    tco: list[str] = cleaned.pop("target_companies_override", None) or []
+    if tco:
+        existing: list[str] = list(cleaned.get("bonus_companies", []))
+        seen = {c.lower() for c in existing}
+        for c in tco:
+            if c.lower() not in seen:
+                existing.append(c)
+                seen.add(c.lower())
+        cleaned["bonus_companies"] = existing
     cleaned["position_code"] = slugify(position_name)
     cleaned["position_name"] = position_name
 
