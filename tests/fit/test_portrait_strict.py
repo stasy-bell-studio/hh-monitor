@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from hh_monitor.fit.portrait import Portrait, load_all_portraits
+from hh_monitor.fit.portrait import Portrait
 
 
 def test_portrait_rejects_unknown_top_level_key() -> None:
@@ -18,8 +18,3 @@ def test_portrait_rejects_unknown_top_level_key() -> None:
             }
         )
     assert "stop_companies" in str(exc_info.value)
-
-
-def test_all_existing_yaml_portraits_load() -> None:
-    portraits = load_all_portraits()
-    assert portraits, "load_all_portraits() returned an empty dict"

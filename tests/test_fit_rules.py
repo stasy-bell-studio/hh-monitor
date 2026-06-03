@@ -80,10 +80,16 @@ def _portrait(
 
 
 def _etalon_portrait() -> Portrait:
-    """Portrait matching branch_director.yaml defaults (for integration tests)."""
-    from hh_monitor.fit.portrait import load_all_portraits
-
-    return load_all_portraits()["branch_director"]
+    """Portrait for integration scoring tests; mirrors branch_director key values."""
+    return _portrait(
+        age_range=(25, 45),
+        primary_regions=["Санкт-Петербург", "Москва"],
+        min_total_months=60,
+        min_insurance_experience_months=36,
+        insurance_experience_mode="soft",
+        higher_education_required=True,
+        bonus_companies=["ВСК", "Ресо-Гарантия", "Альфа-Страхование", "Ингосстрах"],
+    )
 
 
 def _resume(extra: dict[str, Any] | None = None) -> dict[str, Any]:

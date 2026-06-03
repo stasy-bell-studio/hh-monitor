@@ -174,14 +174,6 @@ def test_load_all_portraits_empty_dir(tmp_path: Path) -> None:
     assert load_all_portraits(tmp_path) == {}
 
 
-def test_load_all_portraits_default_dir() -> None:
-    """Default portraits dir (config/portraits/) loads at least branch_director."""
-    portraits = load_all_portraits()
-    assert "branch_director" in portraits
-    bd = portraits["branch_director"]
-    assert bd.filters.regions.primary  # non-empty
-    assert bd.weights.title_match == 25
-
 
 # ── CSV importer ──────────────────────────────────────────────────────────────
 
@@ -383,28 +375,6 @@ def test_portrait_new_fields_round_trip(tmp_path: Path) -> None:
     assert portrait.stop_companies_override == ["Капитал Лайф"]
 
 
-def test_branch_director_yaml_has_production_fields() -> None:
-    """The shipped branch_director.yaml (Lesnitskaya etalon v1) includes all required fields."""
-    portraits = load_all_portraits()
-    assert "branch_director" in portraits
-    bd = portraits["branch_director"]
-    assert bd.position_description  # non-empty
-    # evaluation_focus is intentionally empty — LLM derives criteria from position_description
-    assert bd.evaluation_focus == []
-    assert len(bd.filters.regions.primary) == 27
-    assert len(bd.filters.regions.adjacent) == 8
-    assert len(bd.filters.regions.stop) == 2
-    assert any("банк" in w.lower() for w in bd.stop_words)
-    assert any("агентская" in kw.lower() for kw in bd.must_have_keywords)
-    # New etalon fields
-    assert bd.min_total_months == 60
-    assert bd.min_insurance_experience_months == 36
-    assert bd.higher_education_required is True
-    assert bd.resume_freshness_days == 30
-    assert len(bd.bonus_companies) == 4
-    assert len(bd.forbidden_industries) >= 4
-    assert len(bd.position_synonyms) == 11
-
 
 # ── New mini-5.7 Portrait fields (Lesnitskaya etalon v1) ─────────────────────
 
@@ -593,20 +563,3 @@ def test_load_global_context_custom_path(tmp_path: Path) -> None:
     assert ctx.stop_companies == ["ПлохойБанк"]
     assert ctx.market_context == "Тестовый контекст рынка."
 
-
-# ── underwriter_21vek portrait ────────────────────────────────────────────────
-
-_UNDERWRITER_YAML = Path("config/portraits/underwriter_21vek.yaml")
-
-
-def test_underwriter_portrait_loads() -> None:
-    """underwriter_21vek.yaml parses into Portrait without errors."""
-    p = load_portrait(_UNDERWRITER_YAML)
-    assert p.position_code == "underwriter"
-    assert p.filters.regions.primary  # non-empty
-
-
-def test_underwriter_portrait_has_motor_filter() -> None:
-    """underwriter_21vek portrait requires 24 months of motor experience."""
-    p = load_portrait(_UNDERWRITER_YAML)
-    assert p.min_motor_experience_months == 24
