@@ -11,13 +11,15 @@ Lookup priority per name (after normalisation):
   3. Exact match in RU_AREAS (all 88 RF federal subjects from HH /areas/113).
   4. Stripped-type-word alias (e.g. "нижегородская" → нижегородская область).
   5. Spelling alias (спб/питер → санкт-петербург).
+  6. Exact match in RU_CITIES (any-depth descendant) → parent subject id.
+  7. Exact match in RU_AMBIGUOUS_CITIES → treated as unknown (not expanded).
 """
 
 from __future__ import annotations
 
 import re
 
-from hh_monitor.regions.ru_areas import RU_AREAS
+from hh_monitor.regions.ru_areas import RU_AMBIGUOUS_CITIES, RU_AREAS, RU_CITIES
 
 PRIMARY_AREA_IDS_21VEK: tuple[int, ...] = (
     1,
@@ -90,6 +92,11 @@ _SPELLING_ALIASES: dict[str, int] = {
 _TRAILING_PARENS_RE = re.compile(r"\s*\(\d+\)$")
 
 
+def _normalize_region(name: str) -> str:
+    """Canonical normalisation for region-name lookups and key generation."""
+    return _TRAILING_PARENS_RE.sub("", name.strip().lower())
+
+
 def _build_stripped_aliases() -> dict[str, int]:
     """Short-form aliases derived from RU_AREAS by removing type words.
 
@@ -122,7 +129,7 @@ def resolve_region_names(
     unknown: list[str] = []
 
     for name in names:
-        norm = _TRAILING_PARENS_RE.sub("", name.strip().lower())
+        norm = _normalize_region(name)
 
         # 1. 21Vek contains-based detection — catches any paraphrase.
         if "21 век" in norm or "21vek" in norm or "21 vek" in norm:
@@ -151,6 +158,17 @@ def resolve_region_names(
         area_id = _SPELLING_ALIASES.get(norm)
         if area_id is not None:
             ids.append(area_id)
+            continue
+
+        # 6. City name → parent federal subject.
+        area_id = RU_CITIES.get(norm)
+        if area_id is not None:
+            ids.append(area_id)
+            continue
+
+        # 7. Ambiguous city — present under >1 subject; do not expand.
+        if norm in RU_AMBIGUOUS_CITIES:
+            unknown.append(name)
             continue
 
         unknown.append(name)

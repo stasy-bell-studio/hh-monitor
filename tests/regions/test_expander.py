@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import structlog.testing
 
 from hh_monitor.regions.expander import PRIMARY_AREA_IDS_21VEK, resolve_region_names
@@ -179,6 +180,77 @@ def test_primary_area_ids_traceable_in_ru_areas() -> None:
     _KNOWN_CITY_IDS = {130}
     missing = set(PRIMARY_AREA_IDS_21VEK) - set(RU_AREAS.values()) - _KNOWN_CITY_IDS
     assert not missing, f"IDs in PRIMARY_AREA_IDS_21VEK not found in RU_AREAS: {missing}"
+
+
+# ── City resolution (RU_CITIES) ───────────────────────────────────────────────────
+
+
+def test_city_resolves_to_parent_subject(monkeypatch: pytest.MonkeyPatch) -> None:
+    import hh_monitor.regions.expander as exp
+    import hh_monitor.regions.ru_areas as ra
+
+    monkeypatch.setattr(ra, "RU_CITIES", {"екатеринбург": 1261})
+    monkeypatch.setattr(exp, "RU_CITIES", {"екатеринбург": 1261})
+    ids, unknown = resolve_region_names(["Екатеринбург"])
+    assert ids == [1261]
+    assert unknown == []
+
+
+def test_ambiguous_city_returned_as_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    import hh_monitor.regions.expander as exp
+    import hh_monitor.regions.ru_areas as ra
+
+    monkeypatch.setattr(ra, "RU_AMBIGUOUS_CITIES", {"спорный": (1, 2)})
+    monkeypatch.setattr(exp, "RU_AMBIGUOUS_CITIES", {"спорный": (1, 2)})
+    ids, unknown = resolve_region_names(["Спорный"])
+    assert ids == []
+    assert unknown == ["Спорный"]
+
+
+def test_mixed_subject_and_city_deduplicated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Subject 'Свердловская область' (→1261) + city 'Екатеринбург' (→1261 via RU_CITIES)
+    must deduplicate to a single id."""
+    import hh_monitor.regions.expander as exp
+    import hh_monitor.regions.ru_areas as ra
+
+    monkeypatch.setattr(ra, "RU_CITIES", {"екатеринбург": 1261})
+    monkeypatch.setattr(exp, "RU_CITIES", {"екатеринбург": 1261})
+    ids, unknown = resolve_region_names(["Свердловская область", "Екатеринбург"])
+    assert ids == [1261]
+    assert unknown == []
+
+
+def test_city_normalization_symmetric(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RU_CITIES key 'курск' (stripped from 'Курск (42)  ') must resolve input 'Курск'."""
+    import hh_monitor.regions.expander as exp
+    import hh_monitor.regions.ru_areas as ra
+
+    monkeypatch.setattr(ra, "RU_CITIES", {"курск": 1880})
+    monkeypatch.setattr(exp, "RU_CITIES", {"курск": 1880})
+    ids, unknown = resolve_region_names(["Курск"])
+    assert ids == [1880]
+    assert unknown == []
+
+
+# ── AC1: live data — cities resolve to correct parent subjects ────────────────────
+
+
+def test_ac1_cities_resolve_live() -> None:
+    """Екатеринбург→1261, Тамбов→1905, Краснодар→1438, Оренбург→1563."""
+    cases = ["Екатеринбург", "Тамбов", "Краснодар", "Оренбург"]
+    ids, unknown = resolve_region_names(cases)
+    assert unknown == []
+    assert 1261 in ids  # Свердловская область
+    assert 1905 in ids  # Тамбовская область
+    assert 1438 in ids  # Краснодарский край
+    assert 1563 in ids  # Оренбургская область
+
+
+def test_subject_lookup_unaffected_by_ru_cities() -> None:
+    """Existing subject 'Москва' must still resolve to 1 via RU_AREAS, not RU_CITIES."""
+    ids, unknown = resolve_region_names(["Москва"])
+    assert ids == [1]
+    assert unknown == []
 
 
 def test_all_21vek_ids_resolve_by_name() -> None:
