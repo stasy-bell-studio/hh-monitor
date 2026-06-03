@@ -40,37 +40,8 @@ from hh_monitor.fit.portrait import load_portrait  # noqa: E402
 from hh_monitor.parser.run import build_search_params  # noqa: E402
 from hh_monitor.regions.expander import PRIMARY_AREA_IDS_21VEK  # noqa: E402
 
-# ── 27 area IDs for branch_director_21vek ────────────────────────────────────
-#
-# Primary coverage (from branch_director.yaml):
-#   1    Москва
-#   2    Санкт-Петербург
-#   145  Краснодарский край
-#   1020 Ростовская область
-#   1103 Самарская область
-#   1090 Нижегородская область
-#   1828 Воронежская область
-#   1077 Республика Татарстан (Казань)
-#   1438 Свердловская область (Екатеринбург)
-#   2114 Республика Крым (Симферополь)
-#   130  Севастополь            ← оба ID для Севастополя (вложен под Крым И самостоятельно)
-#   1530 Новосибирская область
-#   1481 Омская область
-#   1754 Тюменская область
-#   1563 Иркутская область
-#   1187 Саратовская область
-#   1192 Волгоградская область
-#   1317 Красноярский край
-#   1905 Пермский край
-#   1575 Кемеровская область
-#   1556 Алтайский край
-#   1261 Ставропольский край
-#   1342 Оренбургская область
-# New territories (exist на api.hh.ru, могут потребовать RF VPN):
-#   2209 Херсонская область
-#   2155 Запорожская область
-#   2173 ЛНР
-#   2134 ДНР
+# Source of truth for IDs and region names: PRIMARY_AREA_IDS_21VEK in
+# hh_monitor/regions/expander.py (verified against live HH API).
 AREA_IDS: list[int] = list(PRIMARY_AREA_IDS_21VEK)
 
 _PORTRAIT_YAML = _ROOT / "config" / "portraits" / "branch_director.yaml"

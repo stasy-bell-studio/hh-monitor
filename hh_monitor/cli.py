@@ -1502,12 +1502,15 @@ def tg_send_pending(
 
     async def _run() -> None:
         bot = make_bot()
-        async with async_session_factory() as session:
-            stats = await send_pending_cards(session, bot, limit=limit)
-        typer.echo(
-            f"sent={stats['sent']} skipped_threshold={stats['skipped_threshold']} "
-            f"skipped_duplicate={stats['skipped_duplicate']} errors={stats['errors']}"
-        )
+        try:
+            async with async_session_factory() as session:
+                stats = await send_pending_cards(session, bot, limit=limit)
+            typer.echo(
+                f"sent={stats['sent']} skipped_threshold={stats['skipped_threshold']} "
+                f"skipped_duplicate={stats['skipped_duplicate']} errors={stats['errors']}"
+            )
+        finally:
+            await bot.session.close()
 
     _asyncio.run(_run())
 
@@ -1525,9 +1528,12 @@ def digest_weekly() -> None:
 
     async def _run() -> None:
         bot = make_bot()
-        async with async_session_factory() as session:
-            await run_weekly_digest(session, bot)
-        typer.echo("Weekly digest sent.")
+        try:
+            async with async_session_factory() as session:
+                await run_weekly_digest(session, bot)
+            typer.echo("Weekly digest sent.")
+        finally:
+            await bot.session.close()
 
     _asyncio.run(_run())
 
