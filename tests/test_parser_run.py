@@ -527,6 +527,149 @@ async def test_parser_skips_inactive_search(db_session: AsyncSession) -> None:
         await run_parser(db_session, _client(), search_id=search_id, max_pages=1, _sleep=0)
 
 
+# ── AC2: prefetch skip — N items, M known+unchanged → N−M get_resume calls ──
+
+
+@pytest.mark.asyncio
+async def test_prefetch_skip_known_unchanged(db_session: AsyncSession) -> None:
+    """5 items, 3 known with unchanged updated_at → exactly 2 get_resume calls."""
+    search_id = await _add_search(db_session)
+
+    ids = ["r001", "r002", "r003", "r004", "r005"]
+    unchanged_ids = {"r003", "r004", "r005"}
+    stale_ts = datetime(2026, 1, 1, tzinfo=UTC)
+
+    # Pre-seed the 3 "known unchanged" resumes.
+    for rid in unchanged_ids:
+        db_session.add(Resume(hh_resume_id=rid, hh_updated_at=stale_ts))
+    await db_session.flush()
+
+    def _single_page(request: Request) -> Response:
+        return Response(
+            200,
+            json={
+                "items": [
+                    {"id": rid, "updated_at": "2026-01-01T00:00:00+00:00"} for rid in ids
+                ],
+                "found": 5,
+                "pages": 1,
+                "page": 0,
+                "per_page": 50,
+            },
+        )
+
+    def _resume_strict(request: Request) -> Response:
+        rid = request.url.path.rstrip("/").split("/")[-1]
+        assert rid not in unchanged_ids, f"get_resume called for unchanged resume {rid}"
+        return Response(200, json=_make_resume_payload(rid))
+
+    async with respx.mock:
+        respx.get(f"{_BASE}/resumes").mock(side_effect=_single_page)
+        respx.get(_RESUME_URL_RE).mock(side_effect=_resume_strict)
+
+        result = await run_parser(db_session, _client(), search_id, max_pages=1, _sleep=0)
+
+    assert result["snapshots_inserted"] == 2
+    assert result["prefetch_skipped"] == 3
+    assert result["errors"] == 0
+
+    pr = (
+        await db_session.execute(select(ParserRun).where(ParserRun.id == result["parser_run_id"]))
+    ).scalar_one()
+    assert pr.prefetch_skipped == 3
+    assert pr.resumes_viewed == 2
+
+
+# ── AC3: ordering — new/updated resumes are processed before known-unchanged ──
+
+
+@pytest.mark.asyncio
+async def test_ordering_new_before_unchanged(db_session: AsyncSession) -> None:
+    """Items come in order [r_old, r_new]; after sort r_new is processed first."""
+    search_id = await _add_search(db_session)
+
+    r_old = "r100"
+    r_new = "r101"
+    call_order: list[str] = []
+
+    # Pre-seed r_old as known-unchanged.
+    db_session.add(Resume(hh_resume_id=r_old, hh_updated_at=datetime(2026, 1, 1, tzinfo=UTC)))
+    await db_session.flush()
+
+    def _single_page(request: Request) -> Response:
+        return Response(
+            200,
+            json={
+                "items": [
+                    # r_old first in original list, unchanged timestamp
+                    {"id": r_old, "updated_at": "2026-01-01T00:00:00+00:00"},
+                    # r_new second, not in DB → will be fetched
+                    {"id": r_new, "updated_at": "2026-06-01T00:00:00+00:00"},
+                ],
+                "found": 2,
+                "pages": 1,
+                "page": 0,
+                "per_page": 50,
+            },
+        )
+
+    def _resume_tracking(request: Request) -> Response:
+        rid = request.url.path.rstrip("/").split("/")[-1]
+        call_order.append(rid)
+        return Response(200, json=_make_resume_payload(rid))
+
+    async with respx.mock:
+        respx.get(f"{_BASE}/resumes").mock(side_effect=_single_page)
+        respx.get(re.compile(rf"{_BASE}/resumes/r1\d{{2}}")).mock(side_effect=_resume_tracking)
+
+        result = await run_parser(db_session, _client(), search_id, max_pages=1, _sleep=0)
+
+    # r_new was the only item actually fetched.
+    assert call_order == [r_new]
+    assert result["snapshots_inserted"] == 1
+    assert result["prefetch_skipped"] == 1
+    assert result["errors"] == 0
+
+
+# ── AC4: hh_updated_at persisted after a successful fetch ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_hh_updated_at_persisted_after_fetch(db_session: AsyncSession) -> None:
+    """After a successful get_resume, resumes.hh_updated_at equals the payload updated_at."""
+    search_id = await _add_search(db_session)
+
+    rid = "r200"
+    expected_ts = datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
+
+    def _single_page(request: Request) -> Response:
+        return Response(
+            200,
+            json={
+                "items": [{"id": rid, "updated_at": "2026-05-15T12:00:00+00:00"}],
+                "found": 1,
+                "pages": 1,
+                "page": 0,
+                "per_page": 50,
+            },
+        )
+
+    def _resume_with_ts(request: Request) -> Response:
+        payload = _make_resume_payload(rid)
+        payload["updated_at"] = "2026-05-15T12:00:00+00:00"
+        return Response(200, json=payload)
+
+    async with respx.mock:
+        respx.get(f"{_BASE}/resumes").mock(side_effect=_single_page)
+        respx.get(re.compile(rf"{_BASE}/resumes/r2\d{{2}}")).mock(side_effect=_resume_with_ts)
+
+        await run_parser(db_session, _client(), search_id, max_pages=1, _sleep=0)
+
+    resume = await db_session.get(Resume, rid)
+    assert resume is not None
+    assert resume.hh_updated_at == expected_ts
+
+
 @pytest.mark.asyncio
 async def test_parser_skips_archived_search(db_session: AsyncSession) -> None:
     """run_parser raises SearchNotFoundError when search.archived_at is set."""

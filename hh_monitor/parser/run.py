@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 from contextlib import suppress
+from datetime import datetime
 from typing import Any
 
 import structlog
@@ -123,14 +124,45 @@ def _hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-async def _upsert_resume(session: AsyncSession, resume_id: str, search_id: int) -> None:
-    """INSERT or UPDATE last_seen_at and last_seen_search_id for a resume master row."""
+def _parse_hh_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value)
+
+
+async def _batch_lookup_hh_updated_at(
+    session: AsyncSession,
+    resume_ids: list[str],
+) -> dict[str, datetime | None]:
+    """Return {hh_resume_id: hh_updated_at} for all known resumes in resume_ids."""
+    if not resume_ids:
+        return {}
+    result = await session.execute(
+        select(Resume.hh_resume_id, Resume.hh_updated_at)
+        .where(Resume.hh_resume_id.in_(resume_ids))
+    )
+    return {row.hh_resume_id: row.hh_updated_at for row in result}
+
+
+async def _upsert_resume(
+    session: AsyncSession,
+    resume_id: str,
+    search_id: int,
+    hh_updated_at: datetime | None = None,
+) -> None:
+    """INSERT or UPDATE last_seen_at, last_seen_search_id, and optionally hh_updated_at."""
+    update_set: dict[str, Any] = {
+        "last_seen_at": func.now(),
+        "last_seen_search_id": search_id,
+    }
+    if hh_updated_at is not None:
+        update_set["hh_updated_at"] = hh_updated_at
     stmt = (
         pg_insert(Resume)
-        .values(hh_resume_id=resume_id, last_seen_search_id=search_id)
+        .values(hh_resume_id=resume_id, last_seen_search_id=search_id, hh_updated_at=hh_updated_at)
         .on_conflict_do_update(
             index_elements=["hh_resume_id"],
-            set_={"last_seen_at": func.now(), "last_seen_search_id": search_id},
+            set_=update_set,
         )
     )
     await session.execute(stmt)
@@ -215,6 +247,7 @@ async def run_parser(
     resumes_seen = 0
     snapshots_inserted = 0
     snapshots_skipped = 0
+    prefetch_skipped = 0
     errors = 0
     resume_ids: list[str] = []
     abort_exc: BaseException | None = None
@@ -239,8 +272,38 @@ async def run_parser(
             resumes_seen += len(items)
             log.info("parser.page_fetched", page=page, items=len(items), total_pages=total_pages)
 
+            # Batch-fetch stored hh_updated_at for all resumes on this page.
+            page_ids = [str(i["id"]) for i in items]
+            known_ts = await _batch_lookup_hh_updated_at(session, page_ids)
+
+            # Sort: new/updated resumes first so quota is spent on them before
+            # known-unchanged ones (which will be skipped anyway).
+            def _freshness_key(
+                item: dict[str, Any],
+                _kts: dict[str, datetime | None] = known_ts,
+            ) -> int:
+                rid = str(item["id"])
+                item_ts = _parse_hh_ts(item.get("updated_at"))
+                db_ts = _kts.get(rid)
+                if db_ts is None or item_ts is None or item_ts > db_ts:
+                    return 0  # fetch first
+                return 1  # known-unchanged → skip
+
+            items = sorted(items, key=_freshness_key)
+
             for item in items:
                 resume_id: str = str(item["id"])
+                item_ts = _parse_hh_ts(item.get("updated_at"))
+                db_ts = known_ts.get(resume_id)
+
+                # Pre-fetch skip: if the resume is known and hh.ru reports no
+                # change since our last fetch, skip the metered GET entirely.
+                if db_ts is not None and item_ts is not None and item_ts <= db_ts:
+                    await _upsert_resume(session, resume_id, search_id)
+                    prefetch_skipped += 1
+                    log.info("parser.prefetch_skip", resume_id=resume_id)
+                    continue
+
                 if resume_id not in resume_ids:
                     resume_ids.append(resume_id)
 
@@ -279,8 +342,13 @@ async def run_parser(
                     errors += 1
                     continue
 
+                # Persist hh_updated_at: prefer the full payload timestamp,
+                # fall back to the list item timestamp.
+                payload_ts = _parse_hh_ts(payload.get("updated_at"))
+                effective_ts = payload_ts or item_ts
+
                 # Upsert resume master row (tracks which search last saw this resume)
-                await _upsert_resume(session, resume_id, search_id)
+                await _upsert_resume(session, resume_id, search_id, hh_updated_at=effective_ts)
 
                 # Dedup: skip if this (resume_id, content_hash) already exists
                 # anywhere in the table — not just in the most recent snapshot.
@@ -330,6 +398,7 @@ async def run_parser(
                 resumes_viewed=snapshots_inserted + errors,
                 snapshots_inserted=snapshots_inserted,
                 snapshots_skipped=snapshots_skipped,
+                prefetch_skipped=prefetch_skipped,
             )
         )
         await session.commit()
@@ -341,6 +410,7 @@ async def run_parser(
             resumes_seen=resumes_seen,
             snapshots_inserted=snapshots_inserted,
             snapshots_skipped=snapshots_skipped,
+            prefetch_skipped=prefetch_skipped,
             errors=errors,
         )
 
@@ -365,6 +435,7 @@ async def run_parser(
                 resumes_viewed=snapshots_inserted + errors,
                 snapshots_inserted=snapshots_inserted,
                 snapshots_skipped=snapshots_skipped,
+                prefetch_skipped=prefetch_skipped,
             )
         )
         await session.commit()
@@ -384,6 +455,7 @@ async def run_parser(
                 resumes_viewed=snapshots_inserted + errors,
                 snapshots_inserted=snapshots_inserted,
                 snapshots_skipped=snapshots_skipped,
+                prefetch_skipped=prefetch_skipped,
                 error=repr(e)[:500],
             )
         )
@@ -407,6 +479,7 @@ async def run_parser(
         "resumes_seen": resumes_seen,
         "snapshots_inserted": snapshots_inserted,
         "snapshots_skipped_dedup": snapshots_skipped,
+        "prefetch_skipped": prefetch_skipped,
         "errors": errors,
         "parser_run_id": run_id,
         "resume_ids": resume_ids,
