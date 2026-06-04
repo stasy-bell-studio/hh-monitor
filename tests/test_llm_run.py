@@ -185,7 +185,7 @@ async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPat
     await db_session.refresh(resume)
     assert resume.llm_score is not None  # derived from "Рекомендую" → 80
     assert resume.llm_verdict == "подходит"  # derived class
-    assert resume.score_total == round(0.3 * 70 + 0.7 * 80)  # = 77
+    assert resume.score_total == round(0.1 * 70 + 0.9 * 80)  # = 79
 
 
 @pytest.mark.asyncio
@@ -403,7 +403,7 @@ async def test_run_no_portrait_raises(db_session: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """score_total = round(0.3 * fit_score + 0.7 * llm_score)."""
+    """score_total = round(0.1 * fit_score + 0.9 * llm_score)."""
     monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=60)
     portraits = {search.position_code: _portrait(search.position_code)}
@@ -423,9 +423,74 @@ async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPa
         )
 
     await db_session.refresh(resume)
-    # fit_score=60, llm_score=50 (спорно) → score_total = round(0.3*60 + 0.7*50) = 53
-    expected = round(0.3 * 60 + 0.7 * 50)
+    # fit_score=60, llm_score=50 (спорно) → score_total = round(0.1*60 + 0.9*50) = 51
+    expected = round(0.1 * 60 + 0.9 * 50)
     assert resume.score_total == expected
+
+
+# ── Рубеж 4: gate removal + dominant LLM blend ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_low_fit_high_llm_reaches_threshold(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fit_score=35 (below old gate of 40) + llm_score=75 → score_total >= 70, not skipped."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, fit_score=35)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    import json as _json
+
+    llm_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": _json.dumps(
+                        {
+                            "real_role": "Директор филиала страховой компании",
+                            "facts_confirmed": "Работал в СОГАЗ 2019–2023.",
+                            "weak_spots": "P&L не подтверждён — уточнить на интервью.",
+                            "red_flags": "",
+                            "interview_questions": ["Каков был объём премий?"],
+                            "verdict": "Нужно интервью с проверкой.",
+                            "score": 75,
+                            "verdict_class": "спорно",
+                            "insurance_domain": "yes",
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 150},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=llm_response,
+    ):
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=1,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+
+    assert result["enriched"] == 1, "resume must be enriched, not skipped by fit gate"
+    await db_session.refresh(resume)
+    assert resume.score_total is not None
+    # round(0.1*35 + 0.9*75) = round(3.5 + 67.5) = 71
+    assert resume.score_total >= 70, f"score_total={resume.score_total} must be >= 70"
+
+
+def test_new_blend_higher_than_old_for_low_fit_high_llm() -> None:
+    """0.1/0.9 blend gives a higher score than 0.3/0.7 when LLM score > fit score."""
+    fit, llm = 30, 75
+    old_score = round(0.3 * fit + 0.7 * llm)
+    new_score = round(0.1 * fit + 0.9 * llm)
+    assert new_score > old_score, f"new={new_score} must exceed old={old_score}"
 
 
 # ── Commit 9.1: hard_reject_reasons persist ───────────────────────────────────

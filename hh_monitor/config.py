@@ -26,16 +26,16 @@ class Settings(BaseSettings):
     openrouter_http_referer: str = "https://github.com/Sam44ik/hh-monitor"
     openrouter_title: str = "hh-monitor"
 
-    llm_prompt_version: str = "v4"
-    # Candidates with fit_score below this threshold are not sent to LLM
-    score_fit_min_for_llm: int = Field(default=40, ge=0, le=100)
+    llm_prompt_version: str = "v5"
+    # Candidates with fit_score below this threshold are not sent to LLM (0 = all pass)
+    score_fit_min_for_llm: int = Field(default=0, ge=0, le=100)
 
     # Telegram — bot credentials and targeting
     telegram_bot_token: str | None = None
     telegram_hr_group_id: int = 0  # negative int for supergroup, e.g. -1001234567890
     # comma-separated Telegram user IDs with admin privileges (e.g. "123456,789012")
     telegram_admin_user_ids: str = ""
-    telegram_score_threshold: int = Field(default=60, ge=0, le=100)
+    telegram_score_threshold: int = Field(default=70, ge=0, le=100)
 
     # Topic IDs for supergroup routing (0 = don't use topics)
     telegram_cards_topic_id: int = 0

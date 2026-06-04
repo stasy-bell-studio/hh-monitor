@@ -94,7 +94,7 @@ def _make_bot(message_id: int = 999) -> AsyncMock:
 @pytest.mark.asyncio
 async def test_get_current_threshold_default(db_session: AsyncSession) -> None:
     threshold = await get_current_threshold(db_session)
-    assert threshold == 60  # settings default
+    assert threshold == 70  # settings default
 
 
 @pytest.mark.asyncio
@@ -167,7 +167,7 @@ bot = _make_bot()  # module-level bot mock used in idempotency test
 
 @pytest.mark.asyncio
 async def test_send_new_candidate_card_under_threshold(db_session: AsyncSession) -> None:
-    event_id = await _seed(db_session, score_total=30)  # below threshold 60
+    event_id = await _seed(db_session, score_total=30)  # below threshold 70
 
     with patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send:
         result = await send_new_candidate_card(db_session, _make_bot(), event_id)
@@ -452,3 +452,23 @@ async def test_send_pending_cards_skips_blocked_verdict(db_session: AsyncSession
 
     assert result["sent"] == 0
     mock_send.assert_not_called()
+
+
+# ── Рубеж 4: TG bar at 70 ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_send_gate_rejects_score_69(db_session: AsyncSession) -> None:
+    """score_total=69 with good verdict must NOT be sent — new threshold is 70."""
+    event_id = await _seed(db_session, score_total=69, llm_verdict="подходит")
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        _prod_settings_mock(ms, threshold=70)
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is False
+    mock_send.assert_not_called()
+    assert await db_session.get(NotificationSent, event_id) is None

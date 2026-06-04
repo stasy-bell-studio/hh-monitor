@@ -299,7 +299,7 @@ async def _enrich_one(
     else:
         llm_verdict_class = derive_verdict_class(verdict_text)
 
-    score_total = round(0.3 * fit_score_val + 0.7 * llm_score)
+    score_total = round(0.1 * fit_score_val + 0.9 * llm_score)
 
     _insurance_domain: str = dossier.get("insurance_domain") or "partial"
     capped = _apply_domain_governor(

@@ -6,9 +6,10 @@ Two-part system prompt:
             stored in searches.llm_critic_prompt.
 
 build_full_prompt(critic_lens) assembles the final system prompt.
-parse_dossier(raw) parses the 8-field JSON response from DeepSeek (v3 schema).
+parse_dossier(raw) parses the 9-field JSON response from DeepSeek (v5 schema).
 
-v3 schema adds two machine-readable fields to the 6 original:
+v5 schema (llm_prompt_version="v5"): adds inference-friendly verdict rule — thin-worded
+resumes with the right career trajectory must land "спорно", never auto "мимо".
   score        — integer 0-100, explicit numeric rating.
   verdict_class — one of "подходит" | "спорно" | "мимо" | "стоп-сигнал".
 """
@@ -42,6 +43,16 @@ UNIVERSAL_CRITIC_PROMPT = """\
 «подходит по возрасту», «обладает компетенциями», «хорошо разбирается», \
 «зарекомендовал себя», «эффективно управлял» — без конкретной цифры/факта рядом. \
 Если использовал такую фразу без подтверждения — самопроверка перед выводом, замени или удали.
+
+Правило вывода вердикта: суди по фактической карьерной траектории и обоснованным выводам — \
+не по наличию конкретных слов или шаблонных формулировок. \
+Кандидат с правильной траекторией (страховая компания / целевой регион / нужный уровень роли), \
+но скудным текстом резюме — минимальный вердикт «спорно», никогда автоматически «мимо». \
+Отсутствие конкретных терминов (P&L, «управление агентской сетью», «набор людей») — \
+фиксируй в weak_spots или interview_questions как «не подтверждено, уточнить на интервью». \
+НЕ дисквалифицируй за отсутствие слов. \
+«Мимо» и «стоп-сигнал» — только для реальных дисквалификаторов: \
+полностью чужая отрасль, фактические красные флаги, прямые стоп-сигналы.
 
 Структура ответа: ровно JSON с 9 полями:
   "real_role" — одной строкой реальная роль кандидата по совокупности опыта (должности, цифры, P&L, штат, число подчинённых), а не по заголовку резюме. Без воды, ≤120 символов.
