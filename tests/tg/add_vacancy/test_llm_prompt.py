@@ -59,3 +59,22 @@ def test_target_companies_override_not_in_prompt() -> None:
 def test_target_companies_override_still_in_allowed_keys() -> None:
     """Merge logic in parse_to_portrait_dict() depends on tco passing _strip_forbidden."""
     assert "target_companies_override" in _ALLOWED_KEYS
+
+
+# ── AC5: role-neutral prompts ─────────────────────────────────────────────────────
+
+
+def test_parse_prompt_persona_is_role_neutral() -> None:
+    """AC5: _PARSE_PROMPT must not hardcode 'в страхование' in the persona line."""
+    first_line = _PARSE_PROMPT.split("\n")[0]
+    assert "в страхование" not in first_line
+
+
+def test_meta_prompt_template_is_role_neutral() -> None:
+    """AC5: _META_PROMPT_TEMPLATE must not hardcode insurance domain or ОСАГО/КАСКО."""
+    from hh_monitor.llm_enrich.critic_lens_builder import _META_PROMPT_TEMPLATE
+
+    first_line = _META_PROMPT_TEMPLATE.split("\n")[0]
+    assert "в страхование" not in first_line
+    assert "ОСАГО" not in _META_PROMPT_TEMPLATE
+    assert "КАСКО" not in _META_PROMPT_TEMPLATE

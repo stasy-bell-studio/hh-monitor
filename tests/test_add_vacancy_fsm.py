@@ -157,7 +157,8 @@ async def test_s3_text_parses_and_advances() -> None:
         await h.handle_s3_text(_msg("требования: python, 5 лет"), fsm)  # type: ignore[arg-type]
     mock_parse.assert_awaited_once()
     assert (await fsm.get_data())["portrait_dict"] == _PORTRAIT_DICT
-    assert fsm.state == AddVacancy.S4_review
+    # First parse goes to insurance question (S3b_insurance), not directly to S4
+    assert fsm.state == AddVacancy.S3b_insurance
 
 
 @pytest.mark.asyncio
@@ -173,7 +174,7 @@ async def test_s3_file_pdf_path() -> None:
     ):
         await h.handle_s3_document(msg, fsm)  # type: ignore[arg-type]
     mp.assert_awaited_once()
-    assert fsm.state == AddVacancy.S4_review
+    assert fsm.state == AddVacancy.S3b_insurance
 
 
 @pytest.mark.asyncio
@@ -188,7 +189,7 @@ async def test_s3_file_txt_path() -> None:
     ) as mp:
         await h.handle_s3_document(msg, fsm)  # type: ignore[arg-type]
     mp.assert_awaited_once()
-    assert fsm.state == AddVacancy.S4_review
+    assert fsm.state == AddVacancy.S3b_insurance
 
 
 @pytest.mark.asyncio
@@ -220,14 +221,15 @@ async def test_s3_file_wrong_mime_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_s4_confirm_to_s5() -> None:
+async def test_s4_confirm_goes_directly_to_s6_launch() -> None:
+    """After S4 ok, wizard goes straight to S6 (no S5 critic step)."""
     fsm = FakeFSM(
         data={"position_name": "Test Role", "portrait_dict": _PORTRAIT_DICT},
         state=AddVacancy.S4_review,
     )
     with patch.object(h, "draft_critic_prompt", new=AsyncMock(return_value="линза " * 30)):
         await h.handle_s4_ok(_cb("av:review:ok"), fsm)  # type: ignore[arg-type]
-    assert fsm.state == AddVacancy.S5_critic_prompt
+    assert fsm.state == AddVacancy.S6_launch
     assert (await fsm.get_data())["llm_critic_prompt"]
 
 
@@ -255,41 +257,6 @@ async def test_s4_more_back_to_s3_concatenates() -> None:
     with patch.object(h, "parse_to_portrait_dict", new=fake_parse):
         await h.handle_s3_text(_msg("второй текст"), fsm)  # type: ignore[arg-type]
     assert captured["raw"] == "первый текст\n\n--- Дополнение ---\n\nвторой текст"
-
-
-# ── S5 ──────────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_s5_accept_to_s6() -> None:
-    fsm = FakeFSM(
-        data={
-            "position_name": "Test Role",
-            "portrait_dict": _PORTRAIT_DICT,
-            "llm_critic_prompt": "x",
-        },
-        state=AddVacancy.S5_critic_prompt,
-    )
-    await h.handle_s5_ok(_cb("av:critic:ok"), fsm)  # type: ignore[arg-type]
-    assert fsm.state == AddVacancy.S6_launch
-
-
-@pytest.mark.asyncio
-async def test_s5_rewrite_recalls_draft_with_feedback() -> None:
-    """AC8: rewrite feedback is passed to draft_critic_prompt."""
-    fsm = FakeFSM(
-        data={"position_name": "Test Role", "portrait_dict": _PORTRAIT_DICT},
-        state=AddVacancy.S5_critic_prompt,
-    )
-    await h.handle_s5_rewrite(_cb("av:critic:rewrite"), fsm)  # type: ignore[arg-type]
-    assert (await fsm.get_data())["awaiting"] == "critic_feedback"
-
-    with patch.object(
-        h, "draft_critic_prompt", new=AsyncMock(return_value="новая линза " * 20)
-    ) as mp:
-        await h.handle_s5_feedback(_msg("больше цифр"), fsm)  # type: ignore[arg-type]
-    mp.assert_awaited_once()
-    assert mp.call_args.kwargs["user_feedback"] == "больше цифр"
 
 
 # ── S6 (DB-backed) ───────────────────────────────────────────────────────────────
@@ -484,14 +451,15 @@ async def test_callback_answered_before_slow_call_s4_ok() -> None:
     async def track_answer(*a: Any, **kw: Any) -> None:
         call_order.append("answer")
 
-    async def track_critic(*a: Any, **kw: Any) -> None:
+    async def track_critic(*a: Any, **kw: Any) -> str:
         call_order.append("critic")
+        return "линза " * 10
 
     cb = _cb("av:review:ok")
     cb.answer = AsyncMock(side_effect=track_answer)
 
     fsm = FakeFSM(data={"portrait_dict": _PORTRAIT_DICT, "position_name": "Test Role"})
-    with patch("hh_monitor.tg.add_vacancy.handlers._enter_critic", side_effect=track_critic):
+    with patch.object(h, "draft_critic_prompt", side_effect=track_critic):
         await h.handle_s4_ok(cb, fsm)  # type: ignore[arg-type]
 
     assert "answer" in call_order and "critic" in call_order

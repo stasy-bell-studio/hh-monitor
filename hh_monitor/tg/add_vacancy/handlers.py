@@ -1,7 +1,7 @@
 """FSM handlers for the "Add Vacancy" wizard (admin-topic only).
 
 State machine (aiogram FSMContext + MemoryStorage):
-  S1_name → S2_input_mode → S3_portrait_raw → S4_review → S5_critic_prompt → S6_launch
+  S1_name → S2_input_mode → S3_portrait_raw → S3b_insurance → S4_review → S6_launch
 
 Access control: every handler is restricted to admin users inside the HR
 supergroup admin topic.  Message handlers use router-level filters; callback
@@ -25,6 +25,7 @@ from sqlalchemy import insert
 from hh_monitor.config import settings
 from hh_monitor.db.models import Search
 from hh_monitor.fit.portrait import Portrait
+from hh_monitor.llm_enrich.critic_lens_builder import build_deterministic_fallback
 from hh_monitor.regions.expander import resolve_region_names
 from hh_monitor.searches.codes import next_unique_search_code, slugify
 from hh_monitor.tg.add_vacancy import keyboards as kb
@@ -32,6 +33,7 @@ from hh_monitor.tg.add_vacancy.llm import (
     compute_gaps,
     derive_initial_hh_params,
     draft_critic_prompt,
+    generate_enrichment_recs,
     parse_to_portrait_dict,
 )
 from hh_monitor.tg.add_vacancy.states import AddVacancy
@@ -276,14 +278,97 @@ async def _run_parse(message: Message, state: FSMContext, raw: str) -> None:
         )
         return
     await state.update_data(portrait_dict=portrait_dict)
-    await state.set_state(AddVacancy.S4_review)
+
+    if data.get("insurance_role_asked"):
+        # Re-parse path (Дополнить): re-apply stored insurance override.
+        is_insurance = bool(data.get("insurance_role_is_insurance", True))
+        updated = _apply_insurance_override(portrait_dict, is_insurance)
+        await state.update_data(portrait_dict=updated)
+        await _enter_review(message, state)
+    else:
+        # First parse: ask whether this is an insurance role.
+        await state.set_state(AddVacancy.S3b_insurance)
+        await message.answer(
+            "Это страховая роль (нужен профильный страховой опыт)?",
+            reply_markup=kb.kb_insurance(),
+        )
+
+
+# ── S3b: insurance role question ─────────────────────────────────────────────────
+
+
+@add_vacancy_router.callback_query(
+    StateFilter(AddVacancy.S3b_insurance), F.data == "av:insurance:yes"
+)
+async def handle_s3b_insurance_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _guard_callback(callback):
+        await callback.answer()
+        return
+    await callback.answer()
+    await state.update_data(insurance_role_asked=True, insurance_role_is_insurance=True)
+    if isinstance(callback.message, Message):
+        await _enter_review(callback.message, state)
+
+
+@add_vacancy_router.callback_query(
+    StateFilter(AddVacancy.S3b_insurance), F.data == "av:insurance:no"
+)
+async def handle_s3b_insurance_no(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _guard_callback(callback):
+        await callback.answer()
+        return
+    await callback.answer()
+    await state.update_data(insurance_role_asked=True, insurance_role_is_insurance=False)
+    data = await state.get_data()
+    portrait_dict = _apply_insurance_override(data["portrait_dict"], is_insurance=False)
+    await state.update_data(portrait_dict=portrait_dict)
+    if isinstance(callback.message, Message):
+        await _enter_review(callback.message, state)
+
+
+def _apply_insurance_override(portrait_dict: dict[str, Any], is_insurance: bool) -> dict[str, Any]:
+    """Return portrait_dict with insurance fields zeroed when is_insurance=False."""
+    if not is_insurance:
+        portrait_dict = dict(portrait_dict)
+        portrait_dict["domain_governor_mode"] = "off"
+        portrait_dict["min_insurance_experience_months"] = 0
+        portrait_dict["min_motor_experience_months"] = 0
+        portrait_dict["motor_experience_preferred"] = False
+        portrait_dict["insurance_experience_mode"] = "soft"
+    return portrait_dict
+
+
+async def _enter_review(message: Message, state: FSMContext) -> None:
+    """Render the S4 review card.  Generates enrichment recs with insurance context."""
+    data = await state.get_data()
+    portrait_dict = data["portrait_dict"]
     portrait = Portrait.model_validate(portrait_dict)
+    position_name = data["position_name"]
+    is_insurance = bool(data.get("insurance_role_is_insurance", True))
+
+    try:
+        enrichment_recs = await generate_enrichment_recs(
+            portrait, position_name, is_insurance=is_insurance
+        )
+    except Exception:
+        enrichment_recs = ""
+
     _ids, unknown_regions = resolve_region_names(portrait.filters.regions.primary)
     kb_fn = kb.kb_review_with_unknown if unknown_regions else kb.kb_review
-    await message.answer(_render_review(portrait, unknown_regions), reply_markup=kb_fn())
+    await state.set_state(AddVacancy.S4_review)
+    review_text = _render_review(
+        portrait, unknown_regions, enrichment_recs=enrichment_recs, is_insurance=is_insurance
+    )
+    await message.answer(review_text, reply_markup=kb_fn())
 
 
-def _render_review(portrait: Portrait, unknown: list[str] | None = None) -> str:
+def _render_review(
+    portrait: Portrait,
+    unknown: list[str] | None = None,
+    *,
+    enrichment_recs: str = "",
+    is_insurance: bool = True,
+) -> str:
     unknown = unknown or []
     regions = portrait.filters.regions
     salary = portrait.filters.salary_range
@@ -309,8 +394,9 @@ def _render_review(portrait: Portrait, unknown: list[str] | None = None) -> str:
     if unknown:
         lines.append(f"\n⚠️ Не распознаны: {', '.join(unknown)}")
         lines.append("Исправь портрет или запусти поиск без фильтра региона.")
-    gaps = compute_gaps(portrait)
-    if gaps:
+    if enrichment_recs:
+        lines.append(f"\n{enrichment_recs}")
+    elif gaps := compute_gaps(portrait, is_insurance=is_insurance):
         lines.append("\nЧто я мог не дозаполнить:")
         lines.extend(f"  • {g}" for g in gaps)
     lines.append("\nВсё верно?")
@@ -327,7 +413,17 @@ async def handle_s4_ok(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await callback.answer()
     if isinstance(callback.message, Message):
-        await _enter_critic(callback.message, state)
+        msg = callback.message
+        data = await state.get_data()
+        portrait = Portrait.model_validate(data["portrait_dict"])
+        position_name = data["position_name"]
+        try:
+            critic = await draft_critic_prompt(portrait, position_name)
+        except Exception as exc:
+            logger.warning("add_vacancy.critic_failed", error=str(exc))
+            critic = build_deterministic_fallback(portrait, position_name)
+        await state.update_data(llm_critic_prompt=critic)
+        await _enter_launch(msg, state)
 
 
 @add_vacancy_router.callback_query(StateFilter(AddVacancy.S4_review), F.data == "av:review:more")
@@ -342,85 +438,9 @@ async def handle_s4_more(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.answer("Что добавить или уточнить?", reply_markup=kb.kb_cancel())
 
 
-async def _enter_critic(
-    message: Message, state: FSMContext, user_feedback: str | None = None
-) -> None:
-    data = await state.get_data()
-    portrait = Portrait.model_validate(data["portrait_dict"])
-    position_name = data["position_name"]
-    await message.answer("⏳ Готовлю аналитический промпт…")
-    try:
-        critic = await draft_critic_prompt(portrait, position_name, user_feedback=user_feedback)
-    except Exception as exc:
-        logger.error("add_vacancy.critic_failed", error=str(exc))
-        await message.answer(
-            "Не удалось подготовить промпт. Попробуем ещё раз?", reply_markup=kb.kb_critic()
-        )
-        return
-    await state.update_data(llm_critic_prompt=critic, awaiting=None)
-    await state.set_state(AddVacancy.S5_critic_prompt)
-    for chunk in _split_message(critic):
-        await message.answer(f"<code>{_html_escape(chunk)}</code>")
-    await message.answer(
-        "Принимаем как промпт для анализа кандидатов?", reply_markup=kb.kb_critic()
-    )
-
-
-def _html_escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _split_message(text: str, limit: int = 4000) -> list[str]:
-    return [text[i : i + limit] for i in range(0, len(text), limit)] or [""]
-
-
-# ── S5: critic prompt ────────────────────────────────────────────────────────────
-
-
-@add_vacancy_router.callback_query(
-    StateFilter(AddVacancy.S5_critic_prompt), F.data == "av:critic:ok"
-)
-async def handle_s5_ok(callback: CallbackQuery, state: FSMContext) -> None:
-    if not _guard_callback(callback):
-        await callback.answer()
-        return
-    await callback.answer()
-    if isinstance(callback.message, Message):
-        await _enter_launch(callback.message, state)
-
-
-@add_vacancy_router.callback_query(
-    StateFilter(AddVacancy.S5_critic_prompt), F.data == "av:critic:rewrite"
-)
-async def handle_s5_rewrite(callback: CallbackQuery, state: FSMContext) -> None:
-    if not _guard_callback(callback):
-        await callback.answer()
-        return
-    await callback.answer()
-    await state.update_data(awaiting="critic_feedback")
-    if isinstance(callback.message, Message):
-        await callback.message.answer(
-            "Что переписать или подчеркнуть?", reply_markup=kb.kb_cancel()
-        )
-
-
-@add_vacancy_router.message(StateFilter(AddVacancy.S5_critic_prompt), F.text)
-async def handle_s5_feedback(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    if data.get("awaiting") != "critic_feedback":
-        return
-    feedback = (message.text or "").strip()
-    if not feedback:
-        await message.answer("Пустой текст. Что переписать?", reply_markup=kb.kb_cancel())
-        return
-    await state.update_data(awaiting=None)
-    await _enter_critic(message, state, user_feedback=feedback)
-
-
 async def _enter_launch(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     portrait = Portrait.model_validate(data["portrait_dict"])
-    critic_len = len(data.get("llm_critic_prompt", ""))
     salary = portrait.filters.salary_range
     summary = "\n".join(
         [
@@ -431,7 +451,6 @@ async def _enter_launch(message: Message, state: FSMContext) -> None:
             f"✅ Обязательных требований: {len(portrait.must_have_keywords)}",
             f"🚫 Запретных индустрий: {len(portrait.forbidden_industries)}",
             f"💰 Зарплата: {f'{salary[0]}–{salary[1]} ₽' if salary else 'не указана'}",
-            f"📄 Длина промпта: {critic_len} символов",
             "🔢 Первичный скан: max_pages=2",
             "⏳ Следующий cron-слот эту вакансию пропустит на 30 минут.",
         ]

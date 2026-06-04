@@ -57,7 +57,7 @@ _ALLOWED_FILTER_KEYS: frozenset[str] = frozenset(
 )
 
 _PARSE_PROMPT = """\
-Ты — HR-аналитик по найму в страхование. Тебе дан свободный текст с описанием \
+Ты — HR-аналитик. Тебе дан свободный текст с описанием \
 вакансии и идеального кандидата. Извлеки структурированный портрет и верни СТРОГО \
 JSON-объект со следующими допустимыми ключами (любой ключ можно опустить, если в \
 тексте нет данных — НЕ придумывай):
@@ -223,9 +223,48 @@ def _is_empty(value: Any) -> bool:
     return False
 
 
-def compute_gaps(portrait: Portrait) -> list[str]:
-    """Human-readable labels of expected fields the LLM left empty/default."""
-    return [label for path, label in _GAP_FIELDS if _is_empty(_resolve_path(portrait, path))]
+def compute_gaps(portrait: Portrait, *, is_insurance: bool = True) -> list[str]:
+    """Human-readable labels of expected fields the LLM left empty/default.
+
+    When ``is_insurance=False``, the insurance-experience gap field is excluded
+    so non-insurance roles are not nagged about insurance experience.
+    """
+    fields = (
+        _GAP_FIELDS
+        if is_insurance
+        else [f for f in _GAP_FIELDS if f[0] != "min_insurance_experience_months"]
+    )
+    return [label for path, label in fields if _is_empty(_resolve_path(portrait, path))]
+
+
+async def generate_enrichment_recs(
+    portrait: Portrait, position_name: str, *, is_insurance: bool = True
+) -> str:
+    """LLM-written prose enrichment recommendations for the S4 review card.
+
+    Returns "" when there are no gaps or when the LLM call fails.
+    When ``is_insurance=False``, insurance-experience gaps are excluded from
+    the prompt so non-insurance roles are not told to add insurance experience.
+    """
+    gaps = compute_gaps(portrait, is_insurance=is_insurance)
+    if not gaps:
+        return ""
+    gaps_str = "\n".join(f"- {g}" for g in gaps)
+    prompt = (
+        f"Ты — ассистент HR-аналитика. Дан портрет вакансии '{position_name}'.\n"
+        f"Не заполнены следующие поля:\n{gaps_str}\n\n"
+        "Напиши 1-2 предложения (не список): как HR мог бы дополнить описание, "
+        "чтобы поиск был точнее. Начни с «Я бы дополнил поля:». Без предисловий."
+    )
+    try:
+        raw = await llm_client.chat_completion_messages(
+            [{"role": "user", "content": prompt}],
+            max_tokens=256,
+            temperature=0.3,
+        )
+        return llm_client.extract_text(raw).strip()
+    except Exception:
+        return ""
 
 
 def derive_initial_hh_params(portrait: Portrait) -> dict[str, Any]:

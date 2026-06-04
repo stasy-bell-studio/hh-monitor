@@ -1,12 +1,12 @@
 """Inline keyboards for the "Add Vacancy" FSM wizard.
 
 Callback data scheme:
-  add_vacancy:start          — entry button (lives in the admin panel)
-  av:cancel                  — abort the wizard from any step
+  add_vacancy:start              — entry button (lives in the admin panel)
+  av:cancel                      — abort the wizard from any step
   av:mode:text / av:mode:file
-  av:retry                   — retry LLM parse after a failure (S3)
+  av:retry                       — retry LLM parse after a failure (S3)
+  av:insurance:yes / av:insurance:no
   av:review:ok / av:review:more
-  av:critic:ok / av:critic:rewrite
   av:launch:go / av:launch:draft
 """
 
@@ -52,6 +52,20 @@ def kb_retry() -> InlineKeyboardMarkup:
     )
 
 
+def kb_insurance() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, страховая", callback_data="av:insurance:yes"),
+                InlineKeyboardButton(
+                    text="➡️ Нет, другая роль", callback_data="av:insurance:no"
+                ),
+            ],
+            [_CANCEL_BTN],
+        ]
+    )
+
+
 def kb_review() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -71,18 +85,6 @@ def kb_review_with_unknown() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="✏️ Исправить портрет", callback_data="av:review:more"),
                 InlineKeyboardButton(text="⚠️ Запустить без региона", callback_data="av:review:ok"),
-            ],
-            [_CANCEL_BTN],
-        ]
-    )
-
-
-def kb_critic() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Принять", callback_data="av:critic:ok"),
-                InlineKeyboardButton(text="✏️ Переписать", callback_data="av:critic:rewrite"),
             ],
             [_CANCEL_BTN],
         ]

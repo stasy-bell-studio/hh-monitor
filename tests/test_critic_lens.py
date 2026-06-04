@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.db.models import Search
+from hh_monitor.fit.portrait import Portrait
 
 
 def _make_search(
@@ -127,3 +128,54 @@ async def test_cli_rebuild_critic_lens_persists_to_db(db_session: AsyncSession) 
         select(Search.llm_critic_prompt).where(Search.search_code == SEARCH_CODE)
     )
     assert row.scalar_one() == LENS_TEXT
+
+
+# ── AC4: deterministic fallback ───────────────────────────────────────────────────
+
+
+def _make_portrait_with_content() -> Portrait:
+    return Portrait(
+        position_code="test",
+        position_name="Тест Менеджер",
+        evaluation_focus=["опыт управления командой", "навыки переговоров"],
+        must_have_keywords=["Python", "SQL"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_fallback_when_llm_returns_empty() -> None:
+    """AC4a: whitespace-only LLM response → non-empty deterministic lens returned."""
+    from hh_monitor.llm_enrich.critic_lens_builder import generate_critic_lens_from_portrait
+
+    portrait = _make_portrait_with_content()
+    with patch(
+        "hh_monitor.llm_enrich.critic_lens_builder.llm_client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=_mock_openrouter_response("   "),
+    ):
+        result = await generate_critic_lens_from_portrait(
+            portrait, position_name="Тест Менеджер", position_code="test"
+        )
+
+    assert result.strip() != ""
+    assert len(result) > 10
+    assert "Тест Менеджер" in result
+
+
+@pytest.mark.asyncio
+async def test_fallback_when_llm_raises() -> None:
+    """AC4b: LLM call raises → non-empty deterministic lens returned, no exception propagated."""
+    from hh_monitor.llm_enrich.critic_lens_builder import generate_critic_lens_from_portrait
+
+    portrait = _make_portrait_with_content()
+    with patch(
+        "hh_monitor.llm_enrich.critic_lens_builder.llm_client.chat_completion_messages",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("network error"),
+    ):
+        result = await generate_critic_lens_from_portrait(
+            portrait, position_name="Тест Менеджер", position_code="test"
+        )
+
+    assert result.strip() != ""
+    assert len(result) > 10

@@ -6,11 +6,11 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AddVacancy(StatesGroup):
-    """Six-step wizard: name → input mode → raw → review → critic → launch."""
+    """Six-step wizard: name → input mode → raw → insurance → review → launch."""
 
     S1_name = State()
     S2_input_mode = State()
     S3_portrait_raw = State()
+    S3b_insurance = State()
     S4_review = State()
-    S5_critic_prompt = State()
     S6_launch = State()

@@ -19,7 +19,7 @@ from hh_monitor.llm_enrich import client as llm_client
 log = structlog.get_logger(__name__)
 
 _META_PROMPT_TEMPLATE = """\
-Ты — HR-эксперт по найму в страхование. Тебе дан портрет вакансии:
+Ты — HR-эксперт. Тебе дан портрет вакансии:
 - Название роли: {position_name}
 - Position code: {position_code}
 - Ключевые требования (выдержка из портрета):
@@ -29,12 +29,11 @@ _META_PROMPT_TEMPLATE = """\
 Линза должна содержать ровно 3 секции:
 
 1. ЧТО ВЫИСКИВАТЬ — какие компетенции, цифры, конкретный опыт критически важны именно \
-для этой роли. Не общие слова, а проверяемые вещи (примеры: «опыт ОСАГО как продукта», \
-«размер агентской сети в штуках», «P&L филиала с цифрами», «знание региональной специфики Юга РФ»).
+для этой роли. Не общие слова, а проверяемые вещи. Опирайся на портрет выше.
 
 2. КРАСНЫЕ ФЛАГИ ПОД ЭТУ РОЛЬ — типичные слабые паттерны кандидатов именно на этой \
-позиции (примеры: «переход из банка без страхового бэкграунда», «только КАСКО без ОСАГО», \
-«опыт только в госсекторе», «короткие сроки <1.5 года в страховых»).
+позиции (примеры: «опыт только в госсекторе», «короткие сроки <1.5 года на последнем месте», \
+«нет конкретных цифр в достижениях»). Опирайся на специфику роли из портрета.
 
 3. ГДЕ ОБЫЧНО ВРУТ НА ЭТОЙ РОЛИ — типичные приписки и инфляция метрик (примеры: \
 «приписывают размер команды», «выдают участие за руководство», \
@@ -43,7 +42,7 @@ _META_PROMPT_TEMPLATE = """\
 Возврати только текст линзы, без обёрток и предисловий.\
 """
 
-# Appended to the meta-prompt when the user (HR) asks to rewrite the lens (S5 "✏️").
+# Appended to the meta-prompt when the user (HR) asks to rewrite the lens.
 _FEEDBACK_TEMPLATE = """\
 
 
@@ -68,6 +67,28 @@ def _build_portrait_summary(portrait: dict[str, Any]) -> str:
     return "\n".join(parts) if parts else "(не указано)"
 
 
+def build_deterministic_fallback(portrait: Portrait, position_name: str) -> str:
+    """Build a non-empty critic lens from portrait fields without LLM.
+
+    Used when the LLM call fails or returns empty/whitespace.  Guaranteed
+    non-empty so searches.llm_critic_prompt is never blank.
+    """
+    parts: list[str] = [f"Критерии оценки для роли «{position_name}»:"]
+    if portrait.evaluation_focus:
+        parts.append(
+            "ЧТО ВЫИСКИВАТЬ\n" + "\n".join(f"• {c}" for c in portrait.evaluation_focus)
+        )
+    if portrait.must_have_keywords:
+        parts.append("ОБЯЗАТЕЛЬНЫЕ ТРЕБОВАНИЯ\n" + ", ".join(portrait.must_have_keywords))
+    if portrait.forbidden_industries:
+        parts.append("ЗАПРЕТНЫЕ ИНДУСТРИИ\n" + ", ".join(portrait.forbidden_industries))
+    if portrait.filters.regions.primary:
+        parts.append("РЕГИОНЫ\n" + ", ".join(portrait.filters.regions.primary))
+    if len(parts) == 1:
+        parts.append("Требования не заполнены — уточни портрет вакансии.")
+    return "\n\n".join(parts)
+
+
 async def _build_critic_lens_core(
     *,
     portrait: Portrait,
@@ -82,6 +103,9 @@ async def _build_critic_lens_core(
     FSM "Add Vacancy" wizard before a Search row exists.  Portrait summary mirrors
     the sparse jsonb that was historically stored in ``searches.portrait`` by
     using ``model_dump(exclude_defaults=True, exclude_none=True)``.
+
+    Never raises and never returns empty: LLM exceptions and empty/whitespace
+    results both fall back to a deterministic lens built from portrait fields.
     """
     portrait_dict = portrait.model_dump(mode="json", exclude_defaults=True, exclude_none=True)
     portrait_summary = _build_portrait_summary(portrait_dict)
@@ -100,12 +124,29 @@ async def _build_critic_lens_core(
         with_feedback=bool(user_feedback),
     )
 
-    raw = await llm_client.chat_completion_messages(
-        [{"role": "user", "content": prompt}],
-        max_tokens=1024,
-        temperature=0.3,
-    )
-    text = llm_client.extract_text(raw)
+    try:
+        raw = await llm_client.chat_completion_messages(
+            [{"role": "user", "content": prompt}],
+            max_tokens=1024,
+            temperature=0.3,
+        )
+        text = llm_client.extract_text(raw)
+    except Exception as exc:
+        log.warning(
+            "critic_lens.fallback_used",
+            reason="exception",
+            position_code=position_code,
+            error=str(exc),
+        )
+        return build_deterministic_fallback(portrait, position_name)
+
+    if not text.strip():
+        log.warning(
+            "critic_lens.fallback_used",
+            reason="empty",
+            position_code=position_code,
+        )
+        return build_deterministic_fallback(portrait, position_name)
 
     log.info(
         "critic_lens.generated",
@@ -140,8 +181,8 @@ async def generate_critic_lens_from_portrait(
 ) -> str:
     """Generate a critic lens from a Portrait without an existing Search row.
 
-    Used by the FSM "Add Vacancy" wizard (S5).  ``user_feedback`` appends an HR
-    instruction section to the meta-prompt for the "✏️ Переписать" rewrite path.
+    Used by the FSM "Add Vacancy" wizard.  ``user_feedback`` appends an HR
+    instruction section to the meta-prompt for a rewrite path.
     """
     return await _build_critic_lens_core(
         portrait=portrait,
