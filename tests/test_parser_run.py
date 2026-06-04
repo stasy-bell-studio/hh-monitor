@@ -689,3 +689,76 @@ async def test_parser_skips_archived_search(db_session: AsyncSession) -> None:
 
     with pytest.raises(SearchNotFoundError, match="inactive or archived"):
         await run_parser(db_session, _client(), search_id=search_id, max_pages=1, _sleep=0)
+
+
+# ── Test: pre-filter reduces get_resume calls (AC2) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_prefilter_reduces_get_resume_calls(db_session: AsyncSession) -> None:
+    """Portrait with prefilter.area_ids_require=[78] (SPb only).
+
+    3 list items: r901 (area 78), r902 (area 1 = Moscow), r903 (area 78).
+    get_resume must be called exactly 2 times; prefiltered_out == 1.
+    """
+    portrait_with_prefilter: dict[str, Any] = {
+        **_PORTRAIT,
+        "prefilter": {"area_ids_require": [78]},
+    }
+    s = Search(
+        position_code="test_position",
+        position_name="Test Position",
+        hh_params={"text": "manager"},
+        portrait=portrait_with_prefilter,
+    )
+    db_session.add(s)
+    await db_session.flush()
+    search_id: int = s.id
+
+    _PREFILTER_ITEMS = [
+        {"id": "r901", "area": {"id": "78", "name": "Санкт-Петербург"}},
+        {"id": "r902", "area": {"id": "1", "name": "Москва"}},  # filtered out
+        {"id": "r903", "area": {"id": "78", "name": "Санкт-Петербург"}},
+    ]
+
+    get_resume_calls: list[str] = []
+
+    def _search_prefilter_page(request: Request) -> Response:
+        return Response(
+            200,
+            json={
+                "items": _PREFILTER_ITEMS,
+                "found": 3,
+                "pages": 1,
+                "page": 0,
+                "per_page": 50,
+            },
+        )
+
+    def _resume_prefilter(request: Request) -> Response:
+        rid = request.url.path.rstrip("/").split("/")[-1]
+        get_resume_calls.append(rid)
+        return Response(200, json=_make_resume_payload(rid))
+
+    async with respx.mock:
+        respx.get(f"{_BASE}/resumes").mock(side_effect=_search_prefilter_page)
+        respx.get(re.compile(rf"{_BASE}/resumes/r9\d{{2}}")).mock(
+            side_effect=_resume_prefilter
+        )
+
+        result = await run_parser(
+            db_session, _client(), search_id, max_pages=1, _sleep=0
+        )
+
+    assert result["prefiltered_out"] == 1
+    assert len(get_resume_calls) == 2
+    assert "r902" not in get_resume_calls  # Moscow was pre-filtered
+
+    from sqlalchemy import select as sa_select
+
+    pr = (
+        await db_session.execute(
+            sa_select(ParserRun).where(ParserRun.id == result["parser_run_id"])
+        )
+    ).scalar_one()
+    assert pr.prefiltered_out == 1

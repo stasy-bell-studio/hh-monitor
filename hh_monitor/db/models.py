@@ -187,6 +187,7 @@ class ParserRun(Base):
     snapshots_inserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     snapshots_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     prefetch_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prefiltered_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

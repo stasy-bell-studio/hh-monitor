@@ -28,6 +28,7 @@ from hh_monitor.errors import (
 from hh_monitor.fit.portrait import Portrait
 from hh_monitor.hh.client import HHClient
 from hh_monitor.hh.endpoints import get_resume, search_resumes
+from hh_monitor.parser.prefilter import apply_prefilter
 
 logger = structlog.get_logger(__name__)
 
@@ -248,6 +249,7 @@ async def run_parser(
     snapshots_inserted = 0
     snapshots_skipped = 0
     prefetch_skipped = 0
+    prefiltered_out = 0
     errors = 0
     resume_ids: list[str] = []
     abort_exc: BaseException | None = None
@@ -302,6 +304,18 @@ async def run_parser(
                     await _upsert_resume(session, resume_id, search_id)
                     prefetch_skipped += 1
                     log.info("parser.prefetch_skip", resume_id=resume_id)
+                    continue
+
+                # Pre-filter (Рубеж 3): reject candidates using list-item fields
+                # before the metered GET /resumes/{id} call.
+                pf_reasons = apply_prefilter(item, portrait)
+                if pf_reasons:
+                    log.info(
+                        "parser.prefilter_reject",
+                        resume_id=resume_id,
+                        reasons=pf_reasons,
+                    )
+                    prefiltered_out += 1
                     continue
 
                 if resume_id not in resume_ids:
@@ -399,6 +413,7 @@ async def run_parser(
                 snapshots_inserted=snapshots_inserted,
                 snapshots_skipped=snapshots_skipped,
                 prefetch_skipped=prefetch_skipped,
+                prefiltered_out=prefiltered_out,
             )
         )
         await session.commit()
@@ -411,6 +426,7 @@ async def run_parser(
             snapshots_inserted=snapshots_inserted,
             snapshots_skipped=snapshots_skipped,
             prefetch_skipped=prefetch_skipped,
+            prefiltered_out=prefiltered_out,
             errors=errors,
         )
 
@@ -436,6 +452,7 @@ async def run_parser(
                 snapshots_inserted=snapshots_inserted,
                 snapshots_skipped=snapshots_skipped,
                 prefetch_skipped=prefetch_skipped,
+                prefiltered_out=prefiltered_out,
             )
         )
         await session.commit()
@@ -456,6 +473,7 @@ async def run_parser(
                 snapshots_inserted=snapshots_inserted,
                 snapshots_skipped=snapshots_skipped,
                 prefetch_skipped=prefetch_skipped,
+                prefiltered_out=prefiltered_out,
                 error=repr(e)[:500],
             )
         )
@@ -480,6 +498,7 @@ async def run_parser(
         "snapshots_inserted": snapshots_inserted,
         "snapshots_skipped_dedup": snapshots_skipped,
         "prefetch_skipped": prefetch_skipped,
+        "prefiltered_out": prefiltered_out,
         "errors": errors,
         "parser_run_id": run_id,
         "resume_ids": resume_ids,

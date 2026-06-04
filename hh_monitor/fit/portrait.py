@@ -35,6 +35,21 @@ class Filters(BaseModel):
     education_level: list[str] = []
 
 
+class PrefilterConfig(BaseModel):
+    """Pre-filter settings applied to search list items before the metered GET /resumes/{id}.
+
+    Rules use only fields available in the free search-list response.
+    Empty lists disable the corresponding rule (backward-compatible default).
+    """
+
+    area_ids_require: list[int] = []
+    area_ids_stop: list[int] = []
+    required_industry_ids: list[str] = []
+    stop_company_names: list[str] = []
+    stop_employer_ids: list[str] = []
+    stop_company_ids: list[str] = []
+
+
 # ── Weight configuration ──────────────────────────────────────────────────────
 
 
@@ -134,6 +149,7 @@ class Portrait(BaseModel):
 
     # ── Scoring structure ────────────────────────────────────────────────────
     filters: Filters = Field(default_factory=Filters)
+    prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
     weights: Weights = Field(default_factory=Weights)
     # "soft" (default) → signal recorded in breakdown, candidate not skipped.
     # "hard" → restores old hard-reject behaviour for that signal.
