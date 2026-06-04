@@ -237,6 +237,31 @@ def compute_gaps(portrait: Portrait, *, is_insurance: bool = True) -> list[str]:
     return [label for path, label in fields if _is_empty(_resolve_path(portrait, path))]
 
 
+_JSON_WRAPPER_KEYS = ("response", "text", "recommendation", "result", "answer")
+
+
+def _clean_enrichment_text(raw_text: str) -> str:
+    """Unwrap common LLM wrappers (```fences```, {"response": "..."}) into plain prose."""
+    s = raw_text.strip()
+    fence = _CODE_FENCE_RE.search(s)
+    if fence:
+        s = fence.group(1).strip()
+    if s.startswith("{"):
+        try:
+            obj: Any = json.loads(s)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict):
+            for key in _JSON_WRAPPER_KEYS:
+                val = obj.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+            for val in obj.values():
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+    return s
+
+
 async def generate_enrichment_recs(
     portrait: Portrait, position_name: str, *, is_insurance: bool = True
 ) -> str:
@@ -254,7 +279,9 @@ async def generate_enrichment_recs(
         f"Ты — ассистент HR-аналитика. Дан портрет вакансии '{position_name}'.\n"
         f"Не заполнены следующие поля:\n{gaps_str}\n\n"
         "Напиши 1-2 предложения (не список): как HR мог бы дополнить описание, "
-        "чтобы поиск был точнее. Начни с «Я бы дополнил поля:». Без предисловий."
+        "чтобы поиск был точнее. Начни с «Я бы дополнил поля:». Без предисловий. "
+        "Верни только обычный текст одним абзацем — без JSON, без markdown, "
+        "без фигурных скобок и без кавычек-обёрток."
     )
     try:
         raw = await llm_client.chat_completion_messages(
@@ -262,7 +289,7 @@ async def generate_enrichment_recs(
             max_tokens=256,
             temperature=0.3,
         )
-        return llm_client.extract_text(raw).strip()
+        return _clean_enrichment_text(llm_client.extract_text(raw))
     except Exception:
         return ""
 

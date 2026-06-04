@@ -78,3 +78,21 @@ def test_meta_prompt_template_is_role_neutral() -> None:
     assert "в страхование" not in first_line
     assert "ОСАГО" not in _META_PROMPT_TEMPLATE
     assert "КАСКО" not in _META_PROMPT_TEMPLATE
+
+
+# ── _clean_enrichment_text ────────────────────────────────────────────────────────
+
+
+def test_clean_enrichment_text_unwraps_json_fence() -> None:
+    from hh_monitor.tg.add_vacancy.llm import _clean_enrichment_text
+
+    raw = '```json\n{"response": "Я бы дополнил поля: критерии оценки."}\n```'
+    out = _clean_enrichment_text(raw)
+    assert out == "Я бы дополнил поля: критерии оценки."
+    assert "{" not in out and "response" not in out
+
+
+def test_clean_enrichment_text_passthrough_plain() -> None:
+    from hh_monitor.tg.add_vacancy.llm import _clean_enrichment_text
+
+    assert _clean_enrichment_text("  Я бы дополнил поля: X.  ") == "Я бы дополнил поля: X."
