@@ -1,15 +1,22 @@
 """LLM response cache backed by the llm_cache PostgreSQL table.
 
-Cache key: f"{hh_resume_id}|{content_hash}|{prompt_version}"
+Cache key: f"{hh_resume_id}|{content_hash}|{prompt_version}|{critic_hash}"
 
-A cache hit means: for this exact resume content and prompt version we already
-have a stored LLM response — skip the API call entirely.
+A cache hit means: for this exact resume content, prompt version, critic prompt
+and portrait we already have a stored LLM response — skip the API call entirely.
+
+``critic_hash`` folds the per-search critic prompt and portrait into the key so
+that editing either invalidates stale verdicts (they become cache misses and are
+re-enriched).  Legacy 3-part entries written before this change never match the
+4-part key, so they are silently re-enriched — no cache-data migration needed.
 
 As of commit 9.3, responses are stored as raw dossier dicts (not LlmResponse).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from decimal import Decimal
 from typing import Any
 
@@ -23,9 +30,30 @@ from hh_monitor.db.models import LlmCache
 log = structlog.get_logger(__name__)
 
 
-def make_cache_key(hh_resume_id: str, content_hash: str, prompt_version: str) -> str:
-    """Construct a deterministic cache key."""
-    return f"{hh_resume_id}|{content_hash}|{prompt_version}"
+def _critic_hash(critic_prompt: str, portrait: dict[str, Any] | None) -> str:
+    """Hash the critic prompt + canonical portrait JSON into a 16-char digest."""
+    portrait_json = (
+        "{}"
+        if portrait is None
+        else json.dumps(portrait, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    )
+    canonical = f"{critic_prompt}{portrait_json}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def make_cache_key(
+    hh_resume_id: str,
+    content_hash: str,
+    prompt_version: str,
+    critic_prompt: str = "",
+    portrait: dict[str, Any] | None = None,
+) -> str:
+    """Construct a deterministic cache key.
+
+    The key includes a hash of the critic prompt + portrait so that changing
+    either invalidates previously cached verdicts for the same resume content.
+    """
+    return f"{hh_resume_id}|{content_hash}|{prompt_version}|{_critic_hash(critic_prompt, portrait)}"
 
 
 async def get_cached(
@@ -33,9 +61,11 @@ async def get_cached(
     hh_resume_id: str,
     content_hash: str,
     prompt_version: str,
+    critic_prompt: str = "",
+    portrait: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return a cached dossier dict, or None on cache miss."""
-    key = make_cache_key(hh_resume_id, content_hash, prompt_version)
+    key = make_cache_key(hh_resume_id, content_hash, prompt_version, critic_prompt, portrait)
     result = await session.execute(select(LlmCache).where(LlmCache.cache_key == key))
     row: LlmCache | None = result.scalar_one_or_none()
     if row is None:
@@ -58,6 +88,8 @@ async def save_cached(
     content_hash: str,
     prompt_version: str,
     response: dict[str, Any],
+    critic_prompt: str = "",
+    portrait: dict[str, Any] | None = None,
     tokens_in: int | None = None,
     tokens_out: int | None = None,
     cost_usd: Decimal | None = None,
@@ -70,7 +102,7 @@ async def save_cached(
     replaced (ON CONFLICT DO UPDATE) — used by --force runs to refresh stale
     cache entries with the new dossier.
     """
-    key = make_cache_key(hh_resume_id, content_hash, prompt_version)
+    key = make_cache_key(hh_resume_id, content_hash, prompt_version, critic_prompt, portrait)
     insert_stmt = pg_insert(LlmCache).values(
         cache_key=key,
         hh_resume_id=hh_resume_id,

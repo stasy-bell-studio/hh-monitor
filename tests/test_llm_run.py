@@ -809,6 +809,75 @@ async def test_invalid_json_fallback(db_session: Any, monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_parse_failure_skips_cache_write(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2-3: a JSON-decode fallback from parse_dossier must NOT be cached."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, _resume, _event = await _seed_db(db_session, resume_id="r_p2_3_fail", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    bad_response = {
+        "choices": [{"message": {"content": "Это не JSON, просто свободный текст."}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+    with (
+        patch(
+            "hh_monitor.llm_enrich.client.chat_completion_messages",
+            new_callable=AsyncMock,
+            return_value=bad_response,
+        ),
+        patch(
+            "hh_monitor.llm_enrich.cache.save_cached",
+            new_callable=AsyncMock,
+        ) as mock_save,
+    ):
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=1,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+        mock_save.assert_not_called()
+
+    # The event is still enriched for this run — only the cache write is skipped.
+    assert result["enriched"] == 1
+
+
+@pytest.mark.asyncio
+async def test_parse_success_writes_cache(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2-3: a well-formed dossier IS written to the cache (success path)."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, _resume, _event = await _seed_db(db_session, resume_id="r_p2_3_ok", fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    with (
+        patch(
+            "hh_monitor.llm_enrich.client.chat_completion_messages",
+            new_callable=AsyncMock,
+            return_value=_ok_llm_response(),
+        ),
+        patch(
+            "hh_monitor.llm_enrich.cache.save_cached",
+            new_callable=AsyncMock,
+        ) as mock_save,
+    ):
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=1,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+        mock_save.assert_called_once()
+
+    assert result["enriched"] == 1
+
+
+@pytest.mark.asyncio
 async def test_interview_questions_as_string_splits(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

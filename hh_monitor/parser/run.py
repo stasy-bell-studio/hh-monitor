@@ -462,6 +462,12 @@ async def run_parser(
         # ── Unexpected failure (IntegrityError, network error, bug, …) ────────
         with suppress(Exception):  # session may be in broken state; don't mask the real exc
             await session.rollback()
+        # The rollback above discarded every uncommitted snapshot INSERT made in
+        # this run (nothing is committed between step 2 and step 4), so the
+        # optimistic snapshots_inserted counter no longer reflects persisted
+        # reality — zero it before recording, otherwise a mid-run exception
+        # over-reports inserts in parser_stats (P2-5).
+        snapshots_inserted = 0
         await session.execute(
             update(ParserRun)
             .where(ParserRun.id == run_id)

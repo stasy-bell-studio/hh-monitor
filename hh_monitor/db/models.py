@@ -169,6 +169,10 @@ class Event(Base):
             "llm_enriched",
             postgresql_where="llm_enriched = FALSE",
         ),
+        # Detector queries events by hh_resume_id and by search_id (detector/run.py);
+        # both columns are FKs but unindexed — add btree indexes to avoid seq scans.
+        Index("ix_events_hh_resume_id", "hh_resume_id"),
+        Index("ix_events_search_id", "search_id"),
     )
 
 

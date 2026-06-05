@@ -458,7 +458,13 @@ async def test_view_limit_graceful_shutdown(db_session: AsyncSession) -> None:
 
 @pytest.mark.asyncio
 async def test_unexpected_exception_marks_failed(db_session: AsyncSession) -> None:
-    """RuntimeError mid-run: parser_run marked 'failed' with error captured; re-raised."""
+    """RuntimeError mid-run: parser_run marked 'failed' with error captured; re-raised.
+
+    P2-5: the failure handler rolls back the in-flight transaction, which discards
+    every uncommitted snapshot INSERT (nothing is committed until the run
+    finishes), so ``snapshots_inserted`` must be recorded as 0 — not the
+    optimistic pre-rollback count.
+    """
     search_id = await _add_search(db_session)
 
     ids = ["r001", "r002", "r003"]
@@ -500,8 +506,9 @@ async def test_unexpected_exception_marks_failed(db_session: AsyncSession) -> No
     # error column must capture the exception repr
     assert pr.error is not None
     assert "boom" in pr.error
-    # Two resumes were successfully processed before the crash.
-    assert pr.snapshots_inserted == 2
+    # r001/r002 snapshots were added but never committed — the rollback on the
+    # failure path discarded them, so the persisted count is 0 (P2-5).
+    assert pr.snapshots_inserted == 0
     # All three items were returned from the search page before the per-item loop.
     assert pr.resumes_seen == 3
 

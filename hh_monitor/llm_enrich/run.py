@@ -34,6 +34,7 @@ from hh_monitor.llm_enrich import cache as llm_cache
 from hh_monitor.llm_enrich import client as llm_client
 from hh_monitor.llm_enrich.prompt import build_messages
 from hh_monitor.llm_enrich.prompts import (
+    DOSSIER_PARSE_FAILED_KEY,
     build_full_prompt,
     check_forbidden_phrases,
     derive_verdict_class,
@@ -177,6 +178,7 @@ async def _enrich_one(
     global_ctx: GlobalContext,
     *,
     critic_prompt: str = "",
+    portrait_payload: dict[str, Any] | None = None,
     force: bool = False,
     dry_run: bool,
 ) -> dict[str, Any]:
@@ -258,7 +260,14 @@ async def _enrich_one(
     # 4. Check cache (skip on --force)
     prompt_version = settings.llm_prompt_version
     cached = (
-        await llm_cache.get_cached(session, resume_id, content_hash, prompt_version)
+        await llm_cache.get_cached(
+            session,
+            resume_id,
+            content_hash,
+            prompt_version,
+            critic_prompt=critic_prompt,
+            portrait=portrait_payload,
+        )
         if not force
         else None
     )
@@ -284,27 +293,36 @@ async def _enrich_one(
         raw_text = llm_client.extract_text(raw_resp)
         tokens_in, tokens_out = llm_client.extract_usage(raw_resp)
 
-        # 6. Parse dossier JSON
+        # 6. Parse dossier JSON.  Pop the parse-failure sentinel so it never
+        # reaches downstream consumers / the cache (P2-3).
         dossier = parse_dossier(raw_text)
+        parse_failed = bool(dossier.pop(DOSSIER_PARSE_FAILED_KEY, False))
 
         # Log forbidden phrase warnings (non-blocking)
         full_text = " ".join(str(v) for v in dossier.values() if v)
         check_forbidden_phrases(full_text, resume_id)
 
-        # Cache the raw dossier dict
-        try:
-            await llm_cache.save_cached(
-                session,
-                resume_id,
-                content_hash,
-                prompt_version,
-                dossier,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                overwrite=force,
-            )
-        except Exception:
-            log_ctx.warning("llm_enrich.cache_write_failed", exc_info=True)
+        # Cache the raw dossier dict — but skip on a parse failure so a transient
+        # bad LLM response cannot poison the cache (P2-3).  The result is still
+        # used for this run's Event/Resume update below.
+        if parse_failed:
+            log_ctx.warning("llm_enrich.parse_failed_cache_skip")
+        else:
+            try:
+                await llm_cache.save_cached(
+                    session,
+                    resume_id,
+                    content_hash,
+                    prompt_version,
+                    dossier,
+                    critic_prompt=critic_prompt,
+                    portrait=portrait_payload,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    overwrite=force,
+                )
+            except Exception:
+                log_ctx.warning("llm_enrich.cache_write_failed", exc_info=True)
 
     # Derive numeric score + structured verdict class for backward compat (TG bot / digest)
     verdict_text: str = _coerce_text(dossier.get("verdict"))
@@ -484,6 +502,9 @@ async def run_llm_enrichment(
 
     position_code: str = search_row.position_code
     critic_prompt: str = search_row.llm_critic_prompt or ""
+    # Raw Search.portrait jsonb — folded into the LLM cache key so editing the
+    # search's portrait or critic prompt invalidates stale cached verdicts (P2-2).
+    portrait_payload: dict[str, Any] | None = search_row.portrait
 
     portrait = load_portrait_for_search(search_row, portraits=portraits)
 
@@ -531,6 +552,7 @@ async def run_llm_enrichment(
                 portrait,
                 global_ctx,
                 critic_prompt=critic_prompt,
+                portrait_payload=portrait_payload,
                 force=force,
                 dry_run=dry_run,
             )

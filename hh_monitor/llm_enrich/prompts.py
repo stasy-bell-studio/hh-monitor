@@ -107,13 +107,25 @@ def _split_numbered_list(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+# Sentinel key set on parse_dossier's JSON-decode fallback result.  Callers use
+# is_parse_failure() to detect it and must NOT cache such results (a transient
+# bad LLM response would otherwise poison the cache — see llm_enrich/run.py).
+DOSSIER_PARSE_FAILED_KEY = "_parse_failed"
+
+
+def is_parse_failure(dossier: dict[str, Any]) -> bool:
+    """True if *dossier* is parse_dossier's JSON-decode fallback result."""
+    return bool(dossier.get(DOSSIER_PARSE_FAILED_KEY))
+
+
 def parse_dossier(raw: str) -> dict[str, Any]:
     """Parse 6-field dossier JSON from LLM response.
 
     Returns a dict with keys: real_role (str), facts_confirmed, weak_spots,
     red_flags, interview_questions (list[str]), verdict.
 
-    On JSONDecodeError: returns {"verdict": raw_text, "real_role": "", ...rest None}.
+    On JSONDecodeError: returns {"verdict": raw_text, "real_role": "", ...rest None}
+    plus the ``DOSSIER_PARSE_FAILED_KEY`` sentinel (detect via is_parse_failure()).
     On missing fields: real_role defaults to ""; other fields default to None.
     On interview_questions as string: splits by numbered markers.
     """
@@ -139,6 +151,7 @@ def parse_dossier(raw: str) -> dict[str, Any]:
             "interview_questions": None,
             "verdict": raw,
             "insurance_domain": "partial",
+            DOSSIER_PARSE_FAILED_KEY: True,
         }
 
     # Normalise interview_questions: accept string → split, list → flatten nested, else None.

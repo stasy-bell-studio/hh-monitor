@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.db.models import LlmCache, Resume
-from hh_monitor.llm_enrich.cache import get_cached, save_cached
+from hh_monitor.llm_enrich.cache import get_cached, make_cache_key, save_cached
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,7 @@ async def test_get_cached_legacy_format_returns_none(db_session: AsyncSession) -
 
     legacy = {"score": 50, "verdict": "ok", "comment": "хорошо разбирается"}
     row = LlmCache(
-        cache_key="rid1|hash1|v0",
+        cache_key=make_cache_key("rid1", "hash1", "v0"),
         hh_resume_id="rid1",
         content_hash="hash1",
         prompt_version="v0",
@@ -77,7 +77,7 @@ async def test_get_cached_missing_real_role_returns_none(db_session: AsyncSessio
         "verdict": "Рекомендую.",
     }
     row = LlmCache(
-        cache_key="rid3|hash3|v2",
+        cache_key=make_cache_key("rid3", "hash3", "v2"),
         hh_resume_id="rid3",
         content_hash="hash3",
         prompt_version="v2",
@@ -125,3 +125,36 @@ async def test_save_cached_overwrite_updates_response(db_session: AsyncSession) 
     assert result is not None
     assert result["verdict"] == "Рекомендую."
     assert result["real_role"] == "Директор регионального офиса, 50 агентов"
+
+
+# ── make_cache_key: critic prompt + portrait fold into the key (P2-2) ─────────
+
+
+def test_make_cache_key_different_critic_prompt_changes_key() -> None:
+    """Same resume/content/version but a different critic prompt → different key."""
+    base = make_cache_key("r1", "h1", "v1", "critic A", {"k": "v"})
+    other = make_cache_key("r1", "h1", "v1", "critic B", {"k": "v"})
+    assert base != other
+
+
+def test_make_cache_key_different_portrait_changes_key() -> None:
+    """Same resume/content/version/critic but a different portrait → different key."""
+    base = make_cache_key("r1", "h1", "v1", "critic A", {"k": "v"})
+    other = make_cache_key("r1", "h1", "v1", "critic A", {"k": "w"})
+    assert base != other
+
+
+def test_make_cache_key_identical_inputs_identical_key() -> None:
+    """Identical inputs → identical key; portrait dict ordering is canonicalised."""
+    a = make_cache_key("r1", "h1", "v1", "critic A", {"k": "v", "z": 1})
+    b = make_cache_key("r1", "h1", "v1", "critic A", {"z": 1, "k": "v"})
+    assert a == b
+    assert a.count("|") == 3  # 4-part key: resume|content|version|critic_hash
+
+
+def test_make_cache_key_portrait_none_does_not_raise() -> None:
+    """portrait=None is handled (canonicalised to '{}') — same key as portrait={}."""
+    none_key = make_cache_key("r1", "h1", "v1", "critic A", None)
+    empty_key = make_cache_key("r1", "h1", "v1", "critic A", {})
+    assert none_key == empty_key
+    assert none_key.count("|") == 3
