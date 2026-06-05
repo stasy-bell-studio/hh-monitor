@@ -7,7 +7,7 @@ from io import BytesIO
 
 from openpyxl import load_workbook  # type: ignore[import-untyped]
 
-from hh_monitor.weekly_digest.excel import build_digest_workbook
+from hh_monitor.weekly_digest.excel import _humanize_field, build_digest_workbook
 
 
 def _candidate(**kw: object) -> dict[str, object]:
@@ -139,3 +139,68 @@ def test_empty_dynamics_no_chart() -> None:
     wb = _load(_data(), [])
     ws = wb["Динамика"]
     assert len(ws._charts) == 0
+
+
+def test_humanize_field_real_dict() -> None:
+    value = {"Опыт управления": "250+ агентов", "Продуктовая экспертиза": "10 лет"}
+    assert _humanize_field(value) == "Опыт управления: 250+ агентов\nПродуктовая экспертиза: 10 лет"
+
+
+def test_humanize_field_dict_repr_string() -> None:
+    # The single-quoted Python-dict reprs seen in the week-23 export.
+    value = "{'Опыт управления': '250+ агентов', 'Продуктовая экспертиза': '10 лет'}"
+    assert _humanize_field(value) == "Опыт управления: 250+ агентов\nПродуктовая экспертиза: 10 лет"
+
+
+def test_humanize_field_plain_string_passthrough() -> None:
+    assert _humanize_field("опыт 10 лет в продажах") == "опыт 10 лет в продажах"
+
+
+def test_humanize_field_none_and_empty() -> None:
+    assert _humanize_field(None) == ""
+    assert _humanize_field("") == ""
+
+
+def test_humanize_field_malformed_dict_string_unchanged() -> None:
+    # Looks dict-ish but is not valid — must fall back to the original, no raise.
+    malformed = "{сильные стороны: опыт, лидерство"
+    assert _humanize_field(malformed) == malformed
+
+
+def test_candidates_dict_fields_humanized() -> None:
+    facts = "{'Опыт управления': '250+ агентов', 'Экспертиза': 'логистика'}"
+    weak = "{'Слабое место': 'нет высшего'}"
+    data = _data(
+        candidates_all=[_candidate(facts=facts, weak=weak)],
+        pending=[],
+    )
+    wb = _load(data, _SERIES)
+    ws = wb["Кандидаты"]
+    facts_cell = ws.cell(row=2, column=7).value
+    weak_cell = ws.cell(row=2, column=8).value
+    assert facts_cell == "Опыт управления: 250+ агентов\nЭкспертиза: логистика"
+    assert weak_cell == "Слабое место: нет высшего"
+    assert "{'" not in str(facts_cell)
+    assert "{'" not in str(weak_cell)
+
+
+def test_candidates_link_cell_is_real_url() -> None:
+    data = _data(
+        candidates_all=[_candidate(url="https://hh.ru/resume/known999")],
+        pending=[],
+    )
+    wb = _load(data, _SERIES)
+    ws = wb["Кандидаты"]
+    assert ws.cell(row=2, column=13).value == "https://hh.ru/resume/known999"
+
+
+def test_candidates_link_cell_empty_when_no_url() -> None:
+    data = _data(
+        candidates_all=[_candidate(url="")],
+        pending=[],
+    )
+    wb = _load(data, _SERIES)
+    ws = wb["Кандидаты"]
+    cell = ws.cell(row=2, column=13).value
+    assert cell in ("", None)
+    assert cell != "hh.ru"

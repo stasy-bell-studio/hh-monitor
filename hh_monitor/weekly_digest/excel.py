@@ -13,6 +13,7 @@ read-only label — no DataValidation dropdown, no taken/reserve taxonomy.
 
 from __future__ import annotations
 
+import ast
 from io import BytesIO
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,34 @@ _FONT_LINK = Font(color="0563C1", underline="single", size=9)
 _FONT_DATA = Font(size=9)
 _ALIGN_WRAP = Alignment(wrap_text=True, vertical="top")
 _ALIGN_CENTER = Alignment(horizontal="center", vertical="top")
+
+
+def _dict_lines(d: dict[object, object]) -> str:
+    return "\n".join(f"{k}: {v}" for k, v in d.items())
+
+
+def _humanize_field(value: object) -> str:
+    """Render dict-valued LLM fields as readable `key: value` lines.
+
+    The facts/weak/risks columns are mixed-type in the data: some rows hold plain
+    text, others a ``dict`` or a single-quoted Python-dict repr string (e.g.
+    ``"{'Опыт': '250+ агентов'}"``). Flatten any dict shape to newline-joined
+    ``key: value`` lines; plain strings pass through unchanged.
+    """
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        return _dict_lines(value)
+    if isinstance(value, str):
+        if value.strip().startswith("{"):
+            try:
+                parsed = ast.literal_eval(value)
+            except (ValueError, SyntaxError):
+                return value  # malformed dict-ish text — keep as-is
+            if isinstance(parsed, dict):
+                return _dict_lines(parsed)
+        return value
+    return str(value)
 
 
 def _style_header(ws: object, headers: list[tuple[str, int]]) -> None:
@@ -76,22 +105,23 @@ def _sheet_candidates(wb: Workbook, data: _DigestData) -> None:
             c["llm_score"],
             c["llm_verdict"] or "",
             c["llm_real_role"],
-            c["facts"],
-            c["weak"],
-            c["risks"],
+            _humanize_field(c["facts"]),
+            _humanize_field(c["weak"]),
+            _humanize_field(c["risks"]),
             c["conclusion"],
             _status_label(c["screening_status"]),
             c["reason"],
-            "hh.ru",
+            c["url"],
             c["created_at"].strftime("%d.%m.%Y"),
         ]
         for col_idx, value in enumerate(values, start=1):
             cell = ws.cell(row=i, column=col_idx, value=value)
             cell.alignment = _ALIGN_WRAP
             cell.font = _FONT_DATA
-        link_cell = ws.cell(row=i, column=13)
-        link_cell.hyperlink = c["url"]
-        link_cell.font = _FONT_LINK
+        if c["url"]:
+            link_cell = ws.cell(row=i, column=13)
+            link_cell.hyperlink = c["url"]
+            link_cell.font = _FONT_LINK
 
     n = len(data["candidates_all"])
     if n:
