@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     telegram_admin_user_ids: str = ""
     telegram_score_threshold: int = Field(default=70, ge=0, le=100)
     digest_score_threshold: int = Field(default=30, ge=0, le=100)
+    # 0 = disabled; default 14 days prevents stale-card floods on search reactivation
+    notification_max_event_age_days: int = Field(default=14, ge=0)
 
     # Topic IDs for supergroup routing (0 = don't use topics)
     telegram_cards_topic_id: int = 0

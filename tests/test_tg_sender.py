@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,7 +33,11 @@ def _hash(p: dict[str, Any]) -> str:
 
 
 async def _seed(
-    session: AsyncSession, score_total: int = 80, llm_verdict: str | None = "подходит"
+    session: AsyncSession,
+    score_total: int = 80,
+    llm_verdict: str | None = "подходит",
+    resume_id: str = "resume_tg_sender_001",
+    created_at: datetime | None = None,
 ) -> int:
     search = Search(
         position_code="test_pos",
@@ -45,7 +50,7 @@ async def _seed(
     await session.flush()
 
     resume = Resume(
-        hh_resume_id="resume_tg_sender_001",
+        hh_resume_id=resume_id,
         fit_score=70,
         llm_score=90,
         score_total=score_total,
@@ -58,21 +63,24 @@ async def _seed(
 
     payload = _payload()
     snap = Snapshot(
-        hh_resume_id="resume_tg_sender_001",
+        hh_resume_id=resume_id,
         payload=payload,
         content_hash=_hash(payload),
     )
     session.add(snap)
     await session.flush()
 
-    event = Event(
-        hh_resume_id="resume_tg_sender_001",
-        event_type="NEW",
-        search_id=search.id,
-        llm_enriched=True,
-        score_total=score_total,
-        llm_verdict=llm_verdict,
-    )
+    event_kwargs: dict[str, Any] = {
+        "hh_resume_id": resume_id,
+        "event_type": "NEW",
+        "search_id": search.id,
+        "llm_enriched": True,
+        "score_total": score_total,
+        "llm_verdict": llm_verdict,
+    }
+    if created_at is not None:
+        event_kwargs["created_at"] = created_at
+    event = Event(**event_kwargs)
     session.add(event)
     await session.flush()
     event_id: int = event.id
@@ -214,7 +222,13 @@ async def test_send_pending_cards_skipped_non_prod(db_session: AsyncSession) -> 
         ms.telegram_send_enabled = None
         result = await send_pending_cards(db_session, _make_bot())
 
-    assert result == {"sent": 0, "skipped_threshold": 0, "skipped_duplicate": 0, "errors": 0}
+    assert result == {
+        "sent": 0,
+        "skipped_threshold": 0,
+        "skipped_duplicate": 0,
+        "skipped_stale": 0,
+        "errors": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -315,6 +329,7 @@ async def test_send_gate_uses_event_score_total(db_session: AsyncSession) -> Non
         ms.telegram_score_threshold = 60
         ms.telegram_hr_group_id = -100
         ms.telegram_cards_topic_id = 0
+        ms.notification_max_event_age_days = 0
         result = await send_pending_cards(db_session, _make_bot())
 
     assert result["sent"] == 1, "event with score_total=70 must send even if Resume.score_total=20"
@@ -334,6 +349,7 @@ async def test_send_gate_skips_null_event_score_total(db_session: AsyncSession) 
         ms.telegram_score_threshold = 60
         ms.telegram_hr_group_id = -100
         ms.telegram_cards_topic_id = 0
+        ms.notification_max_event_age_days = 0
         result = await send_pending_cards(db_session, _make_bot())
 
     assert result["sent"] == 0, "event with score_total=NULL must not be sent"
@@ -349,6 +365,7 @@ def _prod_settings_mock(ms: MagicMock, threshold: int = 45) -> None:
     ms.telegram_score_threshold = threshold
     ms.telegram_hr_group_id = -100
     ms.telegram_cards_topic_id = 0
+    ms.notification_max_event_age_days = 0  # disable freshness gate in most tests
 
 
 @pytest.mark.asyncio
@@ -472,3 +489,41 @@ async def test_send_gate_rejects_score_69(db_session: AsyncSession) -> None:
     assert result is False
     mock_send.assert_not_called()
     assert await db_session.get(NotificationSent, event_id) is None
+
+
+# ── P1-3: freshness gate ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_freshness_gate_skips_stale_sends_fresh(db_session: AsyncSession) -> None:
+    """Stale event (> max_age) is skipped; fresh event is sent. No NotificationSent for stale."""
+    stale_event_id = await _seed(
+        db_session,
+        resume_id="resume_freshness_stale",
+        score_total=80,
+        created_at=datetime.now(tz=UTC) - timedelta(days=20),
+    )
+    fresh_event_id = await _seed(
+        db_session,
+        resume_id="resume_freshness_fresh",
+        score_total=80,
+    )
+    msg = MagicMock(spec=Message)
+    msg.message_id = 777
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock, return_value=msg),
+    ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_score_threshold = 60
+        ms.telegram_hr_group_id = -100
+        ms.telegram_cards_topic_id = 0
+        ms.notification_max_event_age_days = 14
+        result = await send_pending_cards(db_session, _make_bot())
+
+    assert result["sent"] == 1
+    assert result["skipped_stale"] == 1
+    assert await db_session.get(NotificationSent, stale_event_id) is None
+    assert await db_session.get(NotificationSent, fresh_event_id) is not None

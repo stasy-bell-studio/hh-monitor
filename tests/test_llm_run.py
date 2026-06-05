@@ -16,7 +16,13 @@ from sqlalchemy import func, select
 
 from hh_monitor.db.models import Event, Resume, Search, Snapshot
 from hh_monitor.fit.portrait import Filters, GlobalContext, Portrait, RegionFilters
-from hh_monitor.llm_enrich.run import _apply_domain_governor, _coerce_text, run_llm_enrichment
+from hh_monitor.llm_enrich.prompts import parse_dossier
+from hh_monitor.llm_enrich.run import (
+    _apply_domain_governor,
+    _coerce_text,
+    combine_score,
+    run_llm_enrichment,
+)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -440,13 +446,11 @@ async def test_low_fit_high_llm_reaches_threshold(
     search, resume, event = await _seed_db(db_session, fit_score=35)
     portraits = {search.position_code: _portrait(search.position_code)}
 
-    import json as _json
-
     llm_response = {
         "choices": [
             {
                 "message": {
-                    "content": _json.dumps(
+                    "content": json.dumps(
                         {
                             "real_role": "Директор филиала страховой компании",
                             "facts_confirmed": "Работал в СОГАЗ 2019–2023.",
@@ -491,6 +495,13 @@ def test_new_blend_higher_than_old_for_low_fit_high_llm() -> None:
     old_score = round(0.3 * fit + 0.7 * llm)
     new_score = round(0.1 * fit + 0.9 * llm)
     assert new_score > old_score, f"new={new_score} must exceed old={old_score}"
+
+
+def test_score_weight_exact_ratios() -> None:
+    """combine_score must apply exactly 10% fit / 90% LLM weights."""
+    assert combine_score(100, 0) == 10   # fit-only contribution
+    assert combine_score(0, 100) == 90   # llm-only contribution
+    assert combine_score(60, 50) == 51   # round(0.1*60 + 0.9*50) = round(51.0)
 
 
 # ── Commit 9.1: hard_reject_reasons persist ───────────────────────────────────
@@ -1488,6 +1499,71 @@ def test_governor_off_passes_no_below_floor() -> None:
 def test_governor_cap_explicit_matches_default() -> None:
     assert _apply_domain_governor(61, "partial", mode="cap") == 20
     assert _apply_domain_governor(61, "yes", mode="cap") == 61
+
+
+# ── P1-4: missing insurance_domain must not cap ───────────────────────────────
+
+
+def test_parse_dossier_missing_insurance_domain_returns_none() -> None:
+    """Valid JSON without insurance_domain → field is None, not 'partial'."""
+    result = parse_dossier('{"verdict": "подходит", "real_role": "Директор"}')
+    assert result["insurance_domain"] is None
+
+
+def test_governor_missing_domain_no_cap() -> None:
+    """parse_dossier None insurance_domain → run.py defaults to 'yes' → no cap."""
+    # Mirrors run.py logic: None → "yes" → governor returns score unchanged.
+    assert _apply_domain_governor(85, "yes", mode="cap") == 85
+
+
+@pytest.mark.asyncio
+async def test_governor_missing_domain_no_cap_integration(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enrichment with dossier missing insurance_domain must NOT force score to 20."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    search, resume, event = await _seed_db(db_session, fit_score=70)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    llm_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "real_role": "Директор регионального офиса",
+                            "facts_confirmed": "Работал в ВСК 2020–2024.",
+                            "weak_spots": "Нет P&L опыта.",
+                            "red_flags": "",
+                            "interview_questions": ["Каков был KPI?"],
+                            "verdict": "Хороший кандидат.",
+                            "score": 80,
+                            "verdict_class": "подходит",
+                            # insurance_domain is intentionally absent
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 150},
+    }
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=llm_response,
+    ):
+        await run_llm_enrichment(
+            db_session, search.id, limit=1, portraits=portraits, global_ctx=_global_ctx()
+        )
+
+    await db_session.refresh(resume)
+    assert resume.score_total is not None
+    assert resume.score_total != 20, (
+        f"score_total={resume.score_total} must not be capped to 20 when insurance_domain absent"
+    )
+    # round(0.1*70 + 0.9*80) = round(7 + 72) = 79
+    assert resume.score_total > 20
 
 
 # ── _coerce_text unit tests ───────────────────────────────────────────────────

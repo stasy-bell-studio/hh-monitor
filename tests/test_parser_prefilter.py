@@ -34,11 +34,12 @@ def _exp(
     company_id: str = "",
     employer_id: str = "",
     industries: list[dict[str, Any]] | None = None,
+    start: str = "2020-01",
 ) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "company": company,
         "position": position,
-        "start": "2020-01",
+        "start": start,
         "end": None,
     }
     if company_id:
@@ -313,3 +314,30 @@ def test_forbidden_industry_no_match_passes() -> None:
     p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=["банк"]))
     item = _item(experience=[_exp(industries=[{"id": "7", "name": "Страхование"}])])
     assert apply_prefilter(item, p) == []
+
+
+# ── P1-2: latest-only policy (mirrors fit/rules.py + _global.yaml) ─────────
+
+
+def test_forbidden_industry_old_job_passes_prefilter() -> None:
+    """Forbidden industry only in an OLD job must NOT trigger rejection."""
+    p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=["банк"]))
+    item = _item(
+        experience=[
+            _exp(industries=[{"id": "43", "name": "Банки"}], start="2015-01"),  # old job
+            _exp(industries=[{"id": "7", "name": "Страхование"}], start="2023-06"),  # latest
+        ]
+    )
+    assert apply_prefilter(item, p) == []
+
+
+def test_forbidden_industry_latest_job_rejected() -> None:
+    """Forbidden industry in the LATEST job must still be rejected."""
+    p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=["банк"]))
+    item = _item(
+        experience=[
+            _exp(industries=[{"id": "7", "name": "Страхование"}], start="2018-01"),  # old
+            _exp(industries=[{"id": "43", "name": "Банки"}], start="2024-01"),  # latest
+        ]
+    )
+    assert "forbidden_industry" in apply_prefilter(item, p)

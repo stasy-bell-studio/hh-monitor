@@ -15,7 +15,7 @@ and stored on the `resumes` row.
 **Score formula:**
 
 ```
-score_total = round(0.3 * fit_score + 0.7 * llm_score)
+score_total = round(0.1 * fit_score + 0.9 * llm_score)
 ```
 
 ---
@@ -56,7 +56,7 @@ run_llm_enrichment()
 Cache key: `f"{hh_resume_id}|{content_hash}|{prompt_version}"`
 
 - `content_hash` — SHA-256 of the raw resume JSON (from `snapshots.content_hash`)
-- `prompt_version` — controlled by `LLM_PROMPT_VERSION` env var (default `v1`)
+- `prompt_version` — controlled by `LLM_PROMPT_VERSION` env var (default `v5`)
 
 A cache hit returns the stored `LlmResponse` without calling the API.  The entry
 is not updated on a hit (INSERT … ON CONFLICT DO NOTHING).

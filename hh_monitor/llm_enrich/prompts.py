@@ -175,13 +175,14 @@ def parse_dossier(raw: str) -> dict[str, Any]:
     if not isinstance(data.get("real_role"), str):
         data["real_role"] = ""
 
-    # 9th field: insurance_domain — fail-safe default "partial" (keeps governor active).
-    # "yes" is NOT the safe default: it would disable the governor for unrecognised responses.
+    # 9th field: insurance_domain — only accept explicit valid values.
+    # Absent or unrecognised → None; run.py logs a warning and skips the cap.
+    # Only explicit "partial"/"no" should trigger the score cap.
     _raw_id = data.get("insurance_domain")
     if isinstance(_raw_id, str) and _raw_id in {"yes", "partial", "no"}:
         data["insurance_domain"] = _raw_id
     else:
-        data["insurance_domain"] = "partial"
+        data["insurance_domain"] = None
 
     return data
 

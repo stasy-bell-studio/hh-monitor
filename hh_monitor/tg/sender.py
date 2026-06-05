@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -121,12 +122,18 @@ async def send_pending_cards(
 ) -> dict[str, int]:
     if not send_enabled(settings):
         logger.info("tg.send.skipped", reason="send_disabled", env=settings.env)
-        return {"sent": 0, "skipped_threshold": 0, "skipped_duplicate": 0, "errors": 0}
+        return {
+            "sent": 0,
+            "skipped_threshold": 0,
+            "skipped_duplicate": 0,
+            "skipped_stale": 0,
+            "errors": 0,
+        }
     threshold = await get_current_threshold(session)
 
     subq = select(NotificationSent.event_id)
     stmt = (
-        select(Event.id)
+        select(Event.id, Event.created_at)
         .where(Event.llm_enriched.is_(True))
         .where(Event.id.not_in(subq))
         .where(Event.score_total >= threshold)
@@ -136,11 +143,28 @@ async def send_pending_cards(
     if limit is not None:
         stmt = stmt.limit(limit)
 
-    event_ids = list((await session.execute(stmt)).scalars())
+    rows = list((await session.execute(stmt)).all())
 
-    sent = skipped_threshold = skipped_duplicate = errors = 0
+    cutoff: datetime | None = None
+    if settings.notification_max_event_age_days > 0:
+        cutoff = datetime.now(tz=UTC) - timedelta(
+            days=settings.notification_max_event_age_days
+        )
 
-    for event_id in event_ids:
+    sent = skipped_threshold = skipped_duplicate = skipped_stale = errors = 0
+
+    for event_id, event_created_at in rows:
+        # Normalize to UTC-aware for comparison; TIMESTAMP(tz) via asyncpg is always aware,
+        # but guard against naive timestamps returned by some test backends.
+        event_ts = (
+            event_created_at
+            if event_created_at.tzinfo is not None
+            else event_created_at.replace(tzinfo=UTC)
+        )
+        if cutoff is not None and event_ts < cutoff:
+            logger.info("tg.send.skipped", reason="skipped_stale", event_id=event_id)
+            skipped_stale += 1
+            continue
         try:
             result = await send_new_candidate_card(session, bot, event_id)
             if result:
@@ -165,6 +189,7 @@ async def send_pending_cards(
         "sent": sent,
         "skipped_threshold": skipped_threshold,
         "skipped_duplicate": skipped_duplicate,
+        "skipped_stale": skipped_stale,
         "errors": errors,
     }
 

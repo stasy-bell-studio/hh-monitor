@@ -160,22 +160,22 @@ def test_parse_dossier_insurance_domain_partial() -> None:
     assert d["insurance_domain"] == "partial"
 
 
-def test_parse_dossier_insurance_domain_missing_defaults_to_partial() -> None:
-    """Missing insurance_domain field defaults to 'partial' (fail-safe: governor stays active)."""
+def test_parse_dossier_insurance_domain_missing_returns_none() -> None:
+    """Missing insurance_domain field returns None — run.py will log warning and skip cap."""
     import json
 
     raw = json.dumps({"verdict": "Рекомендую."})
     d = parse_dossier(raw)
-    assert d["insurance_domain"] == "partial"
+    assert d["insurance_domain"] is None
 
 
-def test_parse_dossier_insurance_domain_invalid_defaults_to_partial() -> None:
-    """Unrecognised insurance_domain value (e.g. 'maybe') defaults to 'partial'."""
+def test_parse_dossier_insurance_domain_invalid_returns_none() -> None:
+    """Unrecognised insurance_domain value (e.g. 'maybe') returns None — skip cap."""
     import json
 
     raw = json.dumps({"verdict": "Рекомендую.", "insurance_domain": "maybe"})
     d = parse_dossier(raw)
-    assert d["insurance_domain"] == "partial"
+    assert d["insurance_domain"] is None
 
 
 def test_parse_dossier_extra_fields_ignored() -> None:

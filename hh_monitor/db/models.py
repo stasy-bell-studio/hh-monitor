@@ -88,7 +88,7 @@ class Resume(Base):
     # content_hash of the snapshot used for the last LLM call (for cache invalidation)
     llm_content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Combined score: round(0.3 * fit_score + 0.7 * llm_score)
+    # Combined score: round(0.1 * fit_score + 0.9 * llm_score)
     score_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # HR screening workflow
@@ -139,7 +139,7 @@ class Event(Base):
     search_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("searches.id"), nullable=True)
     details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     fit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # Per-event combined score (0.3*fit + 0.7*llm). NULL = not yet enriched or below threshold.
+    # Per-event combined score (0.1*fit + 0.9*llm). NULL = not yet enriched or below threshold.
     # Send gate compares this, not Resume.score_total, to avoid last-write race between events.
     score_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

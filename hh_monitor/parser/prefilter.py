@@ -16,6 +16,7 @@ from hh_monitor.fit.rules import (
     _HIGHER_EDU_IDS,
     _INSURANCE_STEMS,
     _experience_months_fallback,
+    _latest_experience,
 )
 
 
@@ -159,16 +160,15 @@ def apply_prefilter(item: dict[str, Any], portrait: Portrait) -> list[str]:
                     break
 
     # ── Forbidden industry ────────────────────────────────────────────────────
-    # hh.ru search-list items include experience[].industries (list of {id, name})
-    # when the candidate filled in industry data; falls back to company name string
-    # when industries is absent or empty.
+    # Policy: check ONLY the most-recent experience entry — matches fit/rules.py
+    # and _global.yaml ("работа в этих отраслях в последнем месте работы").
+    # Uses _latest_experience() directly so selection logic stays in sync.
     if pf.forbidden_industry_names:
         forbidden_lower = [n.lower() for n in pf.forbidden_industry_names]
-        experiences = item.get("experience") or []
-        for exp in experiences:
-            if not isinstance(exp, dict):
-                continue
-            industries = exp.get("industries")
+        raw_exps: list[Any] = item.get("experience") or []
+        latest = _latest_experience([e for e in raw_exps if isinstance(e, dict)])
+        if latest is not None:
+            industries = latest.get("industries")
             if industries:
                 for ind in industries:
                     if not isinstance(ind, dict):
@@ -178,10 +178,8 @@ def apply_prefilter(item: dict[str, Any], portrait: Portrait) -> list[str]:
                         reasons.append("forbidden_industry")
                         break
             else:
-                company = str(exp.get("company", "") or "").lower()
+                company = str(latest.get("company", "") or "").lower()
                 if company and any(f in company for f in forbidden_lower):
                     reasons.append("forbidden_industry")
-            if "forbidden_industry" in reasons:
-                break
 
     return reasons

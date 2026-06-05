@@ -51,6 +51,11 @@ _INTER_CALL_DELAY = 0.5
 _DOMAIN_SCORE_FLOOR = 20
 
 
+def combine_score(fit: int, llm: int) -> int:
+    """Combine fit and LLM scores: 10% fit + 90% LLM."""
+    return round(0.1 * fit + 0.9 * llm)
+
+
 def _apply_domain_governor(
     score_total: int,
     insurance_domain: str,
@@ -313,9 +318,14 @@ async def _enrich_one(
     else:
         llm_verdict_class = derive_verdict_class(verdict_text)
 
-    score_total = round(0.1 * fit_score_val + 0.9 * llm_score)
+    score_total = combine_score(fit_score_val, llm_score)
 
-    _insurance_domain: str = dossier.get("insurance_domain") or "partial"
+    _raw_domain = dossier.get("insurance_domain")
+    if _raw_domain is None:
+        log_ctx.warning("llm_enrich.insurance_domain_missing")
+        _insurance_domain: str = "yes"  # absent field ≠ explicit "partial"; skip cap
+    else:
+        _insurance_domain = str(_raw_domain)
     capped = _apply_domain_governor(
         score_total, _insurance_domain, mode=portrait.domain_governor_mode
     )
