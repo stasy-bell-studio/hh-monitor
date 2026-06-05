@@ -117,6 +117,45 @@ async def test_run_weekly_digest_xlsx_content() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_weekly_digest_sends_excel_even_if_text_fails() -> None:
+    """A TelegramBadRequest on the HR text send must NOT swallow the Excel."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    from hh_monitor.weekly_digest.run import run_weekly_digest
+
+    mock_session = MagicMock()
+    mock_bot = AsyncMock()
+    mock_bot.send_message = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=MagicMock(), message="Bad Request: message is too long"
+        )
+    )
+    mock_bot.send_document = AsyncMock()
+
+    with (
+        patch("hh_monitor.weekly_digest.run.settings") as ms,
+        patch(
+            "hh_monitor.weekly_digest.run._collect_data",
+            new_callable=AsyncMock,
+            return_value=_run_data(5),
+        ),
+        patch(
+            "hh_monitor.weekly_digest.run._collect_weekly_series",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        ms.env = "production"
+        ms.telegram_send_enabled = None
+        ms.telegram_hr_group_id = -100
+        ms.telegram_digest_topic_id = 0
+        ms.telegram_admin_topic_id = 0
+        await run_weekly_digest(mock_session, mock_bot)
+
+    mock_bot.send_document.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_run_weekly_digest_skipped_non_prod() -> None:
     """Non-prod + TELEGRAM_SEND_ENABLED unset → immediate return, no bot calls."""
     from hh_monitor.weekly_digest.run import run_weekly_digest

@@ -7,6 +7,7 @@ from typing import TypedDict
 
 import structlog
 from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,12 @@ from hh_monitor.tg.send_guard import send_enabled
 logger = structlog.get_logger(__name__)
 
 _REJECTED_STATUSES = {ScreeningStatus.REJECT.value, ScreeningStatus.STOP_LIST.value}
+
+# Telegram's hard limit for a single message `text` field.
+_TELEGRAM_MAX_TEXT = 4096
+# Max candidates rendered inline in the HR summary text; the rest live in the
+# attached Excel workbook. Keeps the message well under _TELEGRAM_MAX_TEXT.
+_DIGEST_TEXT_MAX_CANDIDATES = 10
 
 # Display emoji map (5-way, per spec). Distinct from the per-position bucket
 # classifier below: here стоп-сигнал → ⛔ and unknown/None → ⚪.
@@ -405,10 +412,14 @@ def _pending_block(pending: list[_Candidate]) -> str:
     miss_count = len(pending) - len(shown)
     if not shown:
         return f"🔴 +{miss_count} с вердиктом «мимо» — в Excel"
-    max_age = max((c["age_days"] or 0) for c in shown)
+    # `shown` is already score_total-desc (the _collect_data query orders by it),
+    # so the head is the top-N by score. Cap it: the full list ships in Excel.
+    truncated = shown[:_DIGEST_TEXT_MAX_CANDIDATES]
+    overflow = len(shown) - len(truncated)
+    max_age = max((c["age_days"] or 0) for c in truncated)
     marked = False
     lines: list[str] = []
-    for c in shown:
+    for c in truncated:
         prefix = ""
         if not marked and max_age >= 3 and (c["age_days"] or 0) == max_age:
             prefix = "⚠️ "
@@ -426,6 +437,8 @@ def _pending_block(pending: list[_Candidate]) -> str:
                 f"{prefix}{badge} {c['score_total']} · {nr} · "
                 f'висит {age} дн · <a href="{c["url"]}">hh.ru</a>'
             )
+    if overflow > 0:
+        lines.append(f"…и ещё {overflow} кандидатов — полный список в Excel-файле ниже.")
     if miss_count > 0:
         lines.append(f"🔴 +{miss_count} с вердиктом «мимо» — в Excel")
     return "\n".join(lines)
@@ -505,15 +518,67 @@ def _parser_ops_text(week_num: int, stats: _ParserStats) -> str:
     )
 
 
-async def _send_parser_ops(bot: Bot, week_num: int, stats: _ParserStats) -> None:
-    """Best-effort ops line to the admin topic — never raises."""
-    try:
+def _split_for_telegram(text: str, limit: int = _TELEGRAM_MAX_TEXT) -> list[str]:
+    """Split *text* into chunks no longer than *limit* chars.
+
+    Breaks only on line boundaries so HTML tags are never split mid-tag. A single
+    line longer than *limit* (pathological — digest lines are short) is
+    hard-sliced as a last resort to uphold the <=limit invariant.
+    """
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        if len(line) <= limit:
+            current = line
+            continue
+        for start in range(0, len(line), limit):
+            piece = line[start : start + limit]
+            if len(piece) == limit:
+                chunks.append(piece)
+            else:
+                current = piece
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def _send_long_message(
+    bot: Bot,
+    *,
+    chat_id: int,
+    text: str,
+    message_thread_id: int | None,
+    parse_mode: str = "HTML",
+) -> None:
+    """Send *text* as one or more messages, each within Telegram's 4096 limit."""
+    for chunk in _split_for_telegram(text):
         await bot.send_message(
+            chat_id=chat_id,
+            text=chunk,
+            parse_mode=parse_mode,
+            message_thread_id=message_thread_id,
+        )
+
+
+async def _send_parser_ops(bot: Bot, week_num: int, stats: _ParserStats) -> None:
+    """Best-effort ops line to the admin topic — never breaks the digest."""
+    try:
+        await _send_long_message(
+            bot,
             chat_id=settings.telegram_hr_group_id,
             text=_parser_ops_text(week_num, stats),
             message_thread_id=settings.telegram_admin_topic_id or None,
         )
-    except Exception as exc:  # best-effort: must not break the digest
+    except TelegramAPIError as exc:  # best-effort: must not break the digest
         logger.warning("weekly_digest_parser_ops_failed", error=str(exc))
 
 
@@ -529,10 +594,10 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
     data = await _collect_data(session, date_from, date_to)
 
     if data["funnel"]["found"] == 0:
-        await bot.send_message(
+        await _send_long_message(
+            bot,
             chat_id=settings.telegram_hr_group_id,
             text=_empty_digest_text(date_from, date_to, data["parser_stats"]),
-            parse_mode="HTML",
             message_thread_id=settings.telegram_digest_topic_id or None,
         )
         logger.info("weekly_digest_empty", week=week_num)
@@ -540,12 +605,17 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
         return
 
     weekly_series = await _collect_weekly_series(session)
-    await bot.send_message(
-        chat_id=settings.telegram_hr_group_id,
-        text=_build_hr_message(data, weekly_series, week_num, date_from, date_to),
-        parse_mode="HTML",
-        message_thread_id=settings.telegram_digest_topic_id or None,
-    )
+    # A text-send failure (e.g. unexpected length) must NOT swallow the Excel —
+    # the full candidate data still has to reach HR via send_document below.
+    try:
+        await _send_long_message(
+            bot,
+            chat_id=settings.telegram_hr_group_id,
+            text=_build_hr_message(data, weekly_series, week_num, date_from, date_to),
+            message_thread_id=settings.telegram_digest_topic_id or None,
+        )
+    except TelegramAPIError:
+        logger.warning("weekly_digest_hr_text_failed", week=week_num, exc_info=True)
 
     from hh_monitor.weekly_digest.excel import build_digest_workbook
 

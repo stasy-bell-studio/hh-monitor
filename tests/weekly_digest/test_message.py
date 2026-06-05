@@ -6,10 +6,13 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from hh_monitor.weekly_digest.run import (
+    _DIGEST_TEXT_MAX_CANDIDATES,
+    _TELEGRAM_MAX_TEXT,
     _build_hr_message,
     _empty_digest_text,
     _parser_ops_text,
     _pending_block,
+    _split_for_telegram,
     _stats_from_runs,
 )
 
@@ -187,6 +190,80 @@ def test_pending_warning_on_oldest_shown() -> None:
     block = _pending_block(pending)  # type: ignore[arg-type]
     lines = block.splitlines()
     assert any("⚠️" in line and "4 дн" in line for line in lines)
+
+
+# ── Telegram 4096-char limit: cap inline list + chunked send ─────────────────
+
+
+def test_hr_message_bounded_with_large_candidate_set() -> None:
+    """283 pending candidates must NOT blow past Telegram's 4096-char limit."""
+    pending = [
+        _candidate(
+            position_name="Директор филиала",
+            score_total=90 - (i % 30),
+            llm_verdict="подходит",
+            age_days=i % 7,
+            url=f"https://hh.ru/resume/res{i}",
+        )
+        for i in range(283)
+    ]
+    data = _data(
+        pending=pending,
+        funnel={
+            "found": 283,
+            "sent": 283,
+            "approved": 10,
+            "rejected": 5,
+            "doubt": 3,
+            "pending": 283,
+        },
+    )
+    msg = _build_hr_message(data, [], 23, _FROM, _NOW)  # type: ignore[arg-type]
+    assert len(msg) <= _TELEGRAM_MAX_TEXT
+
+
+def test_hr_message_overflow_note_with_real_count() -> None:
+    """When shown candidates exceed top-N, an overflow note shows the remainder."""
+    n = 283
+    pending = [
+        _candidate(llm_verdict="подходит", age_days=1, url=f"https://hh.ru/resume/r{i}")
+        for i in range(n)
+    ]
+    block = _pending_block(pending)  # type: ignore[arg-type]
+    remaining = n - _DIGEST_TEXT_MAX_CANDIDATES
+    assert f"…и ещё {remaining} кандидатов" in block
+    # exactly top-N candidate lines are rendered inline; the rest are in Excel
+    shown = sum(1 for line in block.splitlines() if "hh.ru" in line)
+    assert shown == _DIGEST_TEXT_MAX_CANDIDATES
+
+
+def test_pending_no_overflow_note_at_cap() -> None:
+    pending = [
+        _candidate(llm_verdict="подходит", age_days=1)
+        for _ in range(_DIGEST_TEXT_MAX_CANDIDATES)
+    ]
+    block = _pending_block(pending)  # type: ignore[arg-type]
+    assert "и ещё" not in block
+
+
+def test_split_for_telegram_short_passthrough() -> None:
+    text = "line one\nline two\nline three"
+    assert _split_for_telegram(text) == [text]
+
+
+def test_split_for_telegram_chunks_under_limit() -> None:
+    text = "\n".join("x" * 10 for _ in range(1000))  # ~11k chars, many short lines
+    chunks = _split_for_telegram(text)
+    assert len(chunks) > 1
+    assert all(len(c) <= _TELEGRAM_MAX_TEXT for c in chunks)
+    assert "\n".join(chunks) == text  # line boundaries preserved, no data lost
+
+
+def test_split_for_telegram_hard_slices_overlong_line() -> None:
+    text = "y" * (_TELEGRAM_MAX_TEXT * 2 + 50)  # single line longer than the limit
+    chunks = _split_for_telegram(text)
+    assert all(len(c) <= _TELEGRAM_MAX_TEXT for c in chunks)
+    assert "".join(chunks) == text
 
 
 # ── Parser stats: bucketing + admin message (Commit B) ───────────────────────
