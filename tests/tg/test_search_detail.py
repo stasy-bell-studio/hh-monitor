@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hh_monitor.db.models import Event, Resume, Search
 from hh_monitor.tg.search_detail import render_search_detail
 
 
@@ -177,3 +178,84 @@ async def test_render_no_reasons() -> None:
     result = await render_search_detail(session, 1)
     assert result is not None
     assert "нет данных" in result
+
+
+async def test_render_escapes_position_and_error_html() -> None:
+    """position_name / position_code / parser.error are HTML-escaped (P3-2)."""
+    parser_row = MagicMock()
+    parser_row.started_at = datetime(2026, 5, 27, 10, 0, tzinfo=UTC)
+    parser_row.status = "error"
+    parser_row.resumes_seen = 0
+    parser_row.snapshots_inserted = 0
+    parser_row.error = "boom <script> & co"
+
+    results = []
+    rows_and_methods = [
+        (
+            MagicMock(
+                position_name="A & B <Director>",
+                position_code="d<i>r",
+                active=True,
+                archived_at=None,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            "fetchone",
+        ),
+        (MagicMock(total=0, d7=0, d30=0), "fetchone"),
+        (MagicMock(s45=0, s60=0, s70=0, s80=0, s90=0), "fetchone"),
+        (MagicMock(enriched=0, pending=0), "fetchone"),
+        (parser_row, "fetchone"),
+        ([], "fetchall"),
+    ]
+    for row, method in rows_and_methods:
+        r = MagicMock()
+        if method == "fetchone":
+            r.fetchone.return_value = row
+        else:
+            r.fetchall.return_value = row
+        results.append(r)
+    mock_session = AsyncMock(spec=AsyncSession)
+    mock_session.execute = AsyncMock(side_effect=results)
+
+    result = await render_search_detail(mock_session, 1)
+    assert result is not None
+    assert "A &amp; B &lt;Director&gt;" in result
+    assert "d&lt;i&gt;r" in result
+    assert "boom &lt;script&gt; &amp; co" in result
+    assert "<Director>" not in result
+    assert "<script>" not in result
+
+
+async def test_score_distribution_reads_event_score_total(db_session: AsyncSession) -> None:
+    """_DETAIL_SCORE_SQL buckets the per-event snapshot (e.score_total), scoped to
+    the search — not the resume's latest global score (P3-4)."""
+    search = Search(
+        position_code="p3_4_detail",
+        position_name="Тест",
+        hh_params={},
+        portrait={},
+        active=True,
+    )
+    db_session.add(search)
+    await db_session.flush()
+    search_id = search.id  # capture before commit expires the instance
+
+    rid = "resume_detail_p3_4"
+    db_session.add(Resume(hh_resume_id=rid, fit_score=70, llm_score=90, score_total=20))
+    await db_session.flush()
+    db_session.add(
+        Event(
+            hh_resume_id=rid,
+            event_type="NEW",
+            search_id=search_id,
+            llm_enriched=True,
+            score_total=85,  # 80-89 bucket; resume's 20 would land in no bucket
+            llm_verdict="подходит",
+        )
+    )
+    await db_session.commit()
+
+    result = await render_search_detail(db_session, search_id)
+    assert result is not None
+    assert "80-89: 1" in result
+    assert "45-59: 0" in result

@@ -225,6 +225,7 @@ async def test_send_pending_cards_skipped_non_prod(db_session: AsyncSession) -> 
     assert result == {
         "sent": 0,
         "skipped_threshold": 0,
+        "skipped_verdict": 0,
         "skipped_duplicate": 0,
         "skipped_stale": 0,
         "errors": 0,
@@ -457,7 +458,8 @@ async def test_verdict_gate_sends_podkhodit(db_session: AsyncSession) -> None:
 
 @pytest.mark.asyncio
 async def test_send_pending_cards_skips_blocked_verdict(db_session: AsyncSession) -> None:
-    """send_pending_cards SQL filter excludes 'мимо' events — send_card never called."""
+    """A 'мимо' event passes the score SQL filter but is gated in Python — not sent,
+    and counted under skipped_verdict (not skipped_threshold)."""
     await _seed(db_session, score_total=80, llm_verdict="мимо")
 
     with (
@@ -468,6 +470,8 @@ async def test_send_pending_cards_skips_blocked_verdict(db_session: AsyncSession
         result = await send_pending_cards(db_session, _make_bot())
 
     assert result["sent"] == 0
+    assert result["skipped_verdict"] == 1
+    assert result["skipped_threshold"] == 0
     mock_send.assert_not_called()
 
 

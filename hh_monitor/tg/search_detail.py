@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from datetime import UTC, datetime
 
 import structlog
@@ -31,15 +32,14 @@ _DETAIL_COUNTS_SQL = """
 
 _DETAIL_SCORE_SQL = """
     SELECT
-        COUNT(*) FILTER (WHERE r.score_total BETWEEN 45 AND 59) AS s45,
-        COUNT(*) FILTER (WHERE r.score_total BETWEEN 60 AND 69) AS s60,
-        COUNT(*) FILTER (WHERE r.score_total BETWEEN 70 AND 79) AS s70,
-        COUNT(*) FILTER (WHERE r.score_total BETWEEN 80 AND 89) AS s80,
-        COUNT(*) FILTER (WHERE r.score_total >= 90)             AS s90
+        COUNT(*) FILTER (WHERE e.score_total BETWEEN 45 AND 59) AS s45,
+        COUNT(*) FILTER (WHERE e.score_total BETWEEN 60 AND 69) AS s60,
+        COUNT(*) FILTER (WHERE e.score_total BETWEEN 70 AND 79) AS s70,
+        COUNT(*) FILTER (WHERE e.score_total BETWEEN 80 AND 89) AS s80,
+        COUNT(*) FILTER (WHERE e.score_total >= 90)             AS s90
     FROM events e
-    JOIN resumes r ON r.hh_resume_id = e.hh_resume_id
     WHERE e.search_id = :id
-      AND r.score_total IS NOT NULL
+      AND e.score_total IS NOT NULL
 """
 
 _DETAIL_LLM_SQL = """
@@ -122,7 +122,9 @@ async def render_search_detail(session: AsyncSession, search_id: int) -> str | N
 
     if parser_latest:
         p_started = parser_latest.started_at.strftime("%d.%m %H:%M")
-        p_error = f" | err: {parser_latest.error[:40]}" if parser_latest.error else ""
+        p_error = (
+            f" | err: {html.escape(parser_latest.error[:40])}" if parser_latest.error else ""
+        )
         parser_line = (
             f"  {p_started} | {parser_latest.status}"
             f" | seen={parser_latest.resumes_seen}"
@@ -132,7 +134,8 @@ async def render_search_detail(session: AsyncSession, search_id: int) -> str | N
         parser_line = "  нет данных"
 
     return (
-        f"<b>{search_row.position_name}</b> ({search_row.position_code})\n"
+        f"<b>{html.escape(search_row.position_name)}</b> "
+        f"({html.escape(search_row.position_code)})\n"
         f"Статус: {status_label} | активен {days_active}д\n\n"
         "<b>Кандидаты:</b>\n"
         f"  всего={total} | 7д={cand_d7} | 30д={cand_d30}\n\n"

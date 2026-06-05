@@ -1507,6 +1507,7 @@ def tg_send_pending(
                 stats = await send_pending_cards(session, bot, limit=limit)
             typer.echo(
                 f"sent={stats['sent']} skipped_threshold={stats['skipped_threshold']} "
+                f"skipped_verdict={stats['skipped_verdict']} "
                 f"skipped_duplicate={stats['skipped_duplicate']} errors={stats['errors']}"
             )
         finally:

@@ -59,6 +59,7 @@ async def _seed_candidate(
         event_type="NEW",
         search_id=search.id,
         llm_enriched=True,
+        score_total=score_total,  # digest reads the per-event snapshot (P3-4)
         created_at=created_at or datetime.now(UTC) - timedelta(hours=1),
     )
     session.add(ev)
@@ -126,11 +127,11 @@ async def test_per_position_buckets(db_session: AsyncSession) -> None:
     assert len(data["per_position"]) == 1
     pp = data["per_position"][0]
     assert pp["position_name"] == "Директор филиала"
-    assert pp["count"] == 4  # score_total=30 excluded by digest_score_threshold
+    assert pp["count"] == 5  # score_total=30 == threshold → included (inclusive >=)
     assert pp["n_fit"] == 1
     assert pp["n_doubt"] == 1
-    assert pp["n_miss"] == 2  # мимо + None (стоп-сигнал@30 excluded)
-    assert pp["avg_score"] == round((90 + 60 + 40 + 50) / 4)  # == 60
+    assert pp["n_miss"] == 3  # мимо + None + стоп-сигнал@30 (now included)
+    assert pp["avg_score"] == round((90 + 60 + 40 + 30 + 50) / 5)  # == 54
 
 
 @pytest.mark.asyncio
@@ -187,38 +188,83 @@ async def test_weekly_series_buckets(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
-async def test_score_floor_excludes_low_scores(db_session: AsyncSession) -> None:
-    """Candidates with score_total <= digest_score_threshold are excluded from
-    candidates_all, funnel['found'], and per-position counts; one above passes."""
+async def test_score_floor_is_inclusive(db_session: AsyncSession) -> None:
+    """The digest floor is inclusive (>=): score == digest_score_threshold is
+    INCLUDED; strictly-below is excluded (P3-1 boundary)."""
     now = datetime.now(UTC)
     date_from, date_to = now - timedelta(days=7), now
     sc = await _seed_search(db_session, "Директор филиала")
 
-    await _seed_candidate(db_session, sc, score_total=30)  # at threshold — excluded
+    await _seed_candidate(db_session, sc, score_total=30)  # == threshold — included
     await _seed_candidate(db_session, sc, score_total=18)  # below threshold — excluded
     await _seed_candidate(db_session, sc, score_total=31)  # above threshold — included
 
     data = await _collect_data(db_session, date_from, date_to)
-    assert data["funnel"]["found"] == 1
-    assert len(data["candidates_all"]) == 1
-    assert data["candidates_all"][0]["score_total"] == 31
+    assert data["funnel"]["found"] == 2
+    assert len(data["candidates_all"]) == 2
+    assert {c["score_total"] for c in data["candidates_all"]} == {30, 31}
     assert len(data["per_position"]) == 1
-    assert data["per_position"][0]["count"] == 1
+    assert data["per_position"][0]["count"] == 2
 
 
 @pytest.mark.asyncio
 async def test_weekly_series_score_floor(db_session: AsyncSession) -> None:
-    """A candidate at the score floor must not appear in the weekly series found count."""
+    """A candidate exactly at the floor IS counted (inclusive >=); below is not."""
     now = datetime.now(UTC)
     sc = await _seed_search(db_session, "Директор филиала")
 
     await _seed_candidate(
         db_session,
         sc,
-        score_total=30,
+        score_total=30,  # == threshold — included
+        created_at=now - timedelta(days=2),
+    )
+    await _seed_candidate(
+        db_session,
+        sc,
+        score_total=18,  # below threshold — excluded
         created_at=now - timedelta(days=2),
     )
 
     series = await _collect_weekly_series(db_session, weeks=4)
     assert len(series) == 4
-    assert series[-1]["found"] == 0  # excluded by score floor
+    assert series[-1]["found"] == 1  # only the at-threshold candidate
+
+
+@pytest.mark.asyncio
+async def test_collect_data_reads_event_score_total(db_session: AsyncSession) -> None:
+    """Digest filters/reports on Event.score_total (per-event snapshot), not the
+    resume's latest score which can drift across events/searches (P3-4)."""
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+
+    rid = f"wd{next(_RID_SEQ):016d}"
+    db_session.add(
+        Resume(
+            hh_resume_id=rid,
+            score_total=10,  # latest resume score — below floor, would exclude if read
+            fit_score=55,
+            llm_score=80,
+            llm_verdict="подходит",
+            llm_real_role="Директор",
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        Event(
+            hh_resume_id=rid,
+            event_type="NEW",
+            search_id=sc.id,
+            llm_enriched=True,
+            score_total=88,  # per-event snapshot — above floor, this is what counts
+            llm_verdict="подходит",
+            created_at=now - timedelta(hours=1),
+        )
+    )
+    await db_session.flush()
+
+    data = await _collect_data(db_session, date_from, date_to)
+    assert data["funnel"]["found"] == 1
+    assert len(data["candidates_all"]) == 1
+    assert data["candidates_all"][0]["score_total"] == 88

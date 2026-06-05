@@ -148,8 +148,9 @@ def _render_active_card(
     emoji = "🟢" if is_active else "🟡"
     status_label = "Активный" if is_active else "Приостановлен"
     text = (
-        f"{emoji} <b>{position_name}</b> [{status_label}]\n"
-        f"код={position_code} | всего={total} | за 7д={week7} | ср.рейтинг={avg_score}"
+        f"{emoji} <b>{html.escape(position_name)}</b> [{status_label}]\n"
+        f"код={html.escape(position_code)} | всего={total} | за 7д={week7} | "
+        f"ср.рейтинг={avg_score}"
     )
     return text, _search_action_keyboard(search_id, is_active)
 
@@ -162,7 +163,10 @@ def _render_archived_card(
     total: int,
 ) -> tuple[str, InlineKeyboardMarkup]:
     date_str = archived_at.strftime("%d.%m.%Y")
-    text = f"📦 <b>{position_name}</b>\nкод={position_code} | архив={date_str} | всего={total}"
+    text = (
+        f"📦 <b>{html.escape(position_name)}</b>\n"
+        f"код={html.escape(position_code)} | архив={date_str} | всего={total}"
+    )
     return text, _archived_card_keyboard(search_id)
 
 
@@ -214,7 +218,7 @@ _ACTIVE_SQL = """
            COUNT(ns.event_id)                                                    AS total,
            COUNT(ns.event_id) FILTER (WHERE ns.sent_at >= NOW() - INTERVAL '7 days') AS week7,
            COALESCE(
-               AVG(r.score_total) FILTER (WHERE ns.event_id IS NOT NULL), 0
+               AVG(e.score_total) FILTER (WHERE ns.event_id IS NOT NULL), 0
            )::int                                                                 AS avg_score
     FROM searches s
     LEFT JOIN events e ON e.search_id = s.id
@@ -825,7 +829,7 @@ _FETCH_ACTIVE_ROW_SQL = """
            COUNT(ns.event_id)                                                    AS total,
            COUNT(ns.event_id) FILTER (WHERE ns.sent_at >= NOW() - INTERVAL '7 days') AS week7,
            COALESCE(
-               AVG(r.score_total) FILTER (WHERE ns.event_id IS NOT NULL), 0
+               AVG(e.score_total) FILTER (WHERE ns.event_id IS NOT NULL), 0
            )::int                                                                 AS avg_score
     FROM searches s
     LEFT JOIN events e ON e.search_id = s.id

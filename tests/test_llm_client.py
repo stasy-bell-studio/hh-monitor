@@ -379,6 +379,13 @@ def test_extract_text_bad_shape_raises() -> None:
         extract_text({"choices": []})
 
 
+def test_extract_text_null_content_returns_empty() -> None:
+    """content=None yields "" (never the literal "None") so it fails dossier parse
+    and is not cached as a valid dossier."""
+    resp = {"choices": [{"message": {"content": None}}]}
+    assert extract_text(resp) == ""
+
+
 def test_extract_usage_present() -> None:
     resp = _ok_response()
     tokens_in, tokens_out = extract_usage(resp)

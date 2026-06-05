@@ -158,11 +158,16 @@ async def chat_completion(
 
 
 def extract_text(response: dict[str, Any]) -> str:
-    """Pull the assistant message text from an OpenRouter chat response."""
+    """Pull the assistant message text from an OpenRouter chat response.
+
+    A null ``content`` yields ``""`` (not the literal ``"None"``); downstream the
+    empty string fails dossier parsing and is never cached as a valid dossier.
+    """
     try:
-        return str(response["choices"][0]["message"]["content"])
+        content = response["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise OpenRouterApiError(0, f"Unexpected response shape: {response}") from exc
+    return "" if content is None else str(content)
 
 
 def extract_usage(response: dict[str, Any]) -> tuple[int | None, int | None]:

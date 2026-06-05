@@ -7,11 +7,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram.types import Update
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hh_monitor.db.models import Event, NotificationSent, Resume, Search
 from hh_monitor.tg.commands import (
+    _ACTIVE_SQL,
     _AdminTopicFilter,
     _AdminUserFilter,
+    _render_active_card,
+    _render_archived_card,
     _threshold_fsm,
     _ThresholdFsmState,
     handle_active,
@@ -873,3 +878,75 @@ async def test_admin_router_wins_help_in_admin_topic() -> None:
     sent_text: str = mock_answer.call_args[0][0]
     assert "/active" in sent_text, "Expected admin help card"
     assert "/threshold" not in sent_text, "Old help card must not appear"
+
+
+# ── P3-2: admin card HTML escaping ────────────────────────────────────────────
+
+
+def test_render_active_card_escapes_html() -> None:
+    text_out, _ = _render_active_card(
+        search_id=1,
+        position_name="A & B <Director>",
+        position_code="d<i>r",
+        is_active=True,
+        total=5,
+        week7=1,
+        avg_score=70,
+    )
+    assert "A &amp; B &lt;Director&gt;" in text_out
+    assert "d&lt;i&gt;r" in text_out
+    assert "<Director>" not in text_out
+
+
+def test_render_archived_card_escapes_html() -> None:
+    text_out, _ = _render_archived_card(
+        search_id=1,
+        position_name="A & B <Director>",
+        position_code="d<i>r",
+        archived_at=datetime(2026, 4, 1, tzinfo=UTC),
+        total=5,
+    )
+    assert "A &amp; B &lt;Director&gt;" in text_out
+    assert "d&lt;i&gt;r" in text_out
+    assert "<Director>" not in text_out
+
+
+# ── P3-4: /active avg_score reads Event.score_total ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_active_sql_avg_uses_event_score_total(db_session: AsyncSession) -> None:
+    """_ACTIVE_SQL averages the per-event snapshot (e.score_total) of NOTIFIED
+    candidates, not the resume's latest (possibly drifted) score."""
+    search = Search(
+        position_code="p3_4_active",
+        position_name="Тест",
+        hh_params={},
+        portrait={},
+        active=True,
+    )
+    db_session.add(search)
+    await db_session.flush()
+
+    rid = "resume_active_p3_4"
+    db_session.add(
+        Resume(hh_resume_id=rid, fit_score=70, llm_score=90, score_total=20)
+    )
+    await db_session.flush()
+
+    event = Event(
+        hh_resume_id=rid,
+        event_type="NEW",
+        search_id=search.id,
+        llm_enriched=True,
+        score_total=85,  # per-event snapshot — this is what avg_score must report
+        llm_verdict="подходит",
+    )
+    db_session.add(event)
+    await db_session.flush()
+    db_session.add(NotificationSent(event_id=event.id, tg_message_id=1))
+    await db_session.commit()
+
+    row = (await db_session.execute(text(_ACTIVE_SQL))).fetchone()
+    assert row is not None
+    assert int(row.avg_score) == 85  # not 20 (Resume.score_total)

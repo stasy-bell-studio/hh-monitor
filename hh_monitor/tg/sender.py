@@ -125,19 +125,22 @@ async def send_pending_cards(
         return {
             "sent": 0,
             "skipped_threshold": 0,
+            "skipped_verdict": 0,
             "skipped_duplicate": 0,
             "skipped_stale": 0,
             "errors": 0,
         }
     threshold = await get_current_threshold(session)
 
+    # Verdict is NOT filtered in SQL — verdict-blocked events flow into the loop so
+    # they can be classified as `skipped_verdict` (the authoritative verdict gate
+    # still lives in send_new_candidate_card). Sub-threshold/NULL stays SQL-excluded.
     subq = select(NotificationSent.event_id)
     stmt = (
         select(Event.id, Event.created_at)
         .where(Event.llm_enriched.is_(True))
         .where(Event.id.not_in(subq))
         .where(Event.score_total >= threshold)
-        .where(Event.llm_verdict.in_(_SENDABLE_VERDICTS))
         .order_by(Event.id.asc())
     )
     if limit is not None:
@@ -151,7 +154,7 @@ async def send_pending_cards(
             days=settings.notification_max_event_age_days
         )
 
-    sent = skipped_threshold = skipped_duplicate = skipped_stale = errors = 0
+    sent = skipped_threshold = skipped_verdict = skipped_duplicate = skipped_stale = errors = 0
 
     for event_id, event_created_at in rows:
         # Normalize to UTC-aware for comparison; TIMESTAMP(tz) via asyncpg is always aware,
@@ -170,12 +173,18 @@ async def send_pending_cards(
             if result:
                 sent += 1
             else:
-                # distinguish threshold vs duplicate by re-fetching
+                # Classify the skip reason by re-inspecting state: an existing
+                # NotificationSent row → duplicate; otherwise a non-sendable verdict
+                # → skipped_verdict; else genuine sub-threshold.
                 existing = await session.get(NotificationSent, event_id)
                 if existing is not None:
                     skipped_duplicate += 1
                 else:
-                    skipped_threshold += 1
+                    ev = await session.get(Event, event_id)
+                    if ev is not None and ev.llm_verdict not in _SENDABLE_VERDICTS:
+                        skipped_verdict += 1
+                    else:
+                        skipped_threshold += 1
         except TelegramForbiddenError:
             logger.critical("tg_sender_forbidden_abort", event_id=event_id)
             errors += 1
@@ -188,6 +197,7 @@ async def send_pending_cards(
     return {
         "sent": sent,
         "skipped_threshold": skipped_threshold,
+        "skipped_verdict": skipped_verdict,
         "skipped_duplicate": skipped_duplicate,
         "skipped_stale": skipped_stale,
         "errors": errors,

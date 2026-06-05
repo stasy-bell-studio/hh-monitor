@@ -2,7 +2,7 @@
 Description=Run hh-monitor proactive OAuth refresh every 6 hours
 
 [Timer]
-OnCalendar=*-*-* 00/6:00:00
+OnCalendar=*-*-* 00/6:00:00 Europe/Moscow
 Persistent=true
 Unit=hh-oauth-refresh.service
 

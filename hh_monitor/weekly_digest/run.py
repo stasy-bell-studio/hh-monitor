@@ -183,9 +183,11 @@ async def _collect_data(
         .where(Event.llm_enriched.is_(True))
         .where(Event.created_at >= date_from)
         .where(Event.created_at < date_to)
-        .where(Resume.score_total.isnot(None))
-        .where(Resume.score_total > settings.digest_score_threshold)
-        .order_by(Resume.score_total.desc())
+        # Per-event snapshot score (not the resume's latest, which can drift across
+        # events/searches); threshold is inclusive (>=).
+        .where(Event.score_total.isnot(None))
+        .where(Event.score_total >= settings.digest_score_threshold)
+        .order_by(Event.score_total.desc())
     )
     rows = (await session.execute(stmt)).all()
 
@@ -202,7 +204,7 @@ async def _collect_data(
         candidates_all.append(
             _Candidate(
                 position_name=srch.position_name,
-                score_total=res.score_total,
+                score_total=ev.score_total,
                 fit_score=res.fit_score,
                 llm_score=res.llm_score,
                 llm_verdict=verdict,
@@ -253,8 +255,8 @@ async def _collect_data(
             acc["n_doubt"] += 1
         else:
             acc["n_miss"] += 1
-        if res.score_total is not None:
-            acc["score_sum"] += res.score_total
+        if ev.score_total is not None:
+            acc["score_sum"] += ev.score_total
         if ns is not None:
             acc["sent"] += 1
             if status == ScreeningStatus.APPROVE.value:
@@ -345,8 +347,8 @@ async def _collect_weekly_series(session: AsyncSession, weeks: int = 4) -> list[
             .where(Event.llm_enriched.is_(True))
             .where(Event.created_at >= wf)
             .where(Event.created_at < wt)
-            .where(Resume.score_total.isnot(None))
-            .where(Resume.score_total > settings.digest_score_threshold)
+            .where(Event.score_total.isnot(None))
+            .where(Event.score_total >= settings.digest_score_threshold)
         )
         sent_stmt = base.join(NotificationSent, NotificationSent.event_id == Event.id)
         approved_stmt = sent_stmt.where(
