@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule hh-monitor pipeline run-all (15 runs/day at 01,04,09..21:00 MSK)
+
+[Timer]
+OnCalendar=*-*-* 01,04,09..21:00:00 Europe/Moscow
+Persistent=true
+Unit=hh-monitor-pipeline.service
+
+[Install]
+WantedBy=timers.target

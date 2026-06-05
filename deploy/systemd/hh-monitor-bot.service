@@ -1,0 +1,19 @@
+[Unit]
+Description=hh-monitor Telegram bot (long-polling)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=skadmin
+Group=skadmin
+WorkingDirectory=/home/skadmin/hh-monitor
+ExecStart=/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli tg run
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hh-monitor-bot
+
+[Install]
+WantedBy=multi-user.target

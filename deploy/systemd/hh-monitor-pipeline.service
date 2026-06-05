@@ -1,0 +1,15 @@
+[Unit]
+Description=hh-monitor pipeline run-all (parse + detector for all active searches, flush TG cards)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=skadmin
+Group=skadmin
+WorkingDirectory=/home/skadmin/hh-monitor
+ExecStart=/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli pipeline run-all
+TimeoutStartSec=30min
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hh-monitor-pipeline

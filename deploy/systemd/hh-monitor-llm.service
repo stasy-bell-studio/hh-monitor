@@ -1,0 +1,15 @@
+[Unit]
+Description=hh-monitor llm run-all (LLM enrichment for all active searches, +5 min after pipeline)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=skadmin
+Group=skadmin
+WorkingDirectory=/home/skadmin/hh-monitor
+ExecStart=/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli llm run-all
+TimeoutStartSec=30min
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hh-monitor-llm
