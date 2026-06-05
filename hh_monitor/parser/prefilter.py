@@ -33,6 +33,7 @@ def apply_prefilter(item: dict[str, Any], portrait: Portrait) -> list[str]:
         ``required_industry_missing`` — no experience entry matches required industry
         ``stop_employer``             — experience employer.id in stop_employer_ids
         ``stop_company``              — experience company substring or company_id matches
+        ``forbidden_industry``        — experience industry/company matches forbidden_industry_names
     """
     reasons: list[str] = []
     pf = portrait.prefilter
@@ -156,5 +157,31 @@ def apply_prefilter(item: dict[str, Any], portrait: Portrait) -> list[str]:
                 if co_id and co_id in stop_co_id_set:
                     reasons.append("stop_company")
                     break
+
+    # ── Forbidden industry ────────────────────────────────────────────────────
+    # hh.ru search-list items include experience[].industries (list of {id, name})
+    # when the candidate filled in industry data; falls back to company name string
+    # when industries is absent or empty.
+    if pf.forbidden_industry_names:
+        forbidden_lower = [n.lower() for n in pf.forbidden_industry_names]
+        experiences = item.get("experience") or []
+        for exp in experiences:
+            if not isinstance(exp, dict):
+                continue
+            industries = exp.get("industries")
+            if industries:
+                for ind in industries:
+                    if not isinstance(ind, dict):
+                        continue
+                    ind_name = str(ind.get("name", "") or "").lower()
+                    if ind_name and any(f in ind_name for f in forbidden_lower):
+                        reasons.append("forbidden_industry")
+                        break
+            else:
+                company = str(exp.get("company", "") or "").lower()
+                if company and any(f in company for f in forbidden_lower):
+                    reasons.append("forbidden_industry")
+            if "forbidden_industry" in reasons:
+                break
 
     return reasons

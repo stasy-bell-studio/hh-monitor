@@ -32,6 +32,7 @@ from hh_monitor.tg.add_vacancy import keyboards as kb
 from hh_monitor.tg.add_vacancy.llm import (
     compute_gaps,
     derive_initial_hh_params,
+    derive_prefilter,
     draft_critic_prompt,
     generate_enrichment_recs,
     parse_to_portrait_dict,
@@ -391,6 +392,16 @@ def _render_review(
         f"📊 Опыт (моторное): {portrait.min_motor_experience_months} мес.",
         f"🎓 Высшее обязательно: {'да' if portrait.higher_education_required else 'нет'}",
     ]
+    pf_parts: list[str] = []
+    stop_ids, _ = resolve_region_names(portrait.filters.regions.stop)
+    if stop_ids:
+        pf_parts.append(f"стоп-регионов: {len(stop_ids)}")
+    if portrait.forbidden_industry_mode == "hard" and portrait.forbidden_industries:
+        names_preview = ", ".join(portrait.forbidden_industries[:3])
+        suffix = "…" if len(portrait.forbidden_industries) > 3 else ""
+        pf_parts.append(f"инд.: {names_preview}{suffix}")
+    if pf_parts:
+        lines.append(f"🔒 Префильтр: {'; '.join(pf_parts)}")
     if unknown:
         lines.append(f"\n⚠️ Не распознаны: {', '.join(unknown)}")
         lines.append("Исправь портрет или запусти поиск без фильтра региона.")
@@ -464,6 +475,8 @@ async def _enter_launch(message: Message, state: FSMContext) -> None:
 
 async def _insert_search(data: dict[str, Any], *, active: bool, tg_user_id: int | None) -> str:
     portrait_dict = data["portrait_dict"]
+    portrait = Portrait.model_validate(portrait_dict)
+    portrait_dict["prefilter"] = derive_prefilter(portrait).model_dump()
     portrait = Portrait.model_validate(portrait_dict)
     base = slugify(data["position_name"])
     factory = get_session_factory()

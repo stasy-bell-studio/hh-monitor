@@ -14,7 +14,7 @@ from typing import Any
 
 import structlog
 
-from hh_monitor.fit.portrait import Portrait
+from hh_monitor.fit.portrait import Portrait, PrefilterConfig
 from hh_monitor.llm_enrich import client as llm_client
 from hh_monitor.llm_enrich.critic_lens_builder import generate_critic_lens_from_portrait
 from hh_monitor.regions.expander import resolve_region_names
@@ -311,6 +311,26 @@ def derive_initial_hh_params(portrait: Portrait) -> dict[str, Any]:
         if ids:
             result["area"] = ids
     return result
+
+
+def derive_prefilter(portrait: Portrait) -> PrefilterConfig:
+    """Build PrefilterConfig from already-resolved portrait data.
+
+    area_ids_require is intentionally left empty — hh_params.area already
+    enforces the region requirement server-side; avoid double filtering.
+    forbidden_industry_names is populated only in hard mode; soft mode keeps
+    the field as a scoring-only penalty.
+    """
+    stop_ids, _ = resolve_region_names(portrait.filters.regions.stop)
+    forbidden = (
+        portrait.forbidden_industries
+        if portrait.forbidden_industry_mode == "hard"
+        else []
+    )
+    return PrefilterConfig(
+        area_ids_stop=stop_ids,
+        forbidden_industry_names=forbidden,
+    )
 
 
 async def draft_critic_prompt(

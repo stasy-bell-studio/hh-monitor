@@ -48,6 +48,7 @@ class PrefilterConfig(BaseModel):
     stop_company_names: list[str] = []
     stop_employer_ids: list[str] = []
     stop_company_ids: list[str] = []
+    forbidden_industry_names: list[str] = []
 
 
 # ── Weight configuration ──────────────────────────────────────────────────────

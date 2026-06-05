@@ -275,3 +275,41 @@ def test_stop_company_no_match_passes() -> None:
 def test_stop_company_empty_experience_passes() -> None:
     p = _portrait(prefilter=PrefilterConfig(stop_company_names=["Капитал Лайф"]))
     assert apply_prefilter(_item(experience=[]), p) == []
+
+
+# ── forbidden_industry ─────────────────────────────────────────────────────────
+
+
+def test_forbidden_industry_empty_list_disabled() -> None:
+    p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=[]))
+    item = _item(experience=[_exp(industries=[{"id": "43", "name": "Банки"}])])
+    assert apply_prefilter(item, p) == []
+
+
+def test_forbidden_industry_match_by_industry_name() -> None:
+    p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=["банк"]))
+    item = _item(experience=[_exp(industries=[{"id": "43", "name": "Банки"}])])
+    assert "forbidden_industry" in apply_prefilter(item, p)
+
+
+def test_forbidden_industry_case_insensitive() -> None:
+    p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=["БАНК"]))
+    item = _item(experience=[_exp(industries=[{"id": "43", "name": "банки"}])])
+    assert "forbidden_industry" in apply_prefilter(item, p)
+
+
+def test_forbidden_industry_fallback_to_company_name() -> None:
+    p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=["ставки"]))
+    item = _item(experience=[_exp(company="Букмекерские ставки Плюс")])
+    assert "forbidden_industry" in apply_prefilter(item, p)
+
+
+def test_forbidden_industry_null_safe_empty_experience() -> None:
+    p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=["банк"]))
+    assert apply_prefilter(_item(experience=[]), p) == []
+
+
+def test_forbidden_industry_no_match_passes() -> None:
+    p = _portrait(prefilter=PrefilterConfig(forbidden_industry_names=["банк"]))
+    item = _item(experience=[_exp(industries=[{"id": "7", "name": "Страхование"}])])
+    assert apply_prefilter(item, p) == []
