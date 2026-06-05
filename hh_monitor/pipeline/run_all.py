@@ -9,13 +9,15 @@ from __future__ import annotations
 import time
 import traceback
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy import func, or_, select, update
 
 from hh_monitor.config import settings
+from hh_monitor.db.app_config import get_app_config, set_app_config
 from hh_monitor.db.models import Search
 from hh_monitor.detector.run import run_detector
 from hh_monitor.hh.client import HHClient
@@ -30,8 +32,25 @@ logger = structlog.get_logger(__name__)
 # UPDATE searches SET last_run_at = NULL WHERE search_code = '<code>'.
 PIPELINE_SEARCH_COOLDOWN_MINUTES = 30
 
+# Daily HH view-limit circuit breaker.  When a run exhausts the HH daily view
+# quota (500/day, resets 00:00 MSK), this app_config key is set to the current
+# MSK date so that later same-day runs skip all HH calls.  It auto-recovers on
+# the next MSK day because the stored date no longer matches "today".
+HH_VIEW_LIMIT_KEY = "hh_view_limit_exhausted_on"
+
+_MSK = ZoneInfo("Europe/Moscow")
+
 # Type alias matching the async_session_factory signature used throughout the project.
 _SessionFactory = Callable[[], Any]
+
+
+def _today_msk() -> str:
+    """Return today's date in Europe/Moscow as an ISO ``YYYY-MM-DD`` string.
+
+    Factored out as a module-level function so tests can freeze "today MSK"
+    deterministically by patching this symbol.
+    """
+    return datetime.now(_MSK).date().isoformat()
 
 
 async def run_all(
@@ -79,8 +98,10 @@ async def run_all(
 
     Returns:
         Summary dict with keys: total, succeeded, failed, skipped_codes,
-        failures, duration_s, dry_run.  When dry_run=True also includes
-        would_run: list of (id, search_code) tuples.
+        failures, duration_s, dry_run, skipped_view_limit.  When dry_run=True
+        also includes would_run: list of (id, search_code) tuples.
+        ``skipped_view_limit`` is True when the daily HH view-limit breaker
+        was set for today and the parse loop was skipped.
     """
     t_start = time.monotonic()
 
@@ -124,6 +145,7 @@ async def run_all(
             "failures": [],
             "duration_s": round(time.monotonic() - t_start, 2),
             "dry_run": dry_run,
+            "skipped_view_limit": False,
         }
 
     # ── 4. Dry-run: just list, no I/O ─────────────────────────────────────
@@ -137,55 +159,83 @@ async def run_all(
             "duration_s": round(time.monotonic() - t_start, 2),
             "dry_run": True,
             "would_run": [(s.id, s.search_code) for s in rows],
+            "skipped_view_limit": False,
         }
 
-    # ── 5. Run each search ────────────────────────────────────────────────
-    # Snapshot (id, search_code) into plain tuples up front: the per-search
-    # cooldown commit below expires ORM instances (expire_on_commit), and a
-    # subsequent attribute read would trigger lazy IO outside the loaded
-    # session.  Iterating over scalars decouples the loop from ORM state.
-    search_refs: list[tuple[int, str | None]] = [(s.id, s.search_code) for s in rows]
+    # ── 5. Daily HH view-limit circuit breaker (entry gate) ───────────────
+    # If an earlier run today already exhausted the HH daily view quota, skip
+    # the whole parse loop (zero HH calls) for the rest of the MSK day.  The
+    # breaker auto-recovers after the 00:00 MSK quota reset: the stored date no
+    # longer equals "today", so the next day's first run proceeds normally.
+    today_msk = _today_msk()
+    async with session_factory() as session:
+        breaker_date = await get_app_config(session, HH_VIEW_LIMIT_KEY)
+    breaker_on = breaker_date == today_msk
 
     succeeded = 0
     failures: list[dict[str, str]] = []
     view_limit_hit = False
 
-    for search_id, search_code in search_refs:
-        sc = search_code or str(search_id)
-        t_search = time.monotonic()
-        log = logger.bind(search_id=search_id, search_code=sc)
-        log.info("run_all_search_start")
+    if breaker_on:
+        logger.info("run_all_skipped_view_limit", exhausted_on=breaker_date)
+    else:
+        # Snapshot (id, search_code) into plain tuples up front: the per-search
+        # cooldown commit below expires ORM instances (expire_on_commit), and a
+        # subsequent attribute read would trigger lazy IO outside the loaded
+        # session.  Iterating over scalars decouples the loop from ORM state.
+        search_refs: list[tuple[int, str | None]] = [(s.id, s.search_code) for s in rows]
 
-        try:
-            async with session_factory() as session:
-                client = HHClient(
-                    token_provider=lambda: get_valid_token(session),
-                    force_refresh=lambda: refresh_access_token(session),
-                    user_agent=settings.hh_user_agent,
-                )
-                parser_result = await run_parser(session, client, search_id, max_pages=max_pages)
-                if parser_result.get("status") == "view_limit_exhausted":
-                    view_limit_hit = True
-                await run_detector(session, search_id)
-                # Mark the cooldown timestamp only after a clean parse+detect pass.
-                await session.execute(
-                    update(Search).where(Search.id == search_id).values(last_run_at=func.now())
-                )
-                await session.commit()
-            log.info(
-                "run_all_search_done",
-                duration_s=round(time.monotonic() - t_search, 2),
-            )
-            succeeded += 1
-        except Exception as exc:
-            log.error(
-                "run_all_search_failed",
-                error=str(exc),
-                traceback=traceback.format_exc(),
-            )
-            failures.append({"search_code": sc, "error": str(exc)})
+        for search_id, search_code in search_refs:
+            sc = search_code or str(search_id)
+            t_search = time.monotonic()
+            log = logger.bind(search_id=search_id, search_code=sc)
+            log.info("run_all_search_start")
 
-    # ── 6. Notify admin if HH daily view quota was exhausted ──────────────
+            try:
+                hit_this_search = False
+                async with session_factory() as session:
+                    client = HHClient(
+                        token_provider=lambda: get_valid_token(session),
+                        force_refresh=lambda: refresh_access_token(session),
+                        user_agent=settings.hh_user_agent,
+                    )
+                    parser_result = await run_parser(
+                        session, client, search_id, max_pages=max_pages
+                    )
+                    await run_detector(session, search_id)
+                    # Mark the cooldown timestamp only after a clean parse+detect pass.
+                    await session.execute(
+                        update(Search).where(Search.id == search_id).values(last_run_at=func.now())
+                    )
+                    if parser_result.get("status") == "view_limit_exhausted":
+                        # Arm the breaker in the same transaction so it persists
+                        # atomically with this search's results.
+                        await set_app_config(session, HH_VIEW_LIMIT_KEY, today_msk)
+                        hit_this_search = True
+                    await session.commit()
+                log.info(
+                    "run_all_search_done",
+                    duration_s=round(time.monotonic() - t_search, 2),
+                )
+                succeeded += 1
+            except Exception as exc:
+                log.error(
+                    "run_all_search_failed",
+                    error=str(exc),
+                    traceback=traceback.format_exc(),
+                )
+                failures.append({"search_code": sc, "error": str(exc)})
+                continue
+
+            # Short-circuit: once the breaker is armed (and committed), stop —
+            # do not parse the remaining searches.  All later same-day runs are
+            # caught by the entry gate above, so the step-6 alert below fires
+            # exactly once per MSK day.
+            if hit_this_search:
+                view_limit_hit = True
+                break
+
+    # ── 6. Notify admin once, the moment the breaker is freshly armed ─────
     if view_limit_hit and _notify:
         try:
             from hh_monitor.tg.client import make_bot
@@ -196,7 +246,7 @@ async def run_all(
                     chat_id=settings.telegram_hr_group_id,
                     text=(
                         "⏳ Достигнут дневной лимит просмотров резюме на hh.ru. "
-                        "Поиск продолжится автоматически завтра."
+                        "Парсинг HH приостановлен до следующего сброса квоты в 00:00 МСК."
                     ),
                     message_thread_id=settings.telegram_admin_topic_id or None,
                 )
@@ -206,7 +256,9 @@ async def run_all(
         except Exception as exc:
             logger.error("run_all_view_limit_notify_failed", error=str(exc))
 
-    # ── 7. Flush pending TG notifications (once, after all searches) ──────
+    # ── 7. Flush pending TG notifications (always — even when the breaker ──
+    # skipped the parse loop, already-enriched cards must still be delivered;
+    # send_pending_cards makes no HH calls).
     if _notify:
         try:
             from hh_monitor.tg.client import make_bot
@@ -227,4 +279,5 @@ async def run_all(
         "failures": failures,
         "duration_s": round(time.monotonic() - t_start, 2),
         "dry_run": False,
+        "skipped_view_limit": breaker_on,
     }

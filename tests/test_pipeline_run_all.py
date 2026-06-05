@@ -11,13 +11,26 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hh_monitor.db.app_config import get_app_config, set_app_config
 from hh_monitor.db.models import Search
-from hh_monitor.pipeline.run_all import run_all
+from hh_monitor.pipeline.run_all import HH_VIEW_LIMIT_KEY, run_all
+
+_TODAY_MSK = "2026-06-05"
+_YESTERDAY_MSK = "2026-06-04"
+
+
+def _make_view_limit_bot() -> Any:
+    """A MagicMock Bot whose send_message/session.close are awaitable."""
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    bot.session = MagicMock()
+    bot.session.close = AsyncMock()
+    return bot
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -373,3 +386,130 @@ async def test_run_all_no_view_limit_notification_on_success(db_session: AsyncSe
         await run_all(factory, _notify=True)
 
     mock_bot.send_message.assert_not_awaited()
+
+
+# ── Test 10: breaker ON → parse loop skipped, no alert, cards still flushed ────
+
+
+@pytest.mark.asyncio
+async def test_run_all_breaker_on_skips_parse_but_flushes_cards(db_session: AsyncSession) -> None:
+    """Breaker set for today MSK → zero HH work, no alert, but step-7 flush runs."""
+    await set_app_config(db_session, HH_VIEW_LIMIT_KEY, _TODAY_MSK)
+    await _add_search(db_session, "sc_breakered")
+    factory = _make_session_factory(db_session)
+
+    mock_bot = _make_view_limit_bot()
+
+    with (
+        patch("hh_monitor.pipeline.run_all._today_msk", return_value=_TODAY_MSK),
+        patch("hh_monitor.pipeline.run_all.run_parser", new_callable=AsyncMock) as mock_parser,
+        patch("hh_monitor.pipeline.run_all.run_detector", new_callable=AsyncMock) as mock_detector,
+        patch("hh_monitor.pipeline.run_all.HHClient"),
+        patch("hh_monitor.pipeline.run_all.get_valid_token", new_callable=AsyncMock),
+        patch("hh_monitor.tg.client.make_bot", return_value=mock_bot),
+        patch("hh_monitor.tg.sender.send_pending_cards", new_callable=AsyncMock) as mock_send,
+    ):
+        mock_send.return_value = {
+            "sent": 0,
+            "skipped_threshold": 0,
+            "skipped_duplicate": 0,
+            "errors": 0,
+        }
+        result = await run_all(factory, _notify=True)
+
+    # No HH calls at all.
+    mock_parser.assert_not_awaited()
+    mock_detector.assert_not_awaited()
+    # No view-limit alert (it only fires on the fresh hit, not on later runs).
+    mock_bot.send_message.assert_not_awaited()
+    # Card delivery still happens.
+    mock_send.assert_awaited_once()
+    assert result["skipped_view_limit"] is True
+    assert result["succeeded"] == 0
+
+
+# ── Test 11: fresh hit → breaker armed, alert once, loop short-circuits ────────
+
+
+@pytest.mark.asyncio
+async def test_run_all_fresh_view_limit_arms_breaker_and_short_circuits(
+    db_session: AsyncSession,
+) -> None:
+    """First search hits the limit → breaker upserted to today MSK, alert once,
+    the second search is NOT parsed, and the step-7 flush still runs."""
+    await _add_search(db_session, "sc_first")
+    await _add_search(db_session, "sc_second")
+    factory = _make_session_factory(db_session)
+
+    mock_bot = _make_view_limit_bot()
+
+    with (
+        patch("hh_monitor.pipeline.run_all._today_msk", return_value=_TODAY_MSK),
+        patch("hh_monitor.pipeline.run_all.run_parser", new_callable=AsyncMock) as mock_parser,
+        patch("hh_monitor.pipeline.run_all.run_detector", new_callable=AsyncMock),
+        patch("hh_monitor.pipeline.run_all.HHClient"),
+        patch("hh_monitor.pipeline.run_all.get_valid_token", new_callable=AsyncMock),
+        patch("hh_monitor.tg.client.make_bot", return_value=mock_bot),
+        patch("hh_monitor.tg.sender.send_pending_cards", new_callable=AsyncMock) as mock_send,
+    ):
+        mock_parser.return_value = {
+            "status": "view_limit_exhausted",
+            "resumes_seen": 5,
+            "snapshots_inserted": 2,
+            "snapshots_skipped_dedup": 3,
+            "errors": 0,
+            "parser_run_id": 1,
+            "resume_ids": [],
+        }
+        mock_send.return_value = {
+            "sent": 0,
+            "skipped_threshold": 0,
+            "skipped_duplicate": 0,
+            "errors": 0,
+        }
+        result = await run_all(factory, _notify=True)
+
+    # Loop short-circuits: only the first of two searches is parsed.
+    assert mock_parser.await_count == 1
+    # Breaker persisted to today's MSK date.
+    assert await get_app_config(db_session, HH_VIEW_LIMIT_KEY) == _TODAY_MSK
+    # Alert fired exactly once.
+    mock_bot.send_message.assert_awaited_once()
+    # Step-7 flush still runs.
+    mock_send.assert_awaited_once()
+    assert result["skipped_view_limit"] is False
+    assert result["succeeded"] == 1
+
+
+# ── Test 12: stale breaker (yesterday) → treated as OFF, normal operation ──────
+
+
+@pytest.mark.asyncio
+async def test_run_all_stale_breaker_runs_normally(db_session: AsyncSession) -> None:
+    """Breaker date = yesterday MSK → OFF; the parse loop runs as usual."""
+    await set_app_config(db_session, HH_VIEW_LIMIT_KEY, _YESTERDAY_MSK)
+    await _add_search(db_session, "sc_normal")
+    factory = _make_session_factory(db_session)
+
+    with (
+        patch("hh_monitor.pipeline.run_all._today_msk", return_value=_TODAY_MSK),
+        patch("hh_monitor.pipeline.run_all.run_parser", new_callable=AsyncMock) as mock_parser,
+        patch("hh_monitor.pipeline.run_all.run_detector", new_callable=AsyncMock) as mock_detector,
+        patch("hh_monitor.pipeline.run_all.HHClient"),
+        patch("hh_monitor.pipeline.run_all.get_valid_token", new_callable=AsyncMock),
+    ):
+        mock_parser.return_value = {
+            "status": "ok",
+            "resumes_seen": 1,
+            "snapshots_inserted": 1,
+            "snapshots_skipped_dedup": 0,
+            "errors": 0,
+            "parser_run_id": 1,
+            "resume_ids": [],
+        }
+        result = await run_all(factory, _notify=False)
+
+    mock_parser.assert_awaited_once()
+    mock_detector.assert_awaited_once()
+    assert result["skipped_view_limit"] is False
+    assert result["succeeded"] == 1
