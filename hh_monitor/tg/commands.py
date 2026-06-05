@@ -8,6 +8,7 @@ Callback queries check admin whitelist inline.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
@@ -312,12 +313,12 @@ _STATS_PERIODS_SQL = """
 """
 
 _STATS_TOP_POSITIONS_SQL = """
-    SELECT s.position_code, COUNT(*) AS cnt
+    SELECT s.position_code, s.position_name, COUNT(*) AS cnt
     FROM notifications_sent ns
     JOIN events e ON e.id = ns.event_id
     JOIN searches s ON s.id = e.search_id
     WHERE ns.sent_at >= NOW() - INTERVAL '30 days'
-    GROUP BY s.position_code
+    GROUP BY s.position_code, s.position_name
     ORDER BY cnt DESC
     LIMIT 5
 """
@@ -375,7 +376,10 @@ async def handle_stats(message: Message) -> None:
 
     # Top positions
     pos_lines = (
-        "\n".join(f"  {i}. {row.position_code} — {row.cnt}" for i, row in enumerate(top_pos, 1))
+        "\n".join(
+            f"  {i}. {html.escape(row.position_name or row.position_code)} — {row.cnt}"
+            for i, row in enumerate(top_pos, 1)
+        )
         or "  нет данных"
     )
 

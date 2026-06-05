@@ -311,7 +311,11 @@ async def test_stats_renders_periods_and_histogram() -> None:
         histogram_rows.append(r)
 
     pos_row = MagicMock()
-    pos_row.position_code, pos_row.cnt = "branch_director", 15
+    pos_row.position_code, pos_row.position_name, pos_row.cnt = (
+        "branch_director",
+        "Директор филиала",
+        15,
+    )
 
     reason_row = MagicMock()
     reason_row.reason_code, reason_row.cnt = "relevant_exp", 8
@@ -347,7 +351,8 @@ async def test_stats_renders_periods_and_histogram() -> None:
     assert "24ч: 5" in text_out
     assert "7д: 30" in text_out
     assert "65" in text_out  # threshold
-    assert "branch_director" in text_out
+    assert "Директор филиала" in text_out
+    assert "branch_director" not in text_out
     assert "Релевантный опыт" in text_out
 
 
