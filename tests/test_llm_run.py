@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from hh_monitor.db.models import Event, Resume, Search, Snapshot
 from hh_monitor.fit.portrait import Filters, GlobalContext, Portrait, RegionFilters
-from hh_monitor.llm_enrich.run import _apply_domain_governor, run_llm_enrichment
+from hh_monitor.llm_enrich.run import _apply_domain_governor, _coerce_text, run_llm_enrichment
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1120,8 +1120,8 @@ async def test_coerce_list_fields_to_str(db_session: Any, monkeypatch: pytest.Mo
     assert result["enriched"] == 1
 
     await db_session.refresh(event)
-    assert event.llm_red_flags == "a\nb\nc"
-    assert event.llm_weak_spots == "x\ny"
+    assert event.llm_red_flags == "a; b; c"  # short items join with "; "
+    assert event.llm_weak_spots == "x; y"  # short items join with "; "
     assert event.llm_facts_confirmed == ""  # None → ""
     assert isinstance(event.llm_interview_questions, list)
     assert event.llm_interview_questions == ["Q1", "Q2"]
@@ -1488,3 +1488,70 @@ def test_governor_off_passes_no_below_floor() -> None:
 def test_governor_cap_explicit_matches_default() -> None:
     assert _apply_domain_governor(61, "partial", mode="cap") == 20
     assert _apply_domain_governor(61, "yes", mode="cap") == 61
+
+
+# ── _coerce_text unit tests ───────────────────────────────────────────────────
+
+
+def test_coerce_text_plain_str() -> None:
+    assert _coerce_text("hello") == "hello"
+
+
+def test_coerce_text_strips_whitespace() -> None:
+    assert _coerce_text("  hello  ") == "hello"
+
+
+def test_coerce_text_none() -> None:
+    assert _coerce_text(None) == ""
+
+
+def test_coerce_text_flat_dict() -> None:
+    result = _coerce_text({"факт": "значение"})
+    assert "факт" in result
+    assert "значение" in result
+    assert "{" not in result
+
+
+def test_coerce_text_list_short_strings() -> None:
+    result = _coerce_text(["a", "b"])
+    assert "a" in result and "b" in result
+    assert "{" not in result
+
+
+def test_coerce_text_list_long_strings_joined_newline() -> None:
+    long_a = "a" * 50
+    long_b = "b" * 50
+    result = _coerce_text([long_a, long_b])
+    assert "\n" in result
+
+
+def test_coerce_text_list_of_dicts() -> None:
+    result = _coerce_text([{"x": "1"}, {"y": "2"}])
+    assert "x" in result and "y" in result
+    assert "{" not in result
+
+
+def test_coerce_text_nested_list() -> None:
+    result = _coerce_text([["a", "b"], "c"])
+    assert result != ""
+    assert "{" not in result and "[" not in result
+
+
+def test_coerce_text_stringified_dict_repr() -> None:
+    s = "{'key': 'val'}"
+    result = _coerce_text(s)
+    assert "{" not in result
+    assert "key" in result
+
+
+def test_coerce_text_stringified_json() -> None:
+    s = '{"key": "val"}'
+    result = _coerce_text(s)
+    assert "{" not in result
+    assert "key" in result
+
+
+def test_coerce_text_plain_string_starting_with_brace_fallback() -> None:
+    # Malformed — not valid JSON or literal_eval → returned as-is
+    result = _coerce_text("{not valid json")
+    assert result == "{not valid json"

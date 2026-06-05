@@ -348,7 +348,7 @@ async def test_stats_renders_periods_and_histogram() -> None:
     assert "7д: 30" in text_out
     assert "65" in text_out  # threshold
     assert "branch_director" in text_out
-    assert "relevant_exp" in text_out
+    assert "Релевантный опыт" in text_out
 
 
 # ── /settings ─────────────────────────────────────────────────────────────────
@@ -663,7 +663,7 @@ async def test_detail_renders_and_answers() -> None:
     assert "Андеррайтер" in text_out
     assert "underwriter" in text_out
     assert "50" in text_out
-    assert "relevant_exp" in text_out
+    assert "Релевантный опыт" in text_out
     cb.answer.assert_called_once()
     _, kwargs = cb.answer.call_args
     assert not kwargs.get("show_alert")

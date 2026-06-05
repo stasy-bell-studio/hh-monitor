@@ -11,6 +11,7 @@ from hh_monitor.tg.reasons import (
     STATUS_LABELS,
     build_reason_keyboard,
     format_final_text,
+    reason_label,
 )
 
 ALL_STATUSES = list(ScreeningStatus)
@@ -75,3 +76,38 @@ def test_format_final_text_handles_none_username() -> None:
 def test_format_final_text_stop_list() -> None:
     result = format_final_text("Card", ScreeningStatus.STOP_LIST, "Конкурент", "bob")
     assert result.startswith("🚫 Стоп-лист: Конкурент — @bob")
+
+
+# ── reason_label ──────────────────────────────────────────────────────────────
+
+
+def test_reason_label_known_reject_codes() -> None:
+    assert reason_label("borderline_exp") == "Пограничный опыт"
+    assert reason_label("stop_industry") == "Стоп-индустрия"
+    assert reason_label("weak_exp") == "Слабый опыт"
+
+
+def test_reason_label_known_approve_code() -> None:
+    assert reason_label("relevant_exp") == "Релевантный опыт"
+
+
+def test_reason_label_custom() -> None:
+    assert reason_label("custom") == "Своя причина"
+
+
+def test_reason_label_unknown_falls_back_to_code() -> None:
+    assert reason_label("some_new_code") == "some_new_code"
+
+
+def test_reason_label_none_returns_dash() -> None:
+    assert reason_label(None) == "—"
+
+
+def test_reason_label_empty_string_returns_dash() -> None:
+    assert reason_label("") == "—"
+
+
+def test_reason_label_covers_all_presets() -> None:
+    for preset in PRESETS.values():
+        for reason in preset:
+            assert reason_label(reason.code) == reason.text

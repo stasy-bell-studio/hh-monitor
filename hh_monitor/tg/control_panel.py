@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.config import settings
 from hh_monitor.tg.client import get_session_factory, is_admin
+from hh_monitor.tg.reasons import reason_label
 from hh_monitor.tg.search_detail import render_search_detail
 from hh_monitor.tg.sender import get_current_threshold, upsert_app_config
 
@@ -278,7 +279,10 @@ async def handle_dm_stats(message: Message) -> None:
     p_quota = int(parser_row.quota) if parser_row else 0
 
     reason_lines = (
-        "\n".join(f"  {i}. {row.reason_code} — {row.cnt}" for i, row in enumerate(top_reasons, 1))
+        "\n".join(
+            f"  {i}. {reason_label(row.reason_code)} — {row.cnt}"
+            for i, row in enumerate(top_reasons, 1)
+        )
         or "  нет данных"
     )
 

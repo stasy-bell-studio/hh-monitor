@@ -8,6 +8,8 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hh_monitor.tg.reasons import reason_label
+
 logger = structlog.get_logger(__name__)
 
 _DETAIL_SEARCH_SQL = (
@@ -111,7 +113,10 @@ async def render_search_detail(session: AsyncSession, search_id: int) -> str | N
     pending = int(llm_row.pending) if llm_row else 0
 
     reason_lines = (
-        "\n".join(f"  {i}. {r.reason_code} — {r.cnt}" for i, r in enumerate(reasons, 1))
+        "\n".join(
+            f"  {i}. {reason_label(r.reason_code)} — {r.cnt}"
+            for i, r in enumerate(reasons, 1)
+        )
         or "  нет данных"
     )
 

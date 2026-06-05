@@ -82,7 +82,7 @@ async def test_render_returns_string_with_position_info() -> None:
     assert "Андеррайтер" in result
     assert "underwriter" in result
     assert "50" in result
-    assert "relevant_exp" in result
+    assert "Релевантный опыт" in result
 
 
 async def test_render_returns_none_when_not_found() -> None:

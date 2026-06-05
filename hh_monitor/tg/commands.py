@@ -34,6 +34,7 @@ from hh_monitor.db.models import OAuthToken
 from hh_monitor.errors import HHOAuthError
 from hh_monitor.hh.oauth import refresh_access_token
 from hh_monitor.tg.client import get_session_factory, is_admin
+from hh_monitor.tg.reasons import reason_label
 from hh_monitor.tg.search_detail import render_search_detail
 from hh_monitor.tg.sender import get_current_threshold, upsert_app_config
 
@@ -331,10 +332,8 @@ _STATS_HISTOGRAM_SQL = """
             WHEN r.score_total BETWEEN 80 AND 100 THEN '80-100'
         END AS bucket,
         COUNT(*) AS cnt
-    FROM notifications_sent ns
-    JOIN events e ON e.id = ns.event_id
-    JOIN resumes r ON r.hh_resume_id = e.hh_resume_id
-    WHERE ns.sent_at >= NOW() - INTERVAL '7 days'
+    FROM resumes r
+    WHERE r.llm_scored_at >= NOW() - INTERVAL '7 days'
       AND r.score_total IS NOT NULL
     GROUP BY bucket
     ORDER BY bucket
@@ -382,7 +381,10 @@ async def handle_stats(message: Message) -> None:
 
     # Top reasons
     reason_lines = (
-        "\n".join(f"  {i}. {row.reason_code} — {row.cnt}" for i, row in enumerate(top_reasons, 1))
+        "\n".join(
+            f"  {i}. {reason_label(row.reason_code)} — {row.cnt}"
+            for i, row in enumerate(top_reasons, 1)
+        )
         or "  нет данных"
     )
 

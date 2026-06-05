@@ -47,6 +47,19 @@ PRESETS: dict[ScreeningStatus, list[Reason]] = {
     ],
 }
 
+CODE_TO_LABEL: dict[str, str] = {
+    r.code: r.text
+    for preset in PRESETS.values()
+    for r in preset
+}
+CODE_TO_LABEL[CUSTOM_CODE] = "Своя причина"
+
+
+def reason_label(code: str | None) -> str:
+    if not code:
+        return "—"
+    return CODE_TO_LABEL.get(code, code)
+
 
 def build_reason_keyboard(event_id: int, status: ScreeningStatus) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []

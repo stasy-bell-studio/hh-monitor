@@ -17,7 +17,9 @@ Public API:
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import json
 from typing import Any
 
 import structlog
@@ -67,15 +69,27 @@ def _apply_domain_governor(
 def _coerce_text(v: object) -> str:
     """Coerce a dossier value to str for Text DB columns.
 
-    LLM may return any field as list, list[list], or dict; all are coerced to str.
-    None → empty string (column never receives NULL from this path).
+    LLM may return any field as list, list[list], dict, or stringified JSON;
+    all are coerced to readable RU text. None → empty string.
     """
     if v is None:
         return ""
-    if isinstance(v, list):
-        return "\n".join(str(x) for x in v)
+    if isinstance(v, dict):
+        return "\n".join(f"{k} — {_coerce_text(val)}" for k, val in v.items())
+    if isinstance(v, list | tuple):
+        parts = [_coerce_text(x) for x in v]
+        parts = [p for p in parts if p]
+        sep = "\n" if any(len(p) > 40 or "\n" in p for p in parts) else "; "
+        return sep.join(parts)
     if isinstance(v, str):
-        return v
+        s = v.strip()
+        if s and s[0] in ("{", "["):
+            for loader in (json.loads, ast.literal_eval):
+                try:
+                    return _coerce_text(loader(s))
+                except (ValueError, SyntaxError):
+                    pass
+        return s
     return str(v)
 
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 import html
+import json
+import re
 from typing import Any
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -70,6 +73,49 @@ def _short(text: str | None, limit: int = 140) -> str:
     if len(candidate) > limit:
         candidate = candidate[:limit].rstrip() + "…"
     return safe(candidate)
+
+
+def _coerce_display(v: object) -> str:
+    """Repair already-stored dossier values — same recursive logic as run._coerce_text."""
+    if v is None:
+        return ""
+    if isinstance(v, dict):
+        return "\n".join(f"{k} — {_coerce_display(val)}" for k, val in v.items())
+    if isinstance(v, list | tuple):
+        parts = [_coerce_display(x) for x in v]
+        parts = [p for p in parts if p]
+        sep = "\n" if any(len(p) > 40 or "\n" in p for p in parts) else "; "
+        return sep.join(parts)
+    if isinstance(v, str):
+        s = v.strip()
+        if s and s[0] in ("{", "["):
+            for loader in (json.loads, ast.literal_eval):
+                try:
+                    return _coerce_display(loader(s))
+                except (ValueError, SyntaxError):
+                    pass
+        return s
+    return str(v)
+
+
+def _bullets(
+    text: str | None,
+    *,
+    max_items: int = 3,
+    item_limit: int = 160,
+) -> str:
+    """Render multi-point dossier text as bullet lines (HTML-escaped)."""
+    if not text:
+        return ""
+    display = _coerce_display(text)
+    raw_items = re.split(r"\n|•|; ", display)
+    items = [x.strip() for x in raw_items if x.strip()][:max_items]
+    lines = []
+    for item in items:
+        if len(item) > item_limit:
+            item = item[:item_limit].rsplit(" ", 1)[0] + "…"
+        lines.append(f"   • {safe(item)}")
+    return "\n".join(lines)
 
 
 def _red_flags_text(raw: list[str] | str | None) -> str:
@@ -179,11 +225,11 @@ def build_card_html(
     red_text = _red_flags_text(resume.llm_red_flags or event.llm_red_flags)
     dossier: list[str] = []
     if event.llm_facts_confirmed:
-        dossier.append(f"✅ Сильные стороны: {_short(event.llm_facts_confirmed)}")
+        dossier.append(f"✅ Сильные стороны:\n{_bullets(event.llm_facts_confirmed)}")
     if event.llm_weak_spots:
-        dossier.append(f"⚠️ Слабые места: {_short(event.llm_weak_spots)}")
+        dossier.append(f"⚠️ Слабые места:\n{_bullets(event.llm_weak_spots)}")
     if red_text:
-        dossier.append(f"🚩 Риски: {_short(red_text)}")
+        dossier.append(f"🚩 Риски:\n{_bullets(red_text)}")
     if event.llm_verdict_text:
         dossier.append(f"🧭 Вывод: {_short(event.llm_verdict_text)}")
 

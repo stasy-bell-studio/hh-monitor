@@ -8,6 +8,8 @@ import pytest
 
 from hh_monitor.db.models import Event, Resume, Search
 from hh_monitor.tg.cards import (
+    _bullets,
+    _coerce_display,
     _plural_years,
     build_card_html,
     build_detail_collapse_keyboard,
@@ -390,7 +392,8 @@ def test_card_conclusion_visible_when_verdict_мимо() -> None:
     res = _resume(llm_verdict="мимо", llm_comment=None)
     ev = _event(llm_verdict_text="Не подходит совсем", llm_red_flags="нет лицензии")
     html = build_card_html(res, ev, _search(), _snap())
-    assert "🚩 Риски: нет лицензии" in html
+    assert "🚩 Риски:" in html
+    assert "нет лицензии" in html
     assert "🧭 Вывод: Не подходит совсем" in html
 
 
@@ -412,9 +415,12 @@ def test_card_dossier_full_card_shows_four_blocks() -> None:
         llm_verdict_text="Сильный кандидат, рекомендуем на собеседование.",
     )
     html = build_card_html(res, ev, _search(), _snap())
-    assert "✅ Сильные стороны: 10 лет в рознице, рост выручки 30%." in html
-    assert "⚠️ Слабые места: Нет опыта в логистике." in html
-    assert "🚩 Риски: Частые смены работодателей." in html
+    assert "✅ Сильные стороны:" in html
+    assert "10 лет в рознице, рост выручки 30%." in html
+    assert "⚠️ Слабые места:" in html
+    assert "Нет опыта в логистике." in html
+    assert "🚩 Риски:" in html
+    assert "Частые смены работодателей." in html
     assert "🧭 Вывод: Сильный кандидат, рекомендуем на собеседование." in html
 
 
@@ -422,7 +428,8 @@ def test_card_dossier_omits_empty_blocks() -> None:
     res = _resume(llm_verdict="подходит", llm_comment=None, llm_red_flags=None)
     ev = _event(llm_facts_confirmed="Есть управленческий опыт.")
     html = build_card_html(res, ev, _search(), _snap())
-    assert "✅ Сильные стороны: Есть управленческий опыт." in html
+    assert "✅ Сильные стороны:" in html
+    assert "Есть управленческий опыт." in html
     assert "Слабые места" not in html
     assert "🚩 Риски" not in html
     assert "Вывод:" not in html
@@ -434,8 +441,9 @@ def test_card_dossier_long_facts_truncated() -> None:
     ev = _event(llm_facts_confirmed=long_facts)
     html = build_card_html(res, ev, _search(), _snap())
     assert "…" in html
-    facts_line = next(ln for ln in html.splitlines() if "Сильные стороны" in ln)
-    assert len(facts_line) < len("✅ Сильные стороны: ") + 160
+    # Label line is just the header; bullet line holds the content (≤ item_limit + prefix)
+    bullet_line = next(ln for ln in html.splitlines() if "•" in ln)
+    assert len(bullet_line) <= len("   • ") + 160 + len("…")
 
 
 def test_card_dossier_legacy_event_falls_back_to_comment() -> None:
@@ -573,3 +581,106 @@ def test_detail_html_escapes_html() -> None:
     html = build_detail_html(res, ev, _search())
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
+
+
+# ── _coerce_display ───────────────────────────────────────────────────────────
+
+
+def test_coerce_display_plain_string() -> None:
+    assert _coerce_display("text") == "text"
+
+
+def test_coerce_display_none() -> None:
+    assert _coerce_display(None) == ""
+
+
+def test_coerce_display_dict_no_braces() -> None:
+    result = _coerce_display({"a": "b"})
+    assert "{" not in result
+    assert "a" in result and "b" in result
+
+
+def test_coerce_display_list() -> None:
+    result = _coerce_display(["item1", "item2"])
+    assert "item1" in result and "item2" in result
+    assert "{" not in result
+
+
+def test_coerce_display_stringified_dict_repr() -> None:
+    result = _coerce_display("{'key': 'val'}")
+    assert "{" not in result
+    assert "key" in result
+
+
+def test_coerce_display_stringified_json() -> None:
+    result = _coerce_display('{"key": "val"}')
+    assert "{" not in result
+    assert "key" in result
+
+
+def test_coerce_display_malformed_brace_string_passthrough() -> None:
+    result = _coerce_display("{not valid")
+    assert result == "{not valid"
+
+
+# ── _bullets ──────────────────────────────────────────────────────────────────
+
+
+def test_bullets_none_returns_empty() -> None:
+    assert _bullets(None) == ""
+
+
+def test_bullets_empty_string_returns_empty() -> None:
+    assert _bullets("") == ""
+
+
+def test_bullets_basic_newline_split() -> None:
+    out = _bullets("item1\nitem2\nitem3")
+    assert "•" in out
+    assert "item1" in out and "item2" in out
+
+
+def test_bullets_max_items_default_three() -> None:
+    out = _bullets("a\nb\nc\nd")
+    assert out.count("•") == 3
+
+
+def test_bullets_respects_custom_max_items() -> None:
+    out = _bullets("a\nb\nc\nd", max_items=2)
+    assert out.count("•") == 2
+
+
+def test_bullets_truncates_long_items() -> None:
+    long_item = "слово " * 40  # >> 160 chars
+    out = _bullets(long_item)
+    assert "…" in out
+
+
+def test_bullets_no_ellipsis_for_short_items() -> None:
+    out = _bullets("короткий пункт")
+    assert "…" not in out
+
+
+def test_bullets_html_escapes_content() -> None:
+    out = _bullets("<b>bold</b>")
+    assert "<b>" not in out
+    assert "&lt;b&gt;" in out
+
+
+def test_bullets_semicolon_split() -> None:
+    out = _bullets("item1; item2; item3")
+    assert out.count("•") == 3
+
+
+def test_bullets_repairs_dict_repr() -> None:
+    out = _bullets("{'факт': 'значение'}")
+    assert "{" not in out
+    assert "факт" in out
+
+
+def test_bullets_card_renders_bullets_not_short() -> None:
+    res = _resume(llm_red_flags=None)
+    ev = _event(llm_facts_confirmed="СОГАЗ 2022\nКоманда 350 агентов\nP&L 1 млрд руб.")
+    card = build_card_html(res, ev, _search())
+    assert "•" in card
+    assert "СОГАЗ 2022" in card

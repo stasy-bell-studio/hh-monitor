@@ -240,7 +240,7 @@ async def test_stats_renders_top_reasons_and_threshold() -> None:
     ):
         await handle_dm_stats(msg)  # type: ignore[arg-type]
     text_out: str = msg.answer.call_args[0][0]
-    assert "relevant_exp" in text_out
+    assert "Релевантный опыт" in text_out
     assert "75" in text_out
 
 
@@ -394,7 +394,7 @@ async def test_cp_detail_renders_search_info() -> None:
     assert "Андеррайтер" in text_out
     assert "underwriter" in text_out
     assert "50" in text_out  # total
-    assert "relevant_exp" in text_out
+    assert "Релевантный опыт" in text_out
 
 
 @pytest.mark.asyncio
