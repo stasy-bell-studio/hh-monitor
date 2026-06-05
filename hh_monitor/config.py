@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # comma-separated Telegram user IDs with admin privileges (e.g. "123456,789012")
     telegram_admin_user_ids: str = ""
     telegram_score_threshold: int = Field(default=70, ge=0, le=100)
+    digest_score_threshold: int = Field(default=30, ge=0, le=100)
 
     # Topic IDs for supergroup routing (0 = don't use topics)
     telegram_cards_topic_id: int = 0

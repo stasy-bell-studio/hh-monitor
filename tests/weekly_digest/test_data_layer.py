@@ -126,11 +126,11 @@ async def test_per_position_buckets(db_session: AsyncSession) -> None:
     assert len(data["per_position"]) == 1
     pp = data["per_position"][0]
     assert pp["position_name"] == "Директор филиала"
-    assert pp["count"] == 5
+    assert pp["count"] == 4  # score_total=30 excluded by digest_score_threshold
     assert pp["n_fit"] == 1
     assert pp["n_doubt"] == 1
-    assert pp["n_miss"] == 3  # мимо + стоп-сигнал + None
-    assert pp["avg_score"] == round((90 + 60 + 40 + 30 + 50) / 5)
+    assert pp["n_miss"] == 2  # мимо + None (стоп-сигнал@30 excluded)
+    assert pp["avg_score"] == round((90 + 60 + 40 + 50) / 4)  # == 60
 
 
 @pytest.mark.asyncio
@@ -184,3 +184,41 @@ async def test_weekly_series_buckets(db_session: AsyncSession) -> None:
     assert series[-1]["approved"] == 1
     assert series[-2]["found"] == 1
     assert series[0]["found"] == 0  # oldest bucket empty
+
+
+@pytest.mark.asyncio
+async def test_score_floor_excludes_low_scores(db_session: AsyncSession) -> None:
+    """Candidates with score_total <= digest_score_threshold are excluded from
+    candidates_all, funnel['found'], and per-position counts; one above passes."""
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+
+    await _seed_candidate(db_session, sc, score_total=30)  # at threshold — excluded
+    await _seed_candidate(db_session, sc, score_total=18)  # below threshold — excluded
+    await _seed_candidate(db_session, sc, score_total=31)  # above threshold — included
+
+    data = await _collect_data(db_session, date_from, date_to)
+    assert data["funnel"]["found"] == 1
+    assert len(data["candidates_all"]) == 1
+    assert data["candidates_all"][0]["score_total"] == 31
+    assert len(data["per_position"]) == 1
+    assert data["per_position"][0]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_weekly_series_score_floor(db_session: AsyncSession) -> None:
+    """A candidate at the score floor must not appear in the weekly series found count."""
+    now = datetime.now(UTC)
+    sc = await _seed_search(db_session, "Директор филиала")
+
+    await _seed_candidate(
+        db_session,
+        sc,
+        score_total=30,
+        created_at=now - timedelta(days=2),
+    )
+
+    series = await _collect_weekly_series(db_session, weeks=4)
+    assert len(series) == 4
+    assert series[-1]["found"] == 0  # excluded by score floor

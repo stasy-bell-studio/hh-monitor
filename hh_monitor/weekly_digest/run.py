@@ -176,6 +176,7 @@ async def _collect_data(
         .where(Event.created_at >= date_from)
         .where(Event.created_at < date_to)
         .where(Resume.score_total.isnot(None))
+        .where(Resume.score_total > settings.digest_score_threshold)
         .order_by(Resume.score_total.desc())
     )
     rows = (await session.execute(stmt)).all()
@@ -337,6 +338,7 @@ async def _collect_weekly_series(session: AsyncSession, weeks: int = 4) -> list[
             .where(Event.created_at >= wf)
             .where(Event.created_at < wt)
             .where(Resume.score_total.isnot(None))
+            .where(Resume.score_total > settings.digest_score_threshold)
         )
         sent_stmt = base.join(NotificationSent, NotificationSent.event_id == Event.id)
         approved_stmt = sent_stmt.where(
