@@ -21,6 +21,7 @@ from hh_monitor.db.models import (
     ScreeningReason,
     Search,
 )
+from hh_monitor.tg.cards import is_best_score, score_badge
 from hh_monitor.tg.send_guard import send_enabled
 
 logger = structlog.get_logger(__name__)
@@ -413,11 +414,18 @@ def _pending_block(pending: list[_Candidate]) -> str:
             prefix = "⚠️ "
             marked = True
         age = c["age_days"] if c["age_days"] is not None else 0
-        lines.append(
-            f"{prefix}{_verdict_emoji(c['llm_verdict'])} {c['score_total']} · "
-            f"{_name_role(c['position_name'], c['llm_real_role'])} · "
-            f'висит {age} дн · <a href="{c["url"]}">hh.ru</a>'
-        )
+        badge = score_badge(c["score_total"])
+        nr = _name_role(c["position_name"], c["llm_real_role"])
+        if is_best_score(c["score_total"]):
+            lines.append(
+                f"{prefix}🏆 {badge} <b>{c['score_total']} · {nr}</b> · "
+                f'висит {age} дн · <a href="{c["url"]}">hh.ru</a>'
+            )
+        else:
+            lines.append(
+                f"{prefix}{badge} {c['score_total']} · {nr} · "
+                f'висит {age} дн · <a href="{c["url"]}">hh.ru</a>'
+            )
     if miss_count > 0:
         lines.append(f"🔴 +{miss_count} с вердиктом «мимо» — в Excel")
     return "\n".join(lines)

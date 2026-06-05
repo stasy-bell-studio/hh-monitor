@@ -20,6 +20,24 @@ def _verdict_emoji(v: str | None) -> str:
     return _VERDICT_EMOJI.get(v.lower().strip(), "🔴")
 
 
+SCORE_TIER_GREEN_MIN = 60
+SCORE_TIER_BEST_MIN = 76
+
+
+def score_badge(score: int | None) -> str:
+    if score is None:
+        return "⚪"
+    if score >= SCORE_TIER_BEST_MIN:
+        return "🟣"
+    if score >= SCORE_TIER_GREEN_MIN:
+        return "🟢"
+    return "🟡"
+
+
+def is_best_score(score: int | None) -> bool:
+    return score is not None and score >= SCORE_TIER_BEST_MIN
+
+
 def _plural_years(n: int) -> str:
     n = abs(int(n))
     if 11 <= n % 100 <= 14:
@@ -103,7 +121,6 @@ def build_card_html(
 ) -> str:
     snap = _extract_snapshot_fields(snapshot_payload) if snapshot_payload else {}
 
-    verdict = resume.llm_verdict or event.llm_verdict
     real_role = resume.llm_real_role
 
     score_total = resume.score_total
@@ -113,9 +130,16 @@ def build_card_html(
     lines: list[str] = []
 
     # ── Line 1: anchor ────────────────────────────────────────────────────────
-    emoji = _verdict_emoji(verdict)
     score_str = f"Рейтинг {score_total}/100" if score_total is not None else "Рейтинг —/100"
-    lines.append(f"{emoji} <b>Кандидат на «{safe(search.position_name)}»</b> — {score_str}")
+    if is_best_score(score_total):
+        lines.append(
+            f"🟣 <b>🏆 ЛУЧШИЙ · Кандидат на «{safe(search.position_name)}»</b> — {score_str}"
+        )
+    else:
+        lines.append(
+            f"{score_badge(score_total)} <b>Кандидат на «{safe(search.position_name)}»</b>"
+            f" — {score_str}"
+        )
 
     # ── Line 2: secondary score breakdown ─────────────────────────────────────
     breakdown_parts: list[str] = []

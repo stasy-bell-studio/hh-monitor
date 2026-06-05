@@ -13,7 +13,9 @@ from hh_monitor.tg.cards import (
     build_detail_collapse_keyboard,
     build_detail_html,
     build_inline_keyboard,
+    is_best_score,
     safe,
+    score_badge,
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -174,26 +176,53 @@ def test_card_anchor_score_none_shows_dash() -> None:
     assert "Рейтинг —/100" in first_line
 
 
-def test_card_anchor_verdict_подходит_emoji() -> None:
-    html = build_card_html(_resume(llm_verdict="подходит"), _event(), _search(), _snap())
+def test_card_anchor_score_green_emoji() -> None:
+    html = build_card_html(_resume(score_total=75), _event(), _search(), _snap())
     assert html.splitlines()[0].startswith("🟢")
 
 
-def test_card_anchor_verdict_спорно_emoji() -> None:
-    html = build_card_html(_resume(llm_verdict="спорно"), _event(), _search(), _snap())
+def test_card_anchor_score_yellow_emoji() -> None:
+    html = build_card_html(_resume(score_total=59), _event(), _search(), _snap())
     assert html.splitlines()[0].startswith("🟡")
 
 
-def test_card_anchor_verdict_мимо_emoji() -> None:
-    html = build_card_html(_resume(llm_verdict="мимо"), _event(), _search(), _snap())
-    assert html.splitlines()[0].startswith("🔴")
+def test_card_anchor_score_best_emoji() -> None:
+    html = build_card_html(_resume(score_total=76), _event(), _search(), _snap())
+    assert html.splitlines()[0].startswith("🟣")
+    assert "🏆 ЛУЧШИЙ" in html.splitlines()[0]
 
 
-def test_card_anchor_verdict_none_is_red() -> None:
-    res = _resume(llm_verdict=None)
-    ev = _event(llm_verdict=None)
-    html = build_card_html(res, ev, _search(), _snap())
-    assert html.splitlines()[0].startswith("🔴")
+def test_card_anchor_score_none_emoji() -> None:
+    html = build_card_html(_resume(score_total=None), _event(), _search(), _snap())
+    assert html.splitlines()[0].startswith("⚪")
+
+
+@pytest.mark.parametrize(
+    "score,expected",
+    [
+        (None, "⚪"),
+        (0, "🟡"),
+        (59, "🟡"),
+        (60, "🟢"),
+        (75, "🟢"),
+        (76, "🟣"),
+        (100, "🟣"),
+    ],
+)
+def test_score_badge_boundaries(score: int | None, expected: str) -> None:
+    assert score_badge(score) == expected
+
+
+@pytest.mark.parametrize(
+    "score,expected",
+    [
+        (None, False),
+        (75, False),
+        (76, True),
+    ],
+)
+def test_is_best_score_boundaries(score: int | None, expected: bool) -> None:
+    assert is_best_score(score) == expected
 
 
 def test_card_anchor_contains_position_name() -> None:
