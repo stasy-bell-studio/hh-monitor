@@ -226,7 +226,8 @@ class NotificationSent(Base):
     __tablename__ = "notifications_sent"
 
     event_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("events.id"), primary_key=True)
-    tg_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # NULL = reserved (reserve-then-send) but not yet finalized; set on a successful send.
+    tg_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
     )

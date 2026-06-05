@@ -7,6 +7,7 @@ import structlog
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.config import settings
@@ -18,6 +19,16 @@ from hh_monitor.tg.send_guard import send_enabled
 logger = structlog.get_logger(__name__)
 
 _SENDABLE_VERDICTS: frozenset[str] = frozenset({"подходит", "спорно"})
+
+
+def _log_existing_reservation(event_id: int, ns: NotificationSent) -> None:
+    """A finalized row → silent already-sent. An incomplete reservation
+    (tg_message_id IS NULL, i.e. a crash between reserve and finalize) → WARNING so
+    the potentially-undelivered card is observable and manually recoverable."""
+    if ns.tg_message_id is None:
+        logger.warning("notification_reservation_incomplete", event_id=event_id)
+    else:
+        logger.info("tg_sender_already_sent", event_id=event_id)
 
 
 async def get_current_threshold(session: AsyncSession) -> int:
@@ -86,32 +97,55 @@ async def send_new_candidate_card(session: AsyncSession, bot: Bot, event_id: int
         )
         return False
 
+    # All reject gates (threshold, verdict) are above this point, so a reservation
+    # row is created ONLY for a card that is definitely going to be sent.
     existing = await session.get(NotificationSent, event_id)
     if existing is not None:
-        logger.info("tg_sender_already_sent", event_id=event_id)
+        _log_existing_reservation(event_id, existing)
         return False
 
+    # Build the card while the ORM objects are still loaded — the reserve commit
+    # below expires them (expire_on_commit), so post-commit attribute access would
+    # trigger a lazy reload.
     resume_url = f"https://hh.ru/resume/{resume.hh_resume_id}"
     html_text = build_card_html(resume, event, search, snap_payload)
     keyboard = build_inline_keyboard(event_id, resume_url)
 
-    msg = await send_card(
-        bot,
-        settings.telegram_hr_group_id,
-        html_text,
-        keyboard,
-        message_thread_id=settings.telegram_cards_topic_id or None,
-    )
-    tg_message_id = msg.message_id  # capture before commit
-
-    notification = NotificationSent(
-        event_id=event_id,
-        tg_message_id=tg_message_id,
-    )
+    # Reserve-then-send: commit a NotificationSent row (tg_message_id NULL) BEFORE
+    # sending, guarded by the event_id PK. Closes the send-then-record window — if a
+    # racing run already reserved, we hit IntegrityError and skip without sending.
+    notification = NotificationSent(event_id=event_id, tg_message_id=None)
     session.add(notification)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing = await session.get(NotificationSent, event_id)
+        if existing is not None:
+            _log_existing_reservation(event_id, existing)
+        return False
+
+    try:
+        msg = await send_card(
+            bot,
+            settings.telegram_hr_group_id,
+            html_text,
+            keyboard,
+            message_thread_id=settings.telegram_cards_topic_id or None,
+        )
+    except Exception:
+        # The card was not delivered — release the reservation so a future run can
+        # retry instead of permanently losing the candidate.
+        await session.delete(notification)
+        await session.commit()
+        raise
+
+    # Finalize: write the real message id. If THIS commit fails, the reservation
+    # row (committed above) survives → a retry is skipped → no duplicate card.
+    notification.tg_message_id = msg.message_id
     await session.commit()
 
-    logger.info("tg_sender_sent", event_id=event_id, tg_message_id=tg_message_id)
+    logger.info("tg_sender_sent", event_id=event_id, tg_message_id=msg.message_id)
     return True
 
 

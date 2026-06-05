@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.testing import capture_logs
 
 from hh_monitor.db.models import AppConfig, Event, NotificationSent, Resume, Search, Snapshot
 from hh_monitor.tg.sender import get_current_threshold, send_new_candidate_card, send_pending_cards
@@ -531,3 +532,87 @@ async def test_freshness_gate_skips_stale_sends_fresh(db_session: AsyncSession) 
     assert result["skipped_stale"] == 1
     assert await db_session.get(NotificationSent, stale_event_id) is None
     assert await db_session.get(NotificationSent, fresh_event_id) is not None
+
+
+# ── P2-4: reserve-then-send idempotency ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_finalize_failure_does_not_double_send(db_session: AsyncSession) -> None:
+    """Send OK but the finalize commit fails → the committed reservation survives,
+    so a retry is skipped and the card is NOT sent twice."""
+    event_id = await _seed(db_session, score_total=80)
+    msg = MagicMock(spec=Message)
+    msg.message_id = 4321
+
+    real_commit = db_session.commit
+    state = {"n": 0}
+
+    async def flaky_commit(*_a: object, **_k: object) -> None:
+        state["n"] += 1
+        if state["n"] == 1:
+            await real_commit()  # reserve commit succeeds
+            return
+        raise RuntimeError("simulated finalize commit failure")
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch(
+            "hh_monitor.tg.sender.send_card", new_callable=AsyncMock, return_value=msg
+        ) as mock_send,
+    ):
+        _prod_settings_mock(ms, threshold=60)
+        # First run: reserve OK, send OK, finalize commit fails.
+        with (
+            patch.object(db_session, "commit", new=flaky_commit),
+            pytest.raises(RuntimeError),
+        ):
+            await send_new_candidate_card(db_session, _make_bot(), event_id)
+        # Simulate a fresh run after the crash.
+        await db_session.rollback()
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is False  # retry skipped — not re-sent
+    assert mock_send.call_count == 1  # send_card called exactly once
+    ns = await db_session.get(NotificationSent, event_id)
+    assert ns is not None  # reservation persisted
+    assert ns.tg_message_id is None  # never finalized — surfaces as incomplete
+
+
+@pytest.mark.asyncio
+async def test_incomplete_reservation_logs_warning(db_session: AsyncSession) -> None:
+    """A pre-existing NULL reservation (crash between reserve and finalize) is
+    skipped and surfaced as a WARNING, never silently retried."""
+    event_id = await _seed(db_session, score_total=80)
+    db_session.add(NotificationSent(event_id=event_id, tg_message_id=None))
+    await db_session.commit()
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+        capture_logs() as logs,
+    ):
+        _prod_settings_mock(ms, threshold=60)
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is False
+    mock_send.assert_not_called()
+    assert any(e["event"] == "notification_reservation_incomplete" for e in logs)
+
+
+@pytest.mark.asyncio
+async def test_blocked_verdict_creates_no_reservation(db_session: AsyncSession) -> None:
+    """Reject gates sit above the reserve step: a verdict-blocked event creates no
+    NotificationSent reservation row (no orphan)."""
+    event_id = await _seed(db_session, score_total=80, llm_verdict="мимо")
+
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new_callable=AsyncMock) as mock_send,
+    ):
+        _prod_settings_mock(ms, threshold=45)
+        result = await send_new_candidate_card(db_session, _make_bot(), event_id)
+
+    assert result is False
+    mock_send.assert_not_called()
+    assert await db_session.get(NotificationSent, event_id) is None

@@ -247,6 +247,35 @@ async def test_run_below_threshold_skips(db_session: Any, monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+async def test_gate_zero_lets_low_fit_through(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """score_fit_min_for_llm=0 (the safe explicit default) lets every prefiltered
+    resume through — even fit_score=5 is enriched, never skipped as below_threshold."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 0)
+    search, resume, event = await _seed_db(db_session, fit_score=5)
+    portraits = {search.position_code: _portrait(search.position_code)}
+
+    with patch(
+        "hh_monitor.llm_enrich.client.chat_completion_messages",
+        new_callable=AsyncMock,
+        return_value=_ok_llm_response(),
+    ) as mock_api:
+        result = await run_llm_enrichment(
+            db_session,
+            search.id,
+            limit=5,
+            portraits=portraits,
+            global_ctx=_global_ctx(),
+        )
+        mock_api.assert_called_once()
+
+    assert result["enriched"] == 1
+    assert result["skipped"] == 0
+
+
+@pytest.mark.asyncio
 async def test_run_stop_region_skips(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Resume in a stop region is skipped without API call."""
     monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")

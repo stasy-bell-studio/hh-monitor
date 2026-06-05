@@ -428,6 +428,7 @@ async def handle_settings(message: Message) -> None:
     settings_text = (
         "<b>⚙️ Настройки hh-monitor</b>\n\n"
         f"Порог рейтинга: <b>{threshold}</b>\n"
+        f"LLM fit-gate: <b>{settings.score_fit_min_for_llm}</b> (0 = без фильтра)\n"
         f"Еженедельная сводка: <code>{settings.weekly_digest_cron}</code> "
         f"({settings.weekly_digest_tz})\n"
         f"Админы: <code>{admin_ids_str}</code>"
