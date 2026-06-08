@@ -129,10 +129,22 @@ RETURNING event_id
 | `adm:yes_arch:{id}` | Подтвердить архивацию (`archived_at=NOW()`) |
 | `adm:no_arch:{id}` | Отменить, вернуть карточку |
 | `adm:detail:{id}` | Подробная статистика (stub, Сессия 9) |
+| `adm:edit_portrait:{id}` | Запустить FSM редактирования портрета поиска |
 | `adm:threshold` | ForceReply для ввода нового порога |
 | `adm:close` | Удалить сообщение бота |
 
 Все `adm:` callbacks принимаются только от пользователей из `TELEGRAM_ADMIN_USER_IDS`.
+
+### FSM «Редактировать портрет» (edit_portrait/, только топик 🎛 Управление)
+
+Вход — кнопка «✏️ Редактировать портрет» на карточке `/active`
+(`adm:edit_portrait:{id}`). Меню разделов/полей строится интроспекцией моделей
+`Portrait`/`Filters`/`RegionFilters`/`Weights`. Колбэки `ep:*`: `ep:sec:{section}`
+(раздел), `ep:fld:{idx}` (поле), `ep:bool:{idx}:{0|1}`, `ep:lit:{idx}:{value}`,
+`ep:save`, `ep:cancel`, `ep:done`. На сохранении: ре-деривация prefilter и
+hh_params (правка региона добавляет/убирает area-ids), регенерация промпта-критика
+(показывается только для просмотра), запись в авторитетный источник (YAML, если
+портрет YAML-backed, плюс `searches.portrait`) в одной транзакции.
 Fail-soft: если `UPDATE ... RETURNING` возвращает пусто → `show_alert("⚠️ Состояние поиска изменилось, обнови /active")`.
 
 ### Lifecycle поиска (searches)

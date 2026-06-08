@@ -65,12 +65,14 @@ def register_tg_routers(dp: Dispatcher) -> None:
     from hh_monitor.tg.add_vacancy import add_vacancy_router
     from hh_monitor.tg.commands import admin_router
     from hh_monitor.tg.control_panel import cp_router
+    from hh_monitor.tg.edit_portrait import edit_portrait_router
     from hh_monitor.tg.handlers import router
 
-    # FSM "Add Vacancy" wizard lives under the admin router (admin-topic only).
-    # Sub-routers do NOT inherit parent message filters, so add_vacancy_router
-    # applies its own admin/topic guards internally.
+    # FSM "Add Vacancy" / "Edit Portrait" wizards live under the admin router
+    # (admin-topic only). Sub-routers do NOT inherit parent message filters, so
+    # each applies its own admin/topic guards internally.
     admin_router.include_router(add_vacancy_router)
+    admin_router.include_router(edit_portrait_router)
 
     dp.include_router(cp_router)
     dp.include_router(admin_router)

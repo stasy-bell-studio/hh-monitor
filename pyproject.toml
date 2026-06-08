@@ -63,6 +63,10 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 "hh_monitor/tg/add_vacancy/keyboards.py" = ["RUF001"]
 "hh_monitor/tg/add_vacancy/launcher.py" = ["RUF001"]
 "hh_monitor/tg/add_vacancy/llm.py" = ["RUF001", "RUF002", "E501"]
+# "Edit Portrait" FSM — Russian UI strings (field labels, prompts) — Cyrillic intentional.
+"hh_monitor/tg/edit_portrait/handlers.py" = ["RUF001"]
+"hh_monitor/tg/edit_portrait/keyboards.py" = ["RUF001"]
+"hh_monitor/tg/edit_portrait/fields.py" = ["RUF001"]
 "hh_monitor/searches/codes.py" = ["RUF001", "RUF003"]
 # Russian-language LLM prompt constants — Cyrillic chars intentionally
 # look like Latin; long lines are deliberate (prose sent to the API).

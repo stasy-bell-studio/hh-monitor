@@ -18,6 +18,7 @@ import httpx
 import structlog
 from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter, Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     BotCommand,
     BotCommandScopeChat,
@@ -94,6 +95,12 @@ def _search_action_keyboard(search_id: int, is_active: bool) -> InlineKeyboardMa
                 InlineKeyboardButton(text="📊 Подробно", callback_data=f"adm:detail:{search_id}"),
                 pause_or_resume,
                 InlineKeyboardButton(text="🗑 Архив", callback_data=f"adm:archive:{search_id}"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Редактировать портрет",
+                    callback_data=f"adm:edit_portrait:{search_id}",
+                )
             ],
             _close_button(),
         ]
@@ -794,6 +801,17 @@ async def handle_detail(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):
         await callback.message.answer(detail_text)
     await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("adm:edit_portrait:"))
+async def handle_edit_portrait(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _require_admin_callback(callback):
+        await callback.answer("Нет прав", show_alert=True)
+        return
+    # Lazy import to avoid a module-load cycle (edit_portrait imports add_vacancy).
+    from hh_monitor.tg.edit_portrait.handlers import start_edit_portrait
+
+    await start_edit_portrait(callback, state)
 
 
 @admin_router.callback_query(F.data == "adm:threshold")
