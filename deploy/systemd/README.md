@@ -6,7 +6,9 @@ files are systemd drop-ins layered on top of the base units.
 
 ## Effective runtime config (base + drop-ins)
 - bot: always-on Telegram long-polling, Restart=always.
-- pipeline: hourly at :00, 05:00-21:00 MSK (drop-in narrows the base unit).
+- pipeline: hourly at :00, 05:00-21:00 MSK (drop-in narrows the base unit). ExecStart passes
+  `--max-pages 20` — GLOBAL per-search page cap (~1000 freshest resumes), sized for search
+  id=5's ~21-day freshness window; revisit before re-enabling unfiltered (large-pool) searches.
 - llm: hourly at :05, 05:05-21:05 MSK (+5 min after pipeline); drop-in adds
   `--max-events-per-search 100` and TimeoutStartSec=60min.
 - oauth refresh: every 6h, `hh refresh --if-due`.

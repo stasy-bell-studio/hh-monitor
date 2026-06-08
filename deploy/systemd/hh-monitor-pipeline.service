@@ -8,7 +8,10 @@ Type=oneshot
 User=skadmin
 Group=skadmin
 WorkingDirectory=/home/skadmin/hh-monitor
-ExecStart=/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli pipeline run-all
+# --max-pages is GLOBAL to ALL active searches in run-all (it is per-search page cap,
+# not a total). 20 (~1000 freshest resumes) is sized for search id=5's ~21-day freshness
+# window. Revisit when re-enabling searches WITHOUT a freshness filter (large pools).
+ExecStart=/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli pipeline run-all --max-pages 20
 TimeoutStartSec=30min
 StandardOutput=journal
 StandardError=journal
