@@ -217,6 +217,46 @@ async def test_s3_file_wrong_mime_rejected() -> None:
     msg.answer.assert_awaited()
 
 
+# ── S3b → S3c (freshness) ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_s3b_insurance_yes_goes_to_freshness() -> None:
+    fsm = FakeFSM(
+        data={"position_name": "Test Role", "portrait_dict": _PORTRAIT_DICT},
+        state=AddVacancy.S3b_insurance,
+    )
+    await h.handle_s3b_insurance_yes(_cb("av:insurance:yes"), fsm)  # type: ignore[arg-type]
+    assert fsm.state == AddVacancy.S3c_freshness
+
+
+@pytest.mark.asyncio
+async def test_s3b_insurance_no_goes_to_freshness() -> None:
+    fsm = FakeFSM(
+        data={"position_name": "Test Role", "portrait_dict": _PORTRAIT_DICT},
+        state=AddVacancy.S3b_insurance,
+    )
+    await h.handle_s3b_insurance_no(_cb("av:insurance:no"), fsm)  # type: ignore[arg-type]
+    assert fsm.state == AddVacancy.S3c_freshness
+
+
+@pytest.mark.asyncio
+async def test_s3c_freshness_overrides_llm_value_and_enters_review() -> None:
+    """HR choice is authoritative: av:fresh:N overwrites the LLM-parsed freshness."""
+    seeded = {**_PORTRAIT_DICT, "resume_freshness_days": 9}  # stale LLM value
+    fsm = FakeFSM(
+        data={"position_name": "Test Role", "portrait_dict": seeded},
+        state=AddVacancy.S3c_freshness,
+    )
+    with patch.object(h, "generate_enrichment_recs", new=AsyncMock(return_value="")):
+        await h.handle_s3c_freshness(_cb("av:fresh:21"), fsm)  # type: ignore[arg-type]
+    data = await fsm.get_data()
+    assert data["portrait_dict"]["resume_freshness_days"] == 21
+    assert data["freshness_asked"] is True
+    assert data["freshness_days"] == 21
+    assert fsm.state == AddVacancy.S4_review
+
+
 # ── S4 ──────────────────────────────────────────────────────────────────────────
 
 

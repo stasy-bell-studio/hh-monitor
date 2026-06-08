@@ -322,6 +322,46 @@ async def test_save_region_stop_updates_prefilter(db_session: Any) -> None:
     assert row.portrait["prefilter"]["area_ids_require"] == []  # empty by design
 
 
+# ── Freshness period (button-driven int field) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pick_freshness_field_shows_period_keyboard() -> None:
+    pd = copy.deepcopy(_PORTRAIT)
+    fsm = _fsm_for(1, portrait=pd)
+    idx = _idx(("resume_freshness_days",))
+    cb = _cb(f"ep:fld:{idx}")
+    await h.handle_pick_field(cb, fsm)  # type: ignore[arg-type]
+    # Period buttons are inline; the editor must NOT switch to free-text input.
+    assert fsm.state != EditPortrait.awaiting_value
+    kbd = cb.message.answer.call_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kbd.inline_keyboard for b in row]
+    assert any(c and c.startswith(f"ep:fresh:{idx}:") for c in cbs)
+
+
+@pytest.mark.asyncio
+async def test_edit_freshness_period_updates_jsonb(db_session: Any) -> None:
+    s = await _seed_search(db_session)
+    sid = s.id
+    pd = copy.deepcopy(_PORTRAIT)
+    pd["resume_freshness_days"] = 7  # pre-existing value to be overwritten
+    fsm = _fsm_for(sid, portrait=pd)
+
+    idx = _idx(("resume_freshness_days",))
+    await h.handle_set_freshness(_cb(f"ep:fresh:{idx}:14"), fsm)  # type: ignore[arg-type]
+    assert (await fsm.get_data())["portrait_dict"]["resume_freshness_days"] == 14
+
+    with (
+        patch.object(h, "get_session_factory", return_value=_factory_from(db_session)),
+        patch.object(h, "draft_critic_prompt", new=AsyncMock(return_value="L")),
+        patch.object(h, "load_all_portraits", return_value={}),
+    ):
+        await h.handle_save(_cb("ep:save"), fsm)  # type: ignore[arg-type]
+
+    row = (await db_session.execute(select(Search).where(Search.id == sid))).scalars().one()
+    assert row.portrait["resume_freshness_days"] == 14
+
+
 # ── Invalid input handling ───────────────────────────────────────────────────────
 
 

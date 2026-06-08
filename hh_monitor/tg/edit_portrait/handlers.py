@@ -187,6 +187,9 @@ async def handle_pick_field(callback: CallbackQuery, state: FSMContext) -> None:
     if not isinstance(callback.message, Message):
         return
     head = f"<b>{desc.label}</b>\nТекущее: {fld.format_value(desc, current)}"
+    if desc.path == ("resume_freshness_days",):
+        await callback.message.answer(head, reply_markup=kb.kb_freshness(idx))
+        return
     if desc.kind == "bool":
         await callback.message.answer(head, reply_markup=kb.kb_bool(idx))
         return
@@ -236,6 +239,22 @@ async def handle_set_bool(callback: CallbackQuery, state: FSMContext) -> None:
     idx = int(parts[2])
     desc = FIELDS[idx]
     err = await _apply(state, desc, parts[3] == "1")
+    await callback.answer("Обновлено" if err is None else "Ошибка")
+    if isinstance(callback.message, Message):
+        if err is not None:
+            await callback.message.answer(f"⚠️ {err}")
+        await _show_section(callback.message, desc.section)
+
+
+@edit_portrait_router.callback_query(F.data.startswith("ep:fresh:"))
+async def handle_set_freshness(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _guard_callback(callback):
+        await callback.answer()
+        return
+    parts = (callback.data or "").split(":")
+    idx = int(parts[2])
+    desc = FIELDS[idx]
+    err = await _apply(state, desc, int(parts[3]))
     await callback.answer("Обновлено" if err is None else "Ошибка")
     if isinstance(callback.message, Message):
         if err is not None:

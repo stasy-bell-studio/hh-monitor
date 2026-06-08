@@ -6,6 +6,7 @@ Callback scheme (entry button lives in the /active card as adm:edit_portrait:{id
   ep:fld:{idx}               — pick field #idx (FIELDS index)
   ep:bool:{idx}:{0|1}        — set a bool field
   ep:lit:{idx}:{value}       — set a Literal field
+  ep:fresh:{idx}:{days}      — set resume_freshness_days via period buttons
   ep:save                    — validate + persist + regen critic
   ep:cancel                  — abort the editor
   ep:done                    — close the read-only critic message
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from hh_monitor.tg.add_vacancy.keyboards import FRESHNESS_OPTIONS
 from hh_monitor.tg.edit_portrait.fields import (
     FIELDS,
     SECTION_LABELS,
@@ -71,6 +73,16 @@ def kb_literal(idx: int, desc: FieldDesc) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def kb_freshness(idx: int) -> InlineKeyboardMarkup:
+    """Period buttons for resume_freshness_days (mirrors the add-vacancy wizard options)."""
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"ep:fresh:{idx}:{days}")]
+        for days, label in FRESHNESS_OPTIONS
+    ]
+    rows.append([_BACK_BTN])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def kb_cancel_field() -> InlineKeyboardMarkup:
     """Shown while waiting for a typed value — lets the user bail to the menu."""
     return InlineKeyboardMarkup(inline_keyboard=[[_BACK_BTN]])
@@ -87,6 +99,7 @@ __all__ = [
     "kb_bool",
     "kb_cancel_field",
     "kb_critic_done",
+    "kb_freshness",
     "kb_literal",
     "kb_section",
     "kb_sections",

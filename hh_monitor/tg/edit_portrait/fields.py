@@ -52,7 +52,7 @@ _LABELS: dict[tuple[str, ...], str] = {
     ("position_description",): "Описание",
     ("evaluation_focus",): "Критерии оценки",
     ("position_synonyms",): "Синонимы (hh.ru)",
-    ("resume_freshness_days",): "Свежесть резюме, дней",
+    ("resume_freshness_days",): "Срок обновления резюме",
     ("target_companies_override",): "Целевые компании (override)",
     ("stop_companies_override",): "Стоп-компании (override)",
     ("search_params",): "Параметры hh.ru (JSON)",

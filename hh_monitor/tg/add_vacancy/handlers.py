@@ -1,7 +1,8 @@
 """FSM handlers for the "Add Vacancy" wizard (admin-topic only).
 
 State machine (aiogram FSMContext + MemoryStorage):
-  S1_name → S2_input_mode → S3_portrait_raw → S3b_insurance → S4_review → S6_launch
+  S1_name → S2_input_mode → S3_portrait_raw → S3b_insurance → S3c_freshness
+  → S4_review → S6_launch
 
 Access control: every handler is restricted to admin users inside the HR
 supergroup admin topic.  Message handlers use router-level filters; callback
@@ -281,9 +282,12 @@ async def _run_parse(message: Message, state: FSMContext, raw: str) -> None:
     await state.update_data(portrait_dict=portrait_dict)
 
     if data.get("insurance_role_asked"):
-        # Re-parse path (Дополнить): re-apply stored insurance override.
+        # Re-parse path (Дополнить): re-apply stored insurance + freshness overrides so
+        # the HR's authoritative choices survive a fresh LLM parse.
         is_insurance = bool(data.get("insurance_role_is_insurance", True))
         updated = _apply_insurance_override(portrait_dict, is_insurance)
+        if data.get("freshness_asked"):
+            updated["resume_freshness_days"] = int(data.get("freshness_days", 0))
         await state.update_data(portrait_dict=updated)
         await _enter_review(message, state)
     else:
@@ -308,7 +312,7 @@ async def handle_s3b_insurance_yes(callback: CallbackQuery, state: FSMContext) -
     await callback.answer()
     await state.update_data(insurance_role_asked=True, insurance_role_is_insurance=True)
     if isinstance(callback.message, Message):
-        await _enter_review(callback.message, state)
+        await _enter_freshness(callback.message, state)
 
 
 @add_vacancy_router.callback_query(
@@ -323,6 +327,38 @@ async def handle_s3b_insurance_no(callback: CallbackQuery, state: FSMContext) ->
     data = await state.get_data()
     portrait_dict = _apply_insurance_override(data["portrait_dict"], is_insurance=False)
     await state.update_data(portrait_dict=portrait_dict)
+    if isinstance(callback.message, Message):
+        await _enter_freshness(callback.message, state)
+
+
+# ── S3c: resume freshness period ──────────────────────────────────────────────────
+
+
+async def _enter_freshness(message: Message, state: FSMContext) -> None:
+    await state.set_state(AddVacancy.S3c_freshness)
+    await message.answer(
+        "За какой срок учитывать обновление резюме кандидатом? (фильтр по дате последнего "
+        "обновления резюме на hh.ru, не по дате создания)",
+        reply_markup=kb.kb_freshness(),
+    )
+
+
+@add_vacancy_router.callback_query(
+    StateFilter(AddVacancy.S3c_freshness), F.data.startswith("av:fresh:")
+)
+async def handle_s3c_freshness(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _guard_callback(callback):
+        await callback.answer()
+        return
+    await callback.answer()
+    days = int((callback.data or "av:fresh:0").rsplit(":", 1)[1])
+    data = await state.get_data()
+    # HR choice is authoritative — overwrite any LLM-derived freshness value.
+    portrait_dict = dict(data["portrait_dict"])
+    portrait_dict["resume_freshness_days"] = days
+    await state.update_data(
+        portrait_dict=portrait_dict, freshness_asked=True, freshness_days=days
+    )
     if isinstance(callback.message, Message):
         await _enter_review(callback.message, state)
 
@@ -391,6 +427,7 @@ def _render_review(
         f"📊 Опыт (страхование): {portrait.min_insurance_experience_months} мес.",
         f"📊 Опыт (моторное): {portrait.min_motor_experience_months} мес.",
         f"🎓 Высшее обязательно: {'да' if portrait.higher_education_required else 'нет'}",
+        f"⏱ Срок обновления резюме: {kb.format_freshness(portrait.resume_freshness_days)}",
     ]
     pf_parts: list[str] = []
     stop_ids, _ = resolve_region_names(portrait.filters.regions.stop)
