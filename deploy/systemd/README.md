@@ -10,6 +10,7 @@ files are systemd drop-ins layered on top of the base units.
 - llm: hourly at :05, 05:05-21:05 MSK (+5 min after pipeline); drop-in adds
   `--max-events-per-search 100` and TimeoutStartSec=60min.
 - oauth refresh: every 6h, `hh refresh --if-due`.
+- digest: weekly Excel HR digest, Fri 12:00 MSK, oneshot `digest weekly`.
 
 NOTE: the base *.timer Description lines still say "15 runs/day 01,04,09..21".
 That is superseded by the drop-ins (hourly 05-21). Descriptions are kept
@@ -27,5 +28,5 @@ sudo cp deploy/systemd/hh-monitor-llm.timer.d/override.conf   /etc/systemd/syste
 sudo cp deploy/systemd/hh-monitor-pipeline.timer.d/override.conf /etc/systemd/system/hh-monitor-pipeline.timer.d/
 sudo systemctl daemon-reload
 sudo systemctl enable --now hh-monitor-bot.service hh-monitor-llm.timer \
-     hh-monitor-pipeline.timer hh-oauth-refresh.timer
+     hh-monitor-pipeline.timer hh-oauth-refresh.timer hh-digest.timer
 ```

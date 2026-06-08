@@ -11,7 +11,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hh_monitor.db.models import Event, NotificationSent, Resume, ScreeningReason, Search
+from hh_monitor.db.models import (
+    Event,
+    NotificationSent,
+    Resume,
+    ScreeningReason,
+    Search,
+    Snapshot,
+)
 from hh_monitor.weekly_digest.run import _collect_data, _collect_weekly_series
 
 _RID_SEQ = iter(range(1, 10_000))
@@ -151,6 +158,47 @@ async def test_candidates_and_reason_join(db_session: AsyncSession) -> None:
     assert c["reason"] == "Слишком далеко"
     assert c["url"].startswith("https://hh.ru/resume/")
     assert "{" not in c["url"] and "<" not in c["url"]
+
+
+@pytest.mark.asyncio
+async def test_candidate_region_from_latest_snapshot(db_session: AsyncSession) -> None:
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+    ev = await _seed_candidate(db_session, sc, score_total=88)
+
+    # Older snapshot holds a stale area; the newer one (by fetched_at) must win.
+    db_session.add(
+        Snapshot(
+            hh_resume_id=ev.hh_resume_id,
+            fetched_at=now - timedelta(days=2),
+            payload={"area": {"name": "Москва"}},
+            content_hash="old",
+        )
+    )
+    db_session.add(
+        Snapshot(
+            hh_resume_id=ev.hh_resume_id,
+            fetched_at=now - timedelta(hours=1),
+            payload={"area": {"name": "Самарская область"}},
+            content_hash="new",
+        )
+    )
+    await db_session.flush()
+
+    data = await _collect_data(db_session, date_from, date_to)
+    assert data["candidates_all"][0]["region"] == "Самарская область"
+
+
+@pytest.mark.asyncio
+async def test_candidate_region_falls_back_to_dash(db_session: AsyncSession) -> None:
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+    await _seed_candidate(db_session, sc, score_total=88)  # no snapshot seeded
+
+    data = await _collect_data(db_session, date_from, date_to)
+    assert data["candidates_all"][0]["region"] == "—"
 
 
 @pytest.mark.asyncio

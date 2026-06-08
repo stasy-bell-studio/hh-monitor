@@ -1521,7 +1521,7 @@ def tg_send_pending(
 
 @digest_app.command("weekly")
 def digest_weekly() -> None:
-    """Send the weekly PDF digest to the HR Telegram group."""
+    """Send the weekly Excel digest to the HR Telegram group."""
     import asyncio as _asyncio
 
     from hh_monitor.tg.client import make_bot

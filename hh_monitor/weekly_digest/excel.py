@@ -85,6 +85,7 @@ def _sheet_candidates(wb: Workbook, data: _DigestData) -> None:
         ("Соответствие портрету", 12),
         ("Оценка ИИ", 10),
         ("Вердикт", 14),
+        ("Регион", 18),
         ("Реальная роль", 22),
         ("Сильные стороны", 40),
         ("Слабые места", 36),
@@ -104,6 +105,7 @@ def _sheet_candidates(wb: Workbook, data: _DigestData) -> None:
             c["fit_score"],
             c["llm_score"],
             c["llm_verdict"] or "",
+            c["region"],
             c["llm_real_role"],
             _humanize_field(c["facts"]),
             _humanize_field(c["weak"]),
@@ -119,7 +121,8 @@ def _sheet_candidates(wb: Workbook, data: _DigestData) -> None:
             cell.alignment = _ALIGN_WRAP
             cell.font = _FONT_DATA
         if c["url"]:
-            link_cell = ws.cell(row=i, column=13)
+            # «Ссылка» moved 13→14 after inserting «Регион» (col 6).
+            link_cell = ws.cell(row=i, column=14)
             link_cell.hyperlink = c["url"]
             link_cell.font = _FONT_LINK
 

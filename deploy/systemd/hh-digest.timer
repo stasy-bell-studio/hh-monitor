@@ -1,0 +1,10 @@
+[Unit]
+Description=Run hh-monitor weekly HR digest every Friday at 12:00 MSK
+
+[Timer]
+OnCalendar=Fri *-*-* 12:00:00 Europe/Moscow
+Persistent=true
+Unit=hh-digest.service
+
+[Install]
+WantedBy=timers.target

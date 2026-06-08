@@ -17,6 +17,7 @@ def _candidate(**kw: object) -> dict[str, object]:
         "fit_score": 60,
         "llm_score": 90,
         "llm_verdict": "подходит",
+        "region": "Самарская область",
         "llm_real_role": "Директор",
         "facts": "опыт 10 лет",
         "weak": "нет высшего",
@@ -95,10 +96,17 @@ def test_candidates_header_and_rows() -> None:
     ws = wb["Кандидаты"]
     assert ws.cell(row=1, column=1).value == "Позиция"
     assert ws.cell(row=1, column=2).value == "Рейтинг"
-    assert ws.cell(row=1, column=11).value == "Статус скрининга"
+    # «Регион» inserted at col 6 (between Вердикт and Реальная роль) shifts the rest +1.
+    assert ws.cell(row=1, column=5).value == "Вердикт"
+    assert ws.cell(row=1, column=6).value == "Регион"
+    assert ws.cell(row=1, column=7).value == "Реальная роль"
+    assert ws.cell(row=1, column=12).value == "Статус скрининга"
+    assert ws.cell(row=1, column=14).value == "Ссылка"
+    assert ws.cell(row=1, column=15).value == "Дата"
     assert ws.max_row >= 3  # header + 2 candidates
     assert ws.cell(row=2, column=2).value == 82
-    assert ws.cell(row=2, column=11).value == "Одобрен ✅"
+    assert ws.cell(row=2, column=6).value == "Самарская область"
+    assert ws.cell(row=2, column=12).value == "Одобрен ✅"
 
 
 def test_candidates_color_scale_on_rating() -> None:
@@ -176,8 +184,8 @@ def test_candidates_dict_fields_humanized() -> None:
     )
     wb = _load(data, _SERIES)
     ws = wb["Кандидаты"]
-    facts_cell = ws.cell(row=2, column=7).value
-    weak_cell = ws.cell(row=2, column=8).value
+    facts_cell = ws.cell(row=2, column=8).value
+    weak_cell = ws.cell(row=2, column=9).value
     assert facts_cell == "Опыт управления: 250+ агентов\nЭкспертиза: логистика"
     assert weak_cell == "Слабое место: нет высшего"
     assert "{'" not in str(facts_cell)
@@ -191,7 +199,7 @@ def test_candidates_link_cell_is_real_url() -> None:
     )
     wb = _load(data, _SERIES)
     ws = wb["Кандидаты"]
-    assert ws.cell(row=2, column=13).value == "https://hh.ru/resume/known999"
+    assert ws.cell(row=2, column=14).value == "https://hh.ru/resume/known999"
 
 
 def test_candidates_link_cell_empty_when_no_url() -> None:
@@ -201,6 +209,6 @@ def test_candidates_link_cell_empty_when_no_url() -> None:
     )
     wb = _load(data, _SERIES)
     ws = wb["Кандидаты"]
-    cell = ws.cell(row=2, column=13).value
+    cell = ws.cell(row=2, column=14).value
     assert cell in ("", None)
     assert cell != "hh.ru"

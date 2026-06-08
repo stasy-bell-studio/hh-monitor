@@ -21,6 +21,7 @@ from hh_monitor.db.models import (
     Resume,
     ScreeningReason,
     Search,
+    Snapshot,
 )
 from hh_monitor.tg.cards import is_best_score, score_badge
 from hh_monitor.tg.send_guard import send_enabled
@@ -121,6 +122,7 @@ class _Candidate(TypedDict):
     fit_score: int | None
     llm_score: int | None
     llm_verdict: str | None
+    region: str
     llm_real_role: str
     facts: str
     weak: str
@@ -174,8 +176,25 @@ async def _collect_data(
     session: AsyncSession, date_from: datetime, date_to: datetime
 ) -> _DigestData:
     now = datetime.now(UTC)
+    # Latest snapshot's area name per candidate (LATERAL-equivalent correlated
+    # scalar subquery; uses idx_snapshots_resume_time). Falls back to "—" below.
+    region_subq = (
+        select(Snapshot.payload["area"]["name"].astext)
+        .where(Snapshot.hh_resume_id == Event.hh_resume_id)
+        .order_by(Snapshot.fetched_at.desc())
+        .limit(1)
+        .correlate(Event)
+        .scalar_subquery()
+    )
     stmt = (
-        select(Event, Resume, Search, NotificationSent, ScreeningReason)
+        select(
+            Event,
+            Resume,
+            Search,
+            NotificationSent,
+            ScreeningReason,
+            region_subq.label("region"),
+        )
         .join(Resume, Resume.hh_resume_id == Event.hh_resume_id)
         .join(Search, Search.id == Event.search_id)
         .outerjoin(NotificationSent, NotificationSent.event_id == Event.id)
@@ -195,7 +214,7 @@ async def _collect_data(
     candidates_all: list[_Candidate] = []
     pos_acc: dict[str, _PosAcc] = {}
 
-    for ev, res, srch, ns, sr in rows:
+    for ev, res, srch, ns, sr, region in rows:
         status = ns.screening_status if ns is not None else None
         sent_at = ns.sent_at if ns is not None else None
         verdict = res.llm_verdict or ev.llm_verdict
@@ -208,6 +227,7 @@ async def _collect_data(
                 fit_score=res.fit_score,
                 llm_score=res.llm_score,
                 llm_verdict=verdict,
+                region=region or "—",
                 llm_real_role=res.llm_real_role or "",
                 facts=ev.llm_facts_confirmed or "",
                 weak=ev.llm_weak_spots or "",
