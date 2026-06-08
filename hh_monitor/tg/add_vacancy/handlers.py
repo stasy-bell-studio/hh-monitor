@@ -545,9 +545,7 @@ async def handle_s6_launch(callback: CallbackQuery, state: FSMContext) -> None:
     tg_user_id = callback.from_user.id if callback.from_user else None
     search_code = await _insert_search(data, active=True, tg_user_id=tg_user_id)
     if isinstance(callback.message, Message):
-        await callback.message.answer(
-            "✅ Вакансия добавлена. Запускаю первичный скан (max_pages=2)…"
-        )
+        await callback.message.answer("✅ Вакансия добавлена. Запускаю первичный скан…")
     from hh_monitor.tg.add_vacancy.launcher import _run_initial_scan
 
     task = asyncio.create_task(_run_initial_scan(search_code, tg_user_id or 0))

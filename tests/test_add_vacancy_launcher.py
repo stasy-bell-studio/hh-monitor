@@ -50,6 +50,7 @@ async def test_initial_scan_success_notifies(db_session: Any) -> None:
             "hh_monitor.pipeline.run_all.run_all",
             new=AsyncMock(return_value={"total": 1, "succeeded": 1}),
         ),
+        patch.object(L, "_probe_pool_size", new=AsyncMock(return_value=None)),
         patch.object(L, "_notify_admin", new=AsyncMock(side_effect=lambda m: notes.append(m))),
     ):
         await L._run_initial_scan("test-scan", admin_user_id=42)
@@ -80,6 +81,7 @@ async def test_initial_scan_failure_notifies(db_session: Any) -> None:
     with (
         patch("hh_monitor.tg.client.get_session_factory", return_value=_factory_from(db_session)),
         patch("hh_monitor.pipeline.run_all.run_all", new=boom),
+        patch.object(L, "_probe_pool_size", new=AsyncMock(return_value=None)),
         patch.object(L, "_notify_admin", new=AsyncMock(side_effect=lambda m: notes.append(m))),
     ):
         await L._run_initial_scan("boom-scan", admin_user_id=42)
@@ -87,6 +89,83 @@ async def test_initial_scan_failure_notifies(db_session: Any) -> None:
     assert notes
     assert "упал" in notes[0]
     assert "RuntimeError" in notes[0]
+
+
+# ── ETA helper + capped status message ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("found", "active", "expected"),
+    [
+        (1000, 1, 2),
+        (5000, 1, 10),
+        (100, 5, 1),
+        (0, 1, 1),
+        # Cap collapses a raw 5000 to the reachable 1000 → 2 days.
+        (L.RECURRING_MAX_PAGES * 50, 1, 2),
+    ],
+)
+def test_estimate_backfill_days(found: int, active: int, expected: int) -> None:
+    assert L.estimate_backfill_days(found, active) == expected
+
+
+@pytest.mark.asyncio
+async def test_status_message_caps_large_pool(db_session: Any) -> None:
+    """Raw found=5000 must surface as the capped ~1000 monitored, not ~5000."""
+    search_id = await _seed_search(db_session, code="cap-scan")
+    db_session.add(Resume(hh_resume_id="rc"))
+    await db_session.flush()
+    db_session.add(Event(hh_resume_id="rc", event_type="NEW", search_id=search_id))
+    await db_session.flush()
+
+    notes: list[str] = []
+    with (
+        patch("hh_monitor.tg.client.get_session_factory", return_value=_factory_from(db_session)),
+        patch("hh_monitor.pipeline.run_all.run_all", new=AsyncMock(return_value={})),
+        patch.object(L, "_probe_pool_size", new=AsyncMock(return_value=5000)),
+        patch.object(L, "_notify_admin", new=AsyncMock(side_effect=lambda m: notes.append(m))),
+    ):
+        await L._run_initial_scan("cap-scan", admin_user_id=1)
+
+    assert notes
+    msg = notes[0]
+    assert "отслеживать ~1000" in msg  # work amount uses the capped pool
+    assert "отслеживать ~5000" not in msg  # raw total never drives the work/ETA
+    assert "Всего по фильтру на hh.ru: ~5000" in msg  # raw shown only as reference
+
+
+@pytest.mark.asyncio
+async def test_status_message_small_pool_uncapped(db_session: Any) -> None:
+    await _seed_search(db_session, code="small-scan")
+    notes: list[str] = []
+    with (
+        patch("hh_monitor.tg.client.get_session_factory", return_value=_factory_from(db_session)),
+        patch("hh_monitor.pipeline.run_all.run_all", new=AsyncMock(return_value={})),
+        patch.object(L, "_probe_pool_size", new=AsyncMock(return_value=300)),
+        patch.object(L, "_notify_admin", new=AsyncMock(side_effect=lambda m: notes.append(m))),
+    ):
+        await L._run_initial_scan("small-scan", admin_user_id=1)
+
+    assert notes
+    assert "~300" in notes[0]
+    assert "Всего по фильтру" not in notes[0]  # no reference line when nothing was capped
+
+
+@pytest.mark.asyncio
+async def test_status_message_probe_failure_is_completion_only(db_session: Any) -> None:
+    await _seed_search(db_session, code="nf-scan")
+    notes: list[str] = []
+    with (
+        patch("hh_monitor.tg.client.get_session_factory", return_value=_factory_from(db_session)),
+        patch("hh_monitor.pipeline.run_all.run_all", new=AsyncMock(return_value={})),
+        patch.object(L, "_probe_pool_size", new=AsyncMock(return_value=None)),
+        patch.object(L, "_notify_admin", new=AsyncMock(side_effect=lambda m: notes.append(m))),
+    ):
+        await L._run_initial_scan("nf-scan", admin_user_id=1)
+
+    assert notes
+    assert "завершён" in notes[0]
+    assert "резюме" not in notes[0]  # no pool/ETA sentence on probe failure
 
 
 # ── CC-7 env gate ─────────────────────────────────────────────────────────────
