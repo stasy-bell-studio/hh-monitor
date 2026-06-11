@@ -1563,8 +1563,8 @@ def report_daily() -> None:
         bot = make_bot()
         try:
             async with async_session_factory() as session:
-                await run_daily_report(session, bot)
-            typer.echo("Daily report sent.")
+                sent = await run_daily_report(session, bot)
+            typer.echo("Daily report sent." if sent else "Daily report skipped (send disabled)")
         finally:
             await bot.session.close()
 

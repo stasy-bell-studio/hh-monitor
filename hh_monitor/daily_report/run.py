@@ -1,9 +1,9 @@
 """Daily health-report for hh-monitor — sent to the admin Telegram topic every morning.
 
-B5 note: Event has no enrich_error or enrich_failed_at column. Failed LLM
-enrichments are silently re-queued by the next cron run and cannot be
-distinguished from pending enrichments in the DB. The "poison events" line
-is therefore omitted from this report.
+Management-by-exception layout: technical components (Server, Units, External Services)
+collapse to a single aggregate line when fully green; any 🔴 item expands that component
+to its full detail block below the business payload. Business payload (last run, quota,
+searches, candidates) is always shown.
 """
 from __future__ import annotations
 
@@ -21,19 +21,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.config import settings
 from hh_monitor.db.models import Event, NotificationSent, OAuthToken, ParserRun, Search
+from hh_monitor.hh.quota import HH_DAILY_VIEW_BUDGET
 from hh_monitor.tg.send_guard import send_enabled
-from hh_monitor.weekly_digest.run import (  # private cross-import, B1-approved
-    _collect_parser_stats,
-    _ParserStats,
-    _send_long_message,
-)
+from hh_monitor.tg.sender import get_current_threshold
+from hh_monitor.weekly_digest.run import _send_long_message  # private cross-import, B1-approved
 
 logger = structlog.get_logger(__name__)
 
 MSK = timezone(timedelta(hours=3))
-_HH_VIEW_QUOTA = 500
 _OPENROUTER_URL = "https://openrouter.ai"
 _TELEGRAM_URL = "https://api.telegram.org"
+_QUOTA_AMBER: int = HH_DAILY_VIEW_BUDGET * 4 // 5  # 80% of budget
 
 # Exact unit filenames from deploy/systemd/.
 # kind controls the systemctl subcommand:
@@ -88,8 +86,14 @@ def _read_uptime_seconds() -> float:
 # ── report sections ───────────────────────────────────────────────────────────
 
 
-def _build_server_section() -> tuple[str, list[str]]:
+def _build_server_section() -> tuple[str, list[str], str]:
+    """Return (full_block, problems, compact_one_liner).
+
+    compact shows 🔴 if any item is 🔴, 🟡 if any item is 🟡, else 🟢.
+    Full block is rendered only when problems (🔴 items) exist.
+    """
     problems: list[str] = []
+    any_amber = False
     lines: list[str] = ["<b>🖥 Сервер</b>"]
 
     try:
@@ -101,6 +105,8 @@ def _build_server_section() -> tuple[str, list[str]]:
         em = _traffic_light(ram_pct)
         if em == "🔴":
             problems.append("Память")
+        elif em == "🟡":
+            any_amber = True
         lines.append(
             f"{em} Память: {used_kb // 1024} / {total_kb // 1024} МБ ({ram_pct}%)"
         )
@@ -113,6 +119,8 @@ def _build_server_section() -> tuple[str, list[str]]:
             sem = _traffic_light(swap_pct, warn_lo=25, warn_hi=80)
             if sem == "🔴":
                 problems.append("Swap")
+            elif sem == "🟡":
+                any_amber = True
             lines.append(
                 f"{sem} Swap: {swap_used_kb // 1024} / {swap_total // 1024} МБ ({swap_pct}%)"
             )
@@ -128,6 +136,8 @@ def _build_server_section() -> tuple[str, list[str]]:
         dem = _traffic_light(disk_pct)
         if dem == "🔴":
             problems.append("Диск")
+        elif dem == "🟡":
+            any_amber = True
         disk_used_gb = round(disk.used / 1024**3, 1)
         disk_total_gb = round(disk.total / 1024**3, 1)
         lines.append(f"{dem} Диск: {disk_used_gb} / {disk_total_gb} ГБ ({disk_pct}%)")
@@ -140,7 +150,9 @@ def _build_server_section() -> tuple[str, list[str]]:
     except OSError:
         lines.append("⚠️ Аптайм: неизвестен")
 
-    return "\n".join(lines), problems
+    worst_em = "🔴" if problems else ("🟡" if any_amber else "🟢")
+    compact = f"🖥 Сервер {worst_em}"
+    return "\n".join(lines), problems, compact
 
 
 def _check_unit(unit: str, kind: str) -> tuple[str, str]:
@@ -166,78 +178,91 @@ def _check_unit(unit: str, kind: str) -> tuple[str, str]:
     return emoji, status
 
 
-def _build_units_section() -> tuple[str, list[str]]:
+def _build_units_section() -> tuple[str, list[str], str]:
+    """Return (full_block, problems, compact_one_liner).
+
+    Units have no amber state — only 🟢 or 🔴.
+    """
     problems: list[str] = []
+    n_total = len(_UNITS)
+    n_failed = 0
     lines: list[str] = ["<b>⚙️ Юниты</b>"]
 
     for unit, kind in _UNITS:
         emoji, status = _check_unit(unit, kind)
         if emoji == "🔴":
             problems.append(html.escape(unit))
+            n_failed += 1
         lines.append(f"{emoji} {html.escape(unit)} — {html.escape(status)}")
 
-    return "\n".join(lines), problems
+    n_ok = n_total - n_failed
+    worst_em = "🔴" if problems else "🟢"
+    compact = f"⚙️ Юниты {n_ok}/{n_total} {worst_em}"
+    return "\n".join(lines), problems, compact
 
 
 async def _build_pipeline_section(
     session: AsyncSession, msk_now: datetime
 ) -> tuple[str, list[str]]:
+    """Return (compact_lines, problems).
+
+    Always rendered — no separate full/compact blocks.
+    Billable view count = resumes_viewed + snapshots_skipped (dedup fires after GET).
+    """
     problems: list[str] = []
-    lines: list[str] = ["<b>🔄 Пайплайн</b>"]
+    lines: list[str] = []
 
-    # MSK day boundary for quota (AC4): midnight in Moscow timezone.
+    # MSK day boundary for quota: midnight Moscow time.
     msk_today_start = msk_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    cutoff_24h = msk_now - timedelta(hours=24)
 
-    # Last parser run globally — shows system has run at all.
+    # Last parser run globally.
     last_run: ParserRun | None = await session.scalar(
         select(ParserRun).order_by(ParserRun.started_at.desc()).limit(1)
     )
     if last_run is None:
-        lines.append("🔴 Прогонов не было")
-        problems.append("Пайплайн")
+        lines.append("🔄 Последний прогон: нет данных")
+        problems.append("Прогон")
     else:
-        ts = last_run.started_at.astimezone(MSK).strftime("%d.%m %H:%M")
-        status_esc = html.escape(last_run.status)
-        lines.append(f"Последний прогон: #{last_run.id} ({ts} МСК) — {status_esc}")
+        ts = last_run.started_at.astimezone(MSK).strftime("%H:%M")
+        run_status = last_run.status
+        if run_status in ("ok", "partial_errors"):
+            status_str = "ок"
+        else:
+            status_str = f"🔴 {html.escape(run_status)}"
+            problems.append("Прогон")
+        # Billable views for this run = resumes_viewed + snapshots_skipped
+        billable = last_run.resumes_viewed + last_run.snapshots_skipped
         lines.append(
-            f"  найдено: {last_run.resumes_seen}, "
-            f"просмотрено: {last_run.resumes_viewed}, "
-            f"снэпшотов: {last_run.snapshots_inserted}"
+            f"🔄 Последний прогон #{last_run.id} ({ts} МСК): {status_str}"
+            f" — найдено {last_run.resumes_seen}, просмотрено {billable}"
         )
-        if last_run.status in ("failed", "cancelled"):
-            problems.append("Пайплайн")
 
-    # HH view quota burned today, reset at 00:00 MSK (AC4).
+    # HH view quota: billable = resumes_viewed + snapshots_skipped (dedup after GET).
     viewed_today_raw = await session.scalar(
-        select(func.coalesce(func.sum(ParserRun.resumes_viewed), 0)).where(
-            ParserRun.started_at >= msk_today_start
-        )
+        select(
+            func.coalesce(
+                func.sum(ParserRun.resumes_viewed + ParserRun.snapshots_skipped), 0
+            )
+        ).where(ParserRun.started_at >= msk_today_start)
     )
     viewed_today: int = int(viewed_today_raw) if viewed_today_raw is not None else 0
-    if viewed_today >= _HH_VIEW_QUOTA:
-        quota_em = "🔴"
-        problems.append("Квота")
-    elif viewed_today >= 400:
-        quota_em = "🟡"
-    else:
-        quota_em = "🟢"
-    lines.append(f"{quota_em} Квота просмотров: {viewed_today} / {_HH_VIEW_QUOTA}")
+    remaining = max(0, HH_DAILY_VIEW_BUDGET - viewed_today)
 
-    # 24-hour aggregate — reuse _collect_parser_stats per B1.
-    stats_24h: _ParserStats = await _collect_parser_stats(session, cutoff_24h, msk_now)
-    if stats_24h["runs"] == 0:
-        lines.append("🔴 За сутки прогонов не было")
-        if "Пайплайн" not in problems:
-            problems.append("Пайплайн")
-    else:
-        lines.append(
-            f"Прогонов за 24 ч.: {stats_24h['runs']}, "
-            f"снэпшотов: {stats_24h['snapshots_inserted']}, "
-            f"просмотрено: {stats_24h['resumes_viewed']}"
+    if viewed_today > HH_DAILY_VIEW_BUDGET:
+        quota_line = (
+            f"📊 Квота просмотров: израсходовано {viewed_today} из {HH_DAILY_VIEW_BUDGET} ⚠️"
         )
+        problems.append("Квота")
+    elif viewed_today >= HH_DAILY_VIEW_BUDGET:
+        quota_line = f"📊 Квота просмотров: 🔴 осталось 0 из {HH_DAILY_VIEW_BUDGET}"
+        problems.append("Квота")
+    elif viewed_today >= _QUOTA_AMBER:
+        quota_line = f"📊 Квота просмотров: 🟡 осталось {remaining} из {HH_DAILY_VIEW_BUDGET}"
+    else:
+        quota_line = f"📊 Квота просмотров: осталось {remaining} из {HH_DAILY_VIEW_BUDGET}"
+    lines.append(quota_line)
 
-    # Active searches list with per-search last_run_at.
+    # Active searches list with per-search last-run time and status.
     active_searches = list(
         (
             await session.scalars(
@@ -248,16 +273,22 @@ async def _build_pipeline_section(
             )
         ).all()
     )
-    lines.append(f"Активных поисков: {len(active_searches)}")
+    lines.append(f"🔍 Активные поиски ({len(active_searches)}):")
+
+    # Per-search status uses the global last run as proxy — ParserRun has no search_id;
+    # all searches run together in one ParserRun row.
     for s in active_searches:
-        last_at = (
-            s.last_run_at.astimezone(MSK).strftime("%d.%m %H:%M")
-            if s.last_run_at
-            else "никогда"
-        )
-        lines.append(
-            f"  • {html.escape(s.position_name)} (последний прогон: {last_at} МСК)"
-        )
+        if s.last_run_at is None:
+            lines.append(f" • {html.escape(s.position_name)} — никогда")
+        else:
+            run_time = s.last_run_at.astimezone(MSK).strftime("%H:%M")
+            if last_run is None or last_run.status in ("ok", "partial_errors"):
+                s_status = "ок"
+            else:
+                s_status = "🔴 ошибка"
+            lines.append(
+                f" • {html.escape(s.position_name)} — последний прогон {run_time}, {s_status}"
+            )
 
     return "\n".join(lines), problems
 
@@ -265,27 +296,15 @@ async def _build_pipeline_section(
 async def _build_candidates_section(
     session: AsyncSession, msk_now: datetime
 ) -> str:
-    lines: list[str] = ["<b>👤 Кандидаты за 24 часа</b>"]
+    """Return single compact line. Threshold read from live DB source."""
     cutoff = msk_now - timedelta(hours=24)
-
-    new_events_raw = await session.scalar(
-        select(func.count()).select_from(Event).where(Event.created_at >= cutoff)
-    )
-    new_events: int = int(new_events_raw) if new_events_raw is not None else 0
-
-    enriched_raw = await session.scalar(
-        select(func.count())
-        .select_from(Event)
-        .where(Event.created_at >= cutoff)
-        .where(Event.llm_enriched.is_(True))
-    )
-    enriched: int = int(enriched_raw) if enriched_raw is not None else 0
+    threshold = await get_current_threshold(session)
 
     scored_raw = await session.scalar(
         select(func.count())
         .select_from(Event)
         .where(Event.created_at >= cutoff)
-        .where(Event.score_total >= settings.telegram_score_threshold)
+        .where(Event.score_total >= threshold)
     )
     scored: int = int(scored_raw) if scored_raw is not None else 0
 
@@ -296,16 +315,14 @@ async def _build_candidates_section(
     )
     notified: int = int(notified_raw) if notified_raw is not None else 0
 
-    lines.append(f"Новых событий: {new_events}")
-    lines.append(f"LLM обогащено: {enriched}")
-    lines.append(f"Оценка ≥ {settings.telegram_score_threshold}: {scored}")
-    lines.append(f"Уведомлений отправлено: {notified}")
-
-    return "\n".join(lines)
+    return (
+        f"👤 Кандидаты за 24 ч: оценка ≥ {threshold} — {scored},"
+        f" уведомлений отправлено — {notified}"
+    )
 
 
 async def _check_url(url: str, timeout: float = 5.0) -> bool:
-    """Best-effort HTTP reachability check. Never raises (B6)."""
+    """Best-effort HTTP reachability check for non-Telegram URLs. Never raises."""
     try:
         async with httpx.AsyncClient() as c:
             r = await c.head(url, timeout=timeout, follow_redirects=True)
@@ -314,8 +331,39 @@ async def _check_url(url: str, timeout: float = 5.0) -> bool:
         return False
 
 
-async def _build_external_section(session: AsyncSession) -> tuple[str, list[str]]:
+async def _check_telegram(timeout: float = 5.0) -> bool:
+    """Check Telegram API availability. Uses getMe when token is configured.
+
+    Token is never logged or rendered.
+    Without a token: any 2xx/3xx from HEAD is treated as available.
+    """
+    token = settings.telegram_bot_token
+    if token:
+        try:
+            url = f"https://api.telegram.org/bot{token}/getMe"
+            async with httpx.AsyncClient() as c:
+                r = await c.get(url, timeout=timeout)
+            return r.status_code == 200 and bool(r.json().get("ok", False))
+        except Exception:
+            return False
+    # No token: HEAD with any 2xx/3xx means up (302 is fine).
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.head(_TELEGRAM_URL, timeout=timeout)
+        return r.status_code < 400
+    except Exception:
+        return False
+
+
+async def _build_external_section(session: AsyncSession) -> tuple[str, list[str], str]:
+    """Return (full_block, problems, compact_one_liner).
+
+    compact shows 🔴 if any 🔴 item, 🟡 if HH OAuth is amber (24-72h) and no 🔴,
+    else 🟢. Full block rendered only when problems (🔴 items) exist.
+    """
     problems: list[str] = []
+    oauth_em = "🟢"
+    ttl_h = 0.0
     lines: list[str] = ["<b>🌐 Внешние сервисы</b>"]
 
     # HH OAuth token TTL — thresholds aligned with 6-hour refresh cadence.
@@ -325,21 +373,21 @@ async def _build_external_section(session: AsyncSession) -> tuple[str, list[str]
     if token is None:
         lines.append("🔴 HH OAuth: токен не найден")
         problems.append("HH OAuth")
+        oauth_em = "🔴"
     else:
         ttl_h = (token.expires_at - datetime.now(UTC)).total_seconds() / 3600
         if ttl_h > 72:
-            em = "🟢"
+            oauth_em = "🟢"
         elif ttl_h > 24:
-            # Refresher should have run — investigate
-            em = "🟡"
+            oauth_em = "🟡"
         else:
-            em = "🔴"
+            oauth_em = "🔴"
             problems.append("HH OAuth")
-        lines.append(f"{em} HH OAuth: токен истекает через {int(ttl_h)} ч.")
+        lines.append(f"{oauth_em} HH OAuth: токен истекает через {int(ttl_h)} ч.")
 
-    # OpenRouter and Telegram reachability — concurrent, best-effort (B6).
+    # OpenRouter and Telegram reachability — concurrent, best-effort.
     or_ok, tg_ok = await asyncio.gather(
-        _check_url(_OPENROUTER_URL), _check_url(_TELEGRAM_URL)
+        _check_url(_OPENROUTER_URL), _check_telegram()
     )
 
     or_em = "🟢" if or_ok else "🔴"
@@ -350,18 +398,23 @@ async def _build_external_section(session: AsyncSession) -> tuple[str, list[str]
     tg_em = "🟢" if tg_ok else "🔴"
     if not tg_ok:
         problems.append("Telegram API")
-    lines.append(
-        f"{tg_em} Telegram API: {'доступен' if tg_ok else 'недоступен'} "
-        "(отсутствие отчёта = главный сигнал тревоги)"
-    )
+    lines.append(f"{tg_em} Telegram API: {'доступен' if tg_ok else 'недоступен'}")
 
-    return "\n".join(lines), problems
+    # Compact summary: worst emoji across all items.
+    if problems:
+        compact = "🌐 Сервисы 🔴"
+    elif oauth_em == "🟡":
+        compact = f"🌐 Сервисы 🟡 (HH OAuth {int(ttl_h)} ч)"
+    else:
+        compact = f"🌐 Сервисы 🟢 (HH OAuth {int(ttl_h)} ч)"
+
+    return "\n".join(lines), problems, compact
 
 
 def _build_verdict(problems: list[str]) -> str:
     if not problems:
-        return "✅ Всё работает в штатном режиме. Хорошего рабочего дня!"
-    return "⚠️ Есть проблемы — детали выше."
+        return "✅ Всё работает в штатном режиме"
+    return "⚠️ Есть проблемы — детали ниже"
 
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -372,40 +425,50 @@ async def build_daily_report(session: AsyncSession) -> str:
     msk_now = datetime.now(MSK)
     all_problems: list[str] = []
 
-    server_block, server_probs = _build_server_section()
+    server_block, server_probs, server_compact = _build_server_section()
     all_problems.extend(server_probs)
 
-    units_block, unit_probs = _build_units_section()
+    units_block, unit_probs, units_compact = _build_units_section()
     all_problems.extend(unit_probs)
 
-    pipeline_block, pipeline_probs = await _build_pipeline_section(session, msk_now)
+    pipeline_lines, pipeline_probs = await _build_pipeline_section(session, msk_now)
     all_problems.extend(pipeline_probs)
 
-    candidates_block = await _build_candidates_section(session, msk_now)
+    candidates_line = await _build_candidates_section(session, msk_now)
 
-    external_block, external_probs = await _build_external_section(session)
+    external_block, external_probs, external_compact = await _build_external_section(session)
     all_problems.extend(external_probs)
 
     verdict = _build_verdict(all_problems)
-
     header = f"☀️ hh-monitor: статус на {msk_now.strftime('%d.%m.%Y')}"
-    parts = [
+    tech_line = f"{server_compact} · {units_compact} · {external_compact}"
+
+    # Compact block: header + verdict + tech + business payload (always shown, no blanks).
+    compact = "\n".join([
         f"<b>{header}</b>",
-        server_block,
-        units_block,
-        pipeline_block,
-        candidates_block,
-        external_block,
         verdict,
-    ]
+        tech_line,
+        pipeline_lines,
+        candidates_line,
+    ])
+    parts: list[str] = [compact]
+
+    # Expanded detail blocks for degraded (🔴) technical components.
+    if server_probs:
+        parts.append(server_block)
+    if unit_probs:
+        parts.append(units_block)
+    if external_probs:
+        parts.append(external_block)
+
     return "\n\n".join(parts)
 
 
-async def run_daily_report(session: AsyncSession, bot: Bot) -> None:
-    """Build and send the daily report to telegram_admin_topic_id."""
+async def run_daily_report(session: AsyncSession, bot: Bot) -> bool:
+    """Build and send the daily report. Returns True if sent, False if gate was closed."""
     if not send_enabled(settings):
         logger.info("daily_report.send_disabled")
-        return
+        return False
     text = await build_daily_report(session)
     topic_id = settings.telegram_admin_topic_id or None
     await _send_long_message(
@@ -415,3 +478,4 @@ async def run_daily_report(session: AsyncSession, bot: Bot) -> None:
         message_thread_id=topic_id,
     )
     logger.info("daily_report.sent", topic_id=topic_id)
+    return True

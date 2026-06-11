@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 
 from hh_monitor.config import settings
 from hh_monitor.db.models import Event, Search
+from hh_monitor.hh.quota import HH_DAILY_VIEW_BUDGET
 from hh_monitor.tg.send_guard import send_enabled
 
 if TYPE_CHECKING:
@@ -24,8 +25,6 @@ logger = structlog.get_logger(__name__)
 
 PIPELINE_INITIAL_MAX_PAGES = 2
 
-# hh.ru daily GET /resumes/{id} view quota, shared across ALL active searches.
-HH_DAILY_VIEW_BUDGET = 500
 # Per-search page cap of the recurring pipeline — MUST stay in sync with the systemd
 # ExecStart (deploy/systemd/hh-monitor-pipeline.service --max-pages). The pipeline never
 # fetches past the top RECURRING_MAX_PAGES * 50 freshest resumes, so the status message
