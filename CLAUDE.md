@@ -136,4 +136,10 @@
   - Commits: eb2c7aa, f92a49a, 5610e2f, d6d2e0a, 79c80ee (+5 ранее: ab9a958, bc3aee7, 1449420, df51bcf, 7cd9bc7).
   - Candidate card: strengths/weak spots/risks/conclusion, кнопка «Подробный анализ» → full dossier, RU-локализация.
   - Weekly digest: data layer (воронка/позиции/история/ожидание), HR-сообщение action-first, Excel 4-sheet workbook; parser stats → admin topic.
-  - **Актуальный baseline — 813.**
+
+- Session 27 closed (2026-06-11): daily morning health report.
+  - Commit: c888112.
+  - hh_monitor/daily_report/run.py + systemd timer 08:30 MSK.
+  - Sections: сервер / юниты / пайплайн / кандидаты / внешние сервисы + вердикт.
+  - Deploy: sudo systemctl enable --now hh-daily-report.timer (no alembic migration).
+  - **Актуальный baseline — 1072.**
