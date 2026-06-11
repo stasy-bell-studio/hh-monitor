@@ -142,4 +142,14 @@
   - hh_monitor/daily_report/run.py + systemd timer 08:30 MSK.
   - Sections: сервер / юниты / пайплайн / кандидаты / внешние сервисы + вердикт.
   - Deploy: sudo systemctl enable --now hh-daily-report.timer (no alembic migration).
-  - **Актуальный baseline — 1072.**
+
+- Session 28 closed (2026-06-11): compact daily report (management by exception) + 3 bug fixes.
+  - Commit: 5c959a9.
+  - Compact layout: tech components collapse when green; 🟡 stays compact, 🔴 expands.
+  - Quota formula fixed: billable = resumes_viewed + snapshots_skipped (dedup after GET).
+  - Budget single-sourced: hh_monitor/hh/quota.py (HH_DAILY_VIEW_BUDGET = 500).
+  - Telegram check: GET /bot{token}/getMe when token set; no token → HEAD 2xx/3xx.
+  - CLI echo fix: run_daily_report returns bool; "skipped" vs "sent" message.
+  - Candidates threshold reads live DB value via get_current_threshold().
+  - Deploy: no alembic migration. Restart hh-daily-report.timer (no other changes needed).
+  - **Актуальный baseline — 1084.**
