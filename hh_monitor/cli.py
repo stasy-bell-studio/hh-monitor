@@ -1386,6 +1386,9 @@ class _OutputFormat(str, Enum):
 digest_app = typer.Typer(help="Candidate digest export commands")
 app.add_typer(digest_app, name="digest")
 
+report_app = typer.Typer(help="Operational report commands")
+app.add_typer(report_app, name="report")
+
 
 @digest_app.command("export")
 def digest_export(
@@ -1543,6 +1546,29 @@ def digest_weekly() -> None:
 def digest_now() -> None:
     """Alias for 'digest weekly' — send the digest immediately."""
     digest_weekly()
+
+
+# ── report daily ─────────────────────────────────────────────────────────────
+
+
+@report_app.command("daily")
+def report_daily() -> None:
+    """Send the daily health report to the admin topic."""
+    import asyncio as _asyncio
+
+    from hh_monitor.daily_report.run import run_daily_report
+    from hh_monitor.tg.client import make_bot
+
+    async def _run() -> None:
+        bot = make_bot()
+        try:
+            async with async_session_factory() as session:
+                await run_daily_report(session, bot)
+            typer.echo("Daily report sent.")
+        finally:
+            await bot.session.close()
+
+    _asyncio.run(_run())
 
 
 if __name__ == "__main__":

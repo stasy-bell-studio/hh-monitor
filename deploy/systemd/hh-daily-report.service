@@ -1,0 +1,14 @@
+[Unit]
+Description=hh-monitor daily health report (oneshot)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=skadmin
+Group=skadmin
+WorkingDirectory=/home/skadmin/hh-monitor
+ExecStart=/home/skadmin/hh-monitor/.venv/bin/python -u -m hh_monitor.cli report daily
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hh-daily-report

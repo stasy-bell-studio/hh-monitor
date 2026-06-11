@@ -1,0 +1,10 @@
+[Unit]
+Description=Run hh-monitor daily health report at 08:30 MSK
+
+[Timer]
+OnCalendar=*-*-* 08:30:00 Europe/Moscow
+Persistent=true
+Unit=hh-daily-report.service
+
+[Install]
+WantedBy=timers.target
