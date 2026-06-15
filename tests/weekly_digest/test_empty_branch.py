@@ -31,6 +31,8 @@ def _make_data(total_candidates: int) -> dict[str, object]:
             "broken": 0,
             "resumes_viewed": 0,
         },
+        "history": [],
+        "vacancies": [],
     }
 
 

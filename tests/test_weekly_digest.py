@@ -35,6 +35,8 @@ def _run_data(found: int = 3) -> dict[str, object]:
             "broken": 0,
             "resumes_viewed": 0,
         },
+        "history": [],
+        "vacancies": [],
     }
 
 

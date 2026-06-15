@@ -3,13 +3,13 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import structlog
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile
-from sqlalchemy import func, select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.config import settings
@@ -23,6 +23,7 @@ from hh_monitor.db.models import (
     Search,
     Snapshot,
 )
+from hh_monitor.detector.types import EventType
 from hh_monitor.tg.cards import is_best_score, score_badge
 from hh_monitor.tg.send_guard import send_enabled
 
@@ -114,6 +115,7 @@ class _PerPosition(TypedDict):
     sent: int
     approved: int
     rejected: int
+    pending: int
 
 
 class _Candidate(TypedDict):
@@ -134,6 +136,27 @@ class _Candidate(TypedDict):
     created_at: datetime
     sent_at: datetime | None
     age_days: int | None
+    # Trend across ALL lifetime events for this resume (filled after dedup):
+    #   score_first  — earliest scored event's score_total
+    #   score_delta  — score_total (displayed/latest) minus score_first
+    #   change_count — number of lifetime events for the resume
+    #   change_types — ordered distinct event_types, e.g. "NEW, UPDATED_SALARY"
+    score_first: int | None
+    score_delta: int | None
+    change_count: int
+    change_types: str
+
+
+class _HistoryRow(TypedDict):
+    """One lifetime event for a candidate present in this week's digest."""
+
+    hh_resume_id: str
+    url: str
+    created_at: datetime
+    event_type: str
+    change_desc: str
+    score_total: int | None
+    verdict: str | None
 
 
 class _ParserStats(TypedDict):
@@ -152,6 +175,10 @@ class _DigestData(TypedDict):
     candidates_all: list[_Candidate]
     pending: list[_Candidate]
     parser_stats: _ParserStats
+    # All lifetime events for resumes present in this week's digest (history sheet).
+    history: list[_HistoryRow]
+    # Unique active vacancy names (one Excel sheet each), sorted by candidate count desc.
+    vacancies: list[str]
 
 
 class _WeekPoint(TypedDict):
@@ -170,6 +197,37 @@ class _PosAcc(TypedDict):
     sent: int
     approved: int
     rejected: int
+    pending: int
+
+
+def _fmt_change_value(v: object) -> str:
+    """Render a before/after value for the history sheet; None → em dash."""
+    return "—" if v is None else str(v)
+
+
+def _describe_change(event_type: str, details: dict[str, Any] | None) -> str:
+    """Human-readable «что менялось» for one event.
+
+    Covers every event type — not just UPDATED_*. NEW/REACTIVATED/REMOVED carry no
+    before/after in ``details`` (so we never index details["before"] for them); unknown
+    types yield "" rather than raising.
+    """
+    d = details or {}
+    if event_type == EventType.NEW.value:
+        return "Новое резюме"
+    if event_type == EventType.REACTIVATED.value:
+        return "Возобновлено"
+    if event_type == EventType.REMOVED.value:
+        return "Снято"
+    if event_type in (EventType.UPDATED_POSITION.value, EventType.UPDATED_SALARY.value):
+        return f"{_fmt_change_value(d.get('before'))} → {_fmt_change_value(d.get('after'))}"
+    if event_type == EventType.UPDATED_EXPERIENCE.value:
+        before = d.get("before") or {}
+        after = d.get("after") or {}
+        bm = before.get("months") if isinstance(before, dict) else None
+        am = after.get("months") if isinstance(after, dict) else None
+        return f"стаж {_fmt_change_value(bm)}→{_fmt_change_value(am)} мес"
+    return ""
 
 
 async def _collect_data(
@@ -211,8 +269,11 @@ async def _collect_data(
     rows = (await session.execute(stmt)).all()
 
     funnel = _Funnel(found=0, sent=0, approved=0, rejected=0, doubt=0, pending=0)
-    candidates_all: list[_Candidate] = []
-    pos_acc: dict[str, _PosAcc] = {}
+    # Dedup to one row per resume, keeping the LATEST event (max created_at) as the
+    # displayed row — mirrors the DISTINCT ON (hh_resume_id) … ORDER BY created_at DESC
+    # pattern in hh_monitor/digest/query.py. ``latest_at`` tracks the kept event's time.
+    by_resume: dict[str, _Candidate] = {}
+    latest_at: dict[str, datetime] = {}
 
     for ev, res, srch, ns, sr, region in rows:
         status = ns.screening_status if ns is not None else None
@@ -220,29 +281,9 @@ async def _collect_data(
         verdict = res.llm_verdict or ev.llm_verdict
         age_days = (now - sent_at).days if sent_at is not None else None
 
-        candidates_all.append(
-            _Candidate(
-                position_name=srch.position_name,
-                score_total=ev.score_total,
-                fit_score=res.fit_score,
-                llm_score=res.llm_score,
-                llm_verdict=verdict,
-                region=region or "—",
-                llm_real_role=res.llm_real_role or "",
-                facts=ev.llm_facts_confirmed or "",
-                weak=ev.llm_weak_spots or "",
-                risks=_risks_text(ev.llm_red_flags, res.llm_red_flags),
-                conclusion=ev.llm_verdict_text or res.llm_comment or "",
-                screening_status=status,
-                reason=sr.reason_text if sr is not None else "",
-                url=f"https://hh.ru/resume/{res.hh_resume_id}",
-                created_at=ev.created_at,
-                sent_at=sent_at,
-                age_days=age_days,
-            )
-        )
-
-        funnel["found"] += 1
+        # funnel.sent/approved/rejected/doubt/pending stay PER-NOTIFICATION (one per
+        # event), unlike funnel.found which is per-distinct-resume (set below). A resume
+        # with two sent events therefore counts once in found but twice in sent.
         if ns is not None:
             funnel["sent"] += 1
             if status == ScreeningStatus.APPROVE.value:
@@ -254,8 +295,64 @@ async def _collect_data(
             elif status is None:
                 funnel["pending"] += 1
 
+        rid = res.hh_resume_id
+        prev_at = latest_at.get(rid)
+        if prev_at is not None and ev.created_at <= prev_at:
+            continue  # an already-kept later event wins as the displayed row
+        latest_at[rid] = ev.created_at
+        by_resume[rid] = _Candidate(
+            position_name=srch.position_name,
+            score_total=ev.score_total,
+            fit_score=res.fit_score,
+            llm_score=res.llm_score,
+            llm_verdict=verdict,
+            region=region or "—",
+            llm_real_role=res.llm_real_role or "",
+            facts=ev.llm_facts_confirmed or "",
+            weak=ev.llm_weak_spots or "",
+            risks=_risks_text(ev.llm_red_flags, res.llm_red_flags),
+            conclusion=ev.llm_verdict_text or res.llm_comment or "",
+            screening_status=status,
+            reason=sr.reason_text if sr is not None else "",
+            url=f"https://hh.ru/resume/{rid}",
+            created_at=ev.created_at,
+            sent_at=sent_at,
+            age_days=age_days,
+            score_first=None,
+            score_delta=None,
+            change_count=0,
+            change_types="",
+        )
+
+    # found = distinct resumes (people), matching the deduped candidate sheets.
+    funnel["found"] = len(by_resume)
+
+    # Lifetime history: ALL events (any date, any enrichment) for every resume in this
+    # week's digest. Drives both the trend columns and the «История кандидатов» sheet.
+    # Volume is tiny (~1 event/resume); ix_events_hh_resume_id (btree) covers the lookup.
+    history, trend = await _collect_history(session, list(by_resume.keys()))
+    for rid, cand in by_resume.items():
+        t = trend.get(rid)
+        first = t.score_first if t is not None else None
+        cur = cand["score_total"]
+        cand["score_first"] = first
+        cand["score_delta"] = (cur - first) if (cur is not None and first is not None) else None
+        cand["change_count"] = t.change_count if t is not None else 0
+        cand["change_types"] = ", ".join(t.event_types) if t is not None else ""
+
+    candidates_all = sorted(
+        by_resume.values(),
+        key=lambda c: (c["score_total"] is not None, c["score_total"] or 0),
+        reverse=True,
+    )
+
+    # per_position is computed over the DEDUPED candidates (per-person), so
+    # sum(count) == funnel.found. sent/approved/rejected/pending here are therefore
+    # per-person too and may diverge slightly from the per-notification funnel.
+    pos_acc: dict[str, _PosAcc] = {}
+    for c in candidates_all:
         acc = pos_acc.setdefault(
-            srch.position_name,
+            c["position_name"],
             _PosAcc(
                 count=0,
                 n_fit=0,
@@ -265,24 +362,27 @@ async def _collect_data(
                 sent=0,
                 approved=0,
                 rejected=0,
+                pending=0,
             ),
         )
         acc["count"] += 1
-        bucket = _verdict_bucket(verdict)
+        bucket = _verdict_bucket(c["llm_verdict"])
         if bucket == "fit":
             acc["n_fit"] += 1
         elif bucket == "doubt":
             acc["n_doubt"] += 1
         else:
             acc["n_miss"] += 1
-        if ev.score_total is not None:
-            acc["score_sum"] += ev.score_total
-        if ns is not None:
+        if c["score_total"] is not None:
+            acc["score_sum"] += c["score_total"]
+        if c["sent_at"] is not None:
             acc["sent"] += 1
-            if status == ScreeningStatus.APPROVE.value:
+            if c["screening_status"] == ScreeningStatus.APPROVE.value:
                 acc["approved"] += 1
-            elif status in _REJECTED_STATUSES:
+            elif c["screening_status"] in _REJECTED_STATUSES:
                 acc["rejected"] += 1
+            elif c["screening_status"] is None:
+                acc["pending"] += 1
 
     per_position: list[_PerPosition] = [
         _PerPosition(
@@ -295,8 +395,15 @@ async def _collect_data(
             sent=a["sent"],
             approved=a["approved"],
             rejected=a["rejected"],
+            pending=a["pending"],
         )
         for name, a in pos_acc.items()
+    ]
+
+    # One Excel sheet per active vacancy, ordered by candidate count desc, then name.
+    vacancies = [
+        pp["position_name"]
+        for pp in sorted(per_position, key=lambda p: (-p["count"], p["position_name"]))
     ]
 
     pending = [
@@ -309,7 +416,65 @@ async def _collect_data(
         candidates_all=candidates_all,
         pending=pending,
         parser_stats=await _collect_parser_stats(session, date_from, date_to),
+        history=history,
+        vacancies=vacancies,
     )
+
+
+class _ResumeTrend:
+    """Mutable per-resume trend accumulator (lifetime events)."""
+
+    __slots__ = ("change_count", "event_types", "score_first")
+
+    def __init__(self) -> None:
+        self.score_first: int | None = None
+        self.change_count: int = 0
+        self.event_types: list[str] = []
+
+
+async def _collect_history(
+    session: AsyncSession, resume_ids: list[str]
+) -> tuple[list[_HistoryRow], dict[str, _ResumeTrend]]:
+    """Fetch ALL lifetime events for *resume_ids* → (history rows, per-resume trend).
+
+    Rows are ordered by resume then created_at ASC (chronological within resume), so the
+    first non-null score seen per resume is its earliest scored event.
+    """
+    history: list[_HistoryRow] = []
+    trend: dict[str, _ResumeTrend] = {}
+    if not resume_ids:
+        return history, trend
+    stmt = (
+        select(
+            Event.hh_resume_id,
+            Event.event_type,
+            Event.details,
+            Event.score_total,
+            Event.llm_verdict,
+            Event.created_at,
+        )
+        .where(Event.hh_resume_id.in_(resume_ids))
+        .order_by(Event.hh_resume_id, Event.created_at)
+    )
+    for rid, etype, details, score, verdict, created in (await session.execute(stmt)).all():
+        history.append(
+            _HistoryRow(
+                hh_resume_id=rid,
+                url=f"https://hh.ru/resume/{rid}",
+                created_at=created,
+                event_type=etype,
+                change_desc=_describe_change(etype, details),
+                score_total=score,
+                verdict=verdict,
+            )
+        )
+        t = trend.setdefault(rid, _ResumeTrend())
+        t.change_count += 1
+        if etype not in t.event_types:
+            t.event_types.append(etype)
+        if score is not None and t.score_first is None:
+            t.score_first = score
+    return history, trend
 
 
 def _stats_from_runs(runs: Sequence[ParserRun]) -> _ParserStats:
@@ -360,8 +525,10 @@ async def _collect_weekly_series(session: AsyncSession, weeks: int = 4) -> list[
     for i in range(weeks - 1, -1, -1):
         wf = now - timedelta(days=7 * (i + 1))
         wt = now - timedelta(days=7 * i)
-        base = (
-            select(func.count())
+        # found counts DISTINCT resumes (people) so the headline, the week-over-week
+        # delta, and «Динамика» all agree — there is no found↔Динамика divergence.
+        found_stmt = (
+            select(func.count(distinct(Event.hh_resume_id)))
             .select_from(Event)
             .join(Resume, Resume.hh_resume_id == Event.hh_resume_id)
             .where(Event.llm_enriched.is_(True))
@@ -370,11 +537,22 @@ async def _collect_weekly_series(session: AsyncSession, weeks: int = 4) -> list[
             .where(Event.score_total.isnot(None))
             .where(Event.score_total >= settings.digest_score_threshold)
         )
-        sent_stmt = base.join(NotificationSent, NotificationSent.event_id == Event.id)
+        # sent/approved remain per-notification (one per event), like the main funnel.
+        sent_stmt = (
+            select(func.count())
+            .select_from(Event)
+            .join(Resume, Resume.hh_resume_id == Event.hh_resume_id)
+            .join(NotificationSent, NotificationSent.event_id == Event.id)
+            .where(Event.llm_enriched.is_(True))
+            .where(Event.created_at >= wf)
+            .where(Event.created_at < wt)
+            .where(Event.score_total.isnot(None))
+            .where(Event.score_total >= settings.digest_score_threshold)
+        )
         approved_stmt = sent_stmt.where(
             NotificationSent.screening_status == ScreeningStatus.APPROVE.value
         )
-        found = int((await session.execute(base)).scalar_one())
+        found = int((await session.execute(found_stmt)).scalar_one())
         sent = int((await session.execute(sent_stmt)).scalar_one())
         approved = int((await session.execute(approved_stmt)).scalar_one())
         out.append(
@@ -641,7 +819,7 @@ async def run_weekly_digest(session: AsyncSession, bot: Bot) -> None:
 
     from hh_monitor.weekly_digest.excel import build_digest_workbook
 
-    xlsx_bytes = build_digest_workbook(data, weekly_series)
+    xlsx_bytes = build_digest_workbook(data, weekly_series, week_num, date_from, date_to)
     filename = f"svodka_week_{week_num}.xlsx"
 
     await bot.send_document(

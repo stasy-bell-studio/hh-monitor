@@ -19,9 +19,41 @@ from hh_monitor.db.models import (
     Search,
     Snapshot,
 )
-from hh_monitor.weekly_digest.run import _collect_data, _collect_weekly_series
+from hh_monitor.weekly_digest.run import (
+    _collect_data,
+    _collect_weekly_series,
+    _describe_change,
+)
 
 _RID_SEQ = iter(range(1, 10_000))
+
+
+async def _add_event(
+    session: AsyncSession,
+    *,
+    rid: str,
+    search_id: int,
+    event_type: str = "NEW",
+    score_total: int | None = 70,
+    created_at: datetime,
+    llm_verdict: str | None = "подходит",
+    llm_enriched: bool = True,
+    details: dict[str, object] | None = None,
+) -> Event:
+    """Add an extra event to an EXISTING resume (for dedup/trend/history tests)."""
+    ev = Event(
+        hh_resume_id=rid,
+        event_type=event_type,
+        search_id=search_id,
+        llm_enriched=llm_enriched,
+        score_total=score_total,
+        llm_verdict=llm_verdict,
+        created_at=created_at,
+        details=details,
+    )
+    session.add(ev)
+    await session.flush()
+    return ev
 
 
 async def _seed_search(session: AsyncSession, name: str, code: str = "branch_director") -> Search:
@@ -316,3 +348,113 @@ async def test_collect_data_reads_event_score_total(db_session: AsyncSession) ->
     assert data["funnel"]["found"] == 1
     assert len(data["candidates_all"]) == 1
     assert data["candidates_all"][0]["score_total"] == 88
+
+
+@pytest.mark.asyncio
+async def test_dedup_one_row_per_resume(db_session: AsyncSession) -> None:
+    """A resume with multiple in-window events → ONE candidate row, latest event shown."""
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+    ev = await _seed_candidate(db_session, sc, score_total=70, created_at=now - timedelta(hours=3))
+    await _add_event(
+        db_session,
+        rid=ev.hh_resume_id,
+        search_id=sc.id,
+        event_type="UPDATED_SALARY",
+        score_total=88,
+        created_at=now - timedelta(hours=1),  # later → becomes the displayed row
+    )
+
+    data = await _collect_data(db_session, date_from, date_to)
+    assert len(data["candidates_all"]) == 1  # AC4: no duplicate hh_resume_id
+    assert data["candidates_all"][0]["score_total"] == 88  # latest event shown
+
+
+@pytest.mark.asyncio
+async def test_found_counts_distinct_resumes(db_session: AsyncSession) -> None:
+    """funnel.found counts distinct resumes (people), not events (AC7)."""
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+    ev = await _seed_candidate(db_session, sc, score_total=70, created_at=now - timedelta(hours=3))
+    await _add_event(
+        db_session,
+        rid=ev.hh_resume_id,
+        search_id=sc.id,
+        event_type="UPDATED_POSITION",
+        score_total=72,
+        created_at=now - timedelta(hours=2),
+    )
+    await _seed_candidate(db_session, sc, score_total=65, created_at=now - timedelta(hours=1))
+
+    data = await _collect_data(db_session, date_from, date_to)
+    assert data["funnel"]["found"] == 2  # 2 distinct resumes despite 3 events
+    assert data["per_position"][0]["count"] == 2  # per-position count is distinct too
+
+
+@pytest.mark.asyncio
+async def test_trend_fields(db_session: AsyncSession) -> None:
+    """Trend columns derive from ALL lifetime events for the resume (AC5)."""
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+    ev = await _seed_candidate(db_session, sc, score_total=50, created_at=now - timedelta(hours=3))
+    await _add_event(
+        db_session,
+        rid=ev.hh_resume_id,
+        search_id=sc.id,
+        event_type="UPDATED_SALARY",
+        score_total=80,
+        created_at=now - timedelta(hours=1),
+    )
+
+    c = (await _collect_data(db_session, date_from, date_to))["candidates_all"][0]
+    assert c["score_total"] == 80  # current (latest displayed)
+    assert c["score_first"] == 50  # earliest scored event
+    assert c["score_delta"] == 30
+    assert c["change_count"] == 2
+    assert "NEW" in c["change_types"]
+    assert "UPDATED_SALARY" in c["change_types"]
+
+
+@pytest.mark.asyncio
+async def test_history_includes_all_time_events(db_session: AsyncSession) -> None:
+    """«История» holds ALL events (any date) for resumes in this week's digest (AC6)."""
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+    ev = await _seed_candidate(db_session, sc, score_total=70, created_at=now - timedelta(hours=1))
+    rid = ev.hh_resume_id
+    # An event 30 days ago — outside the digest window, but still part of the history.
+    await _add_event(
+        db_session,
+        rid=rid,
+        search_id=sc.id,
+        event_type="NEW",
+        score_total=None,
+        llm_enriched=False,
+        created_at=now - timedelta(days=30),
+    )
+
+    data = await _collect_data(db_session, date_from, date_to)
+    hist = [h for h in data["history"] if h["hh_resume_id"] == rid]
+    assert len(hist) == 2  # in-window + all-time
+    assert hist[0]["created_at"] < hist[1]["created_at"]  # chronological ASC
+    assert any(h["created_at"] < date_from for h in hist)  # the out-of-window one
+
+
+def test_describe_change_labels() -> None:
+    """_describe_change covers every event type (AC6) — never indexes a missing key."""
+    assert _describe_change("NEW", None) == "Новое резюме"
+    assert _describe_change("REACTIVATED", {}) == "Возобновлено"
+    assert _describe_change("REMOVED", {"reason": "payload_empty"}) == "Снято"
+    assert _describe_change("UPDATED_SALARY", {"before": 80000, "after": 90000}) == "80000 → 90000"
+    assert _describe_change("UPDATED_POSITION", {"before": None, "after": "CEO"}) == "— → CEO"
+    assert (
+        _describe_change(
+            "UPDATED_EXPERIENCE", {"before": {"months": 120}, "after": {"months": 132}}
+        )
+        == "стаж 120→132 мес"
+    )
+    assert _describe_change("UNKNOWN", {"before": 1}) == ""
