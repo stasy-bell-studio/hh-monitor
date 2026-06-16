@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypedDict
+from typing import TypedDict
 
 import structlog
 from aiogram import Bot
@@ -23,7 +23,7 @@ from hh_monitor.db.models import (
     Search,
     Snapshot,
 )
-from hh_monitor.detector.types import EventType
+from hh_monitor.detector.labels import describe_change, fmt_change_value
 from hh_monitor.tg.cards import is_best_score, score_badge
 from hh_monitor.tg.send_guard import send_enabled
 
@@ -200,34 +200,12 @@ class _PosAcc(TypedDict):
     pending: int
 
 
-def _fmt_change_value(v: object) -> str:
-    """Render a before/after value for the history sheet; None → em dash."""
-    return "—" if v is None else str(v)
-
-
-def _describe_change(event_type: str, details: dict[str, Any] | None) -> str:
-    """Human-readable «что менялось» for one event.
-
-    Covers every event type — not just UPDATED_*. NEW/REACTIVATED/REMOVED carry no
-    before/after in ``details`` (so we never index details["before"] for them); unknown
-    types yield "" rather than raising.
-    """
-    d = details or {}
-    if event_type == EventType.NEW.value:
-        return "Новое резюме"
-    if event_type == EventType.REACTIVATED.value:
-        return "Возобновлено"
-    if event_type == EventType.REMOVED.value:
-        return "Снято"
-    if event_type in (EventType.UPDATED_POSITION.value, EventType.UPDATED_SALARY.value):
-        return f"{_fmt_change_value(d.get('before'))} → {_fmt_change_value(d.get('after'))}"
-    if event_type == EventType.UPDATED_EXPERIENCE.value:
-        before = d.get("before") or {}
-        after = d.get("after") or {}
-        bm = before.get("months") if isinstance(before, dict) else None
-        am = after.get("months") if isinstance(after, dict) else None
-        return f"стаж {_fmt_change_value(bm)}→{_fmt_change_value(am)} мес"
-    return ""
+# Event-type → label mapping lives in the neutral detector.labels module so the
+# Telegram card («✏️ Обновлено») can reuse the exact same strings without a circular
+# import (weekly_digest already imports from tg.cards). Re-exported under the historic
+# private names so existing call sites and tests keep importing them from here.
+_fmt_change_value = fmt_change_value
+_describe_change = describe_change
 
 
 async def _collect_data(
@@ -276,23 +254,28 @@ async def _collect_data(
     latest_at: dict[str, datetime] = {}
 
     for ev, res, srch, ns, sr, region in rows:
+        # Per-candidate DISPLAY (sheet/per_position) uses the raw ns: a merged-duplicate
+        # row still means the person WAS notified (it shares the winner's card + sent_at),
+        # so they must not show as un-notified. The per-NOTIFICATION funnel below instead
+        # uses eff_ns (merged → None) so a merged sibling is not counted as a second card.
         status = ns.screening_status if ns is not None else None
         sent_at = ns.sent_at if ns is not None else None
+        eff_ns = ns if (ns is not None and ns.merged_into_event_id is None) else None
         verdict = res.llm_verdict or ev.llm_verdict
         age_days = (now - sent_at).days if sent_at is not None else None
 
         # funnel.sent/approved/rejected/doubt/pending stay PER-NOTIFICATION (one per
-        # event), unlike funnel.found which is per-distinct-resume (set below). A resume
-        # with two sent events therefore counts once in found but twice in sent.
-        if ns is not None:
+        # delivered card), unlike funnel.found which is per-distinct-resume (set below).
+        # Merged duplicates are excluded (eff_ns) so they never inflate the funnel.
+        if eff_ns is not None:
             funnel["sent"] += 1
-            if status == ScreeningStatus.APPROVE.value:
+            if eff_ns.screening_status == ScreeningStatus.APPROVE.value:
                 funnel["approved"] += 1
-            elif status in _REJECTED_STATUSES:
+            elif eff_ns.screening_status in _REJECTED_STATUSES:
                 funnel["rejected"] += 1
-            elif status == ScreeningStatus.DOUBT.value:
+            elif eff_ns.screening_status == ScreeningStatus.DOUBT.value:
                 funnel["doubt"] += 1
-            elif status is None:
+            elif eff_ns.screening_status is None:
                 funnel["pending"] += 1
 
         rid = res.hh_resume_id
@@ -543,6 +526,9 @@ async def _collect_weekly_series(session: AsyncSession, weeks: int = 4) -> list[
             .select_from(Event)
             .join(Resume, Resume.hh_resume_id == Event.hh_resume_id)
             .join(NotificationSent, NotificationSent.event_id == Event.id)
+            # Exclude merged-duplicate rows so a multi-field edit counts as one card.
+            # approved_stmt is derived from this stmt, so it inherits the filter.
+            .where(NotificationSent.merged_into_event_id.is_(None))
             .where(Event.llm_enriched.is_(True))
             .where(Event.created_at >= wf)
             .where(Event.created_at < wt)

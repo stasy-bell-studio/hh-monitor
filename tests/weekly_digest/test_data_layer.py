@@ -151,6 +151,68 @@ async def test_funnel_counts(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
+async def test_funnel_excludes_merged_duplicate(db_session: AsyncSession) -> None:
+    """AC7: a merged-duplicate notification (multi-field edit) is ONE delivered card, not
+    two — the funnel counts the winner only, and the person counts once in found."""
+    now = datetime.now(UTC)
+    date_from, date_to = now - timedelta(days=7), now
+    sc = await _seed_search(db_session, "Директор филиала")
+
+    rid = f"wd{next(_RID_SEQ):016d}"
+    db_session.add(
+        Resume(
+            hh_resume_id=rid,
+            score_total=80,
+            fit_score=55,
+            llm_score=85,
+            llm_verdict="подходит",
+            llm_real_role="Директор",
+        )
+    )
+    await db_session.flush()
+
+    winner = Event(
+        hh_resume_id=rid,
+        event_type="UPDATED_POSITION",
+        search_id=sc.id,
+        llm_enriched=True,
+        score_total=80,
+        created_at=now - timedelta(hours=1),
+        details={"curr_snapshot_id": 1},
+    )
+    sibling = Event(
+        hh_resume_id=rid,
+        event_type="UPDATED_SALARY",
+        search_id=sc.id,
+        llm_enriched=True,
+        score_total=80,
+        created_at=now - timedelta(hours=1),
+        details={"curr_snapshot_id": 1},
+    )
+    db_session.add_all([winner, sibling])
+    await db_session.flush()
+
+    db_session.add(
+        NotificationSent(
+            event_id=winner.id, tg_message_id=10, sent_at=now, screening_status="approve"
+        )
+    )
+    db_session.add(
+        NotificationSent(
+            event_id=sibling.id, tg_message_id=10, sent_at=now, merged_into_event_id=winner.id
+        )
+    )
+    await db_session.flush()
+
+    data = await _collect_data(db_session, date_from, date_to)
+    f = data["funnel"]
+    assert f["found"] == 1  # one distinct résumé
+    assert f["sent"] == 1  # only the winner card; merged sibling excluded
+    assert f["approved"] == 1
+    assert f["pending"] == 0
+
+
+@pytest.mark.asyncio
 async def test_per_position_buckets(db_session: AsyncSession) -> None:
     now = datetime.now(UTC)
     date_from, date_to = now - timedelta(days=7), now

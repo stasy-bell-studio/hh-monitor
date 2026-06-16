@@ -15,6 +15,7 @@ from hh_monitor.tg.cards import (
     build_detail_collapse_keyboard,
     build_detail_html,
     build_inline_keyboard,
+    build_update_summary,
     is_best_score,
     safe,
     score_badge,
@@ -87,6 +88,69 @@ def _snap(
     if salary is not None:
         payload["salary"] = {"amount": salary, "currency": "RUR"}
     return payload
+
+
+# ── Tests: build_update_summary() + «Обновлено» card line ─────────────────────
+
+
+def test_update_summary_aggregates_changes() -> None:
+    """A multi-field edit yields one before→after line per changed field, order preserved."""
+    s = build_update_summary(
+        [
+            ("UPDATED_POSITION", {"before": "Директор", "after": "Гендир"}),
+            ("UPDATED_SALARY", {"before": 80000, "after": 90000}),
+        ]
+    )
+    assert s == "Директор → Гендир\n80000 → 90000"
+
+
+def test_update_summary_dedups_identical() -> None:
+    s = build_update_summary(
+        [
+            ("UPDATED_POSITION", {"before": "A", "after": "B"}),
+            ("UPDATED_SALARY", {"before": "A", "after": "B"}),
+        ]
+    )
+    assert s == "A → B"
+
+
+def test_update_summary_new_only_is_none() -> None:
+    """AC6: a brand-new résumé has no meaningful 'updated' line."""
+    assert build_update_summary([("NEW", {"curr_snapshot_id": 1})]) is None
+
+
+def test_update_summary_reactivated_label() -> None:
+    assert build_update_summary([("REACTIVATED", {"curr_snapshot_id": 1})]) == "Возобновлено"
+
+
+def test_update_summary_skips_new_in_mixed_group() -> None:
+    s = build_update_summary(
+        [
+            ("NEW", {"curr_snapshot_id": 1}),
+            ("UPDATED_SALARY", {"before": 1, "after": 2}),
+        ]
+    )
+    assert s == "1 → 2"
+
+
+def test_card_renders_update_block() -> None:
+    """AC2: the winner card carries the «Обновлено» block with every change."""
+    html = build_card_html(
+        _resume(),
+        _event(),
+        _search(),
+        _snap(),
+        update_summary="Директор → Гендир\n80000 → 90000",
+    )
+    assert "✏️ Обновлено:" in html
+    assert "Директор → Гендир" in html
+    assert "80000 → 90000" in html
+
+
+def test_card_no_update_block_by_default() -> None:
+    """AC6: a single-event card (no update_summary) is unchanged — no «Обновлено» line."""
+    html = build_card_html(_resume(), _event(), _search(), _snap())
+    assert "Обновлено" not in html
 
 
 # ── Tests: safe() ─────────────────────────────────────────────────────────────

@@ -25,7 +25,7 @@ _DETAIL_COUNTS_SQL = """
         COUNT(ns.event_id) FILTER (WHERE ns.sent_at >= NOW() - INTERVAL '30 days') AS d30
     FROM searches s
     LEFT JOIN events e ON e.search_id = s.id
-    LEFT JOIN notifications_sent ns ON ns.event_id = e.id
+    LEFT JOIN notifications_sent ns ON ns.event_id = e.id AND ns.merged_into_event_id IS NULL
     WHERE s.id = :id
     GROUP BY s.id
 """

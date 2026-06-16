@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -616,3 +617,261 @@ async def test_blocked_verdict_creates_no_reservation(db_session: AsyncSession) 
     assert result is False
     mock_send.assert_not_called()
     assert await db_session.get(NotificationSent, event_id) is None
+
+
+# ── Collapse duplicate cards: group by (résumé, snapshot) ──────────────────────
+
+
+def _msg(message_id: int) -> MagicMock:
+    m = MagicMock(spec=Message)
+    m.message_id = message_id
+    return m
+
+
+def _send_mock(first_id: int = 1000) -> AsyncMock:
+    """send_card stub that returns a fresh Message with an incrementing id per call."""
+    counter = itertools.count(first_id)
+    return AsyncMock(side_effect=lambda *a, **k: _msg(next(counter)))
+
+
+async def _seed_resume(
+    session: AsyncSession,
+    resume_id: str,
+    *,
+    score_total: int = 65,
+    llm_verdict: str | None = "подходит",
+) -> int:
+    """Seed a search + résumé + one snapshot; return the search id."""
+    search = Search(
+        position_code="grp_pos",
+        position_name="Группа",
+        hh_params={},
+        portrait={},
+        active=True,
+    )
+    session.add(search)
+    await session.flush()
+    sid: int = search.id
+
+    session.add(
+        Resume(
+            hh_resume_id=resume_id,
+            fit_score=60,
+            llm_score=66,
+            score_total=score_total,
+            llm_verdict=llm_verdict,
+            llm_real_role="Директор",
+            llm_comment="cmt",
+        )
+    )
+    await session.flush()
+    payload = _payload()
+    session.add(Snapshot(hh_resume_id=resume_id, payload=payload, content_hash=_hash(payload)))
+    await session.flush()
+    await session.commit()
+    return sid
+
+
+async def _add_grp_event(
+    session: AsyncSession,
+    *,
+    search_id: int,
+    resume_id: str,
+    event_type: str,
+    snap_id: int,
+    before: str = "A",
+    after: str = "B",
+    score_total: int = 65,
+    llm_verdict: str | None = "подходит",
+) -> int:
+    """Add one enriched event carrying curr_snapshot_id in details; return the event id."""
+    ev = Event(
+        hh_resume_id=resume_id,
+        event_type=event_type,
+        search_id=search_id,
+        llm_enriched=True,
+        score_total=score_total,
+        llm_verdict=llm_verdict,
+        details={"curr_snapshot_id": snap_id, "before": before, "after": after},
+    )
+    session.add(ev)
+    await session.flush()
+    eid: int = ev.id
+    await session.commit()
+    return eid
+
+
+@pytest.mark.asyncio
+async def test_multi_field_edit_sends_one_card(db_session: AsyncSession) -> None:
+    """AC1/AC2/AC4: two events of one (résumé, snapshot) → exactly ONE card, the merged
+    sibling recorded as merged_into the winner, skipped_duplicate == merged count."""
+    sid = await _seed_resume(db_session, "resume_ac1")
+    e1 = await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_ac1",
+        event_type="UPDATED_POSITION", snap_id=500, before="Директор", after="Гендир",
+    )
+    e2 = await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_ac1",
+        event_type="UPDATED_SALARY", snap_id=500, before="80000", after="90000",
+    )
+    mock_send = _send_mock(first_id=1000)
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new=mock_send),
+    ):
+        _prod_settings_mock(ms, threshold=60)
+        result = await send_pending_cards(db_session, _make_bot())
+
+    assert result["sent"] == 1
+    assert result["skipped_duplicate"] == 1  # AC4
+    assert mock_send.await_count == 1  # AC1: one Telegram send
+
+    # AC2: the winner card carries an «Обновлено» block aggregating BOTH changes.
+    html_text = mock_send.await_args_list[0].args[2]
+    assert "✏️ Обновлено:" in html_text
+    assert "Директор → Гендир" in html_text
+    assert "80000 → 90000" in html_text
+
+    # Winner = min id on the score tie = e1; sibling e2 merged into it, same message id.
+    win = await db_session.get(NotificationSent, e1)
+    assert win is not None and win.merged_into_event_id is None and win.tg_message_id == 1000
+    merged = await db_session.get(NotificationSent, e2)
+    assert merged is not None
+    assert merged.merged_into_event_id == e1
+    assert merged.tg_message_id == 1000
+
+
+@pytest.mark.asyncio
+async def test_merged_events_not_requeued(db_session: AsyncSession) -> None:
+    """AC3 (this run): after collapsing, a second run sends nothing — both events already
+    have notifications_sent rows (winner + merged) excluded by the idempotency subquery."""
+    sid = await _seed_resume(db_session, "resume_ac3a")
+    await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_ac3a",
+        event_type="UPDATED_POSITION", snap_id=510,
+    )
+    await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_ac3a",
+        event_type="UPDATED_SALARY", snap_id=510,
+    )
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new=_send_mock(2000)),
+    ):
+        _prod_settings_mock(ms, threshold=60)
+        first = await send_pending_cards(db_session, _make_bot())
+        second_send = _send_mock(2500)
+        with patch("hh_monitor.tg.sender.send_card", new=second_send):
+            second = await send_pending_cards(db_session, _make_bot())
+
+    assert first["sent"] == 1
+    assert second["sent"] == 0
+    assert second_send.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cross_batch_sibling_merged(db_session: AsyncSession) -> None:
+    """AC3 (cross-batch): a sibling enriched in a LATER run finds the already-delivered
+    winner for its snapshot and is merged instead of sent as a second card."""
+    sid = await _seed_resume(db_session, "resume_ac3b")
+    e1 = await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_ac3b",
+        event_type="UPDATED_POSITION", snap_id=600,
+    )
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new=_send_mock(2000)),
+    ):
+        _prod_settings_mock(ms, threshold=60)
+        first = await send_pending_cards(db_session, _make_bot())
+    assert first["sent"] == 1  # winner e1 delivered, message id 2000
+
+    # The salary event is enriched only now, in a later batch.
+    e2 = await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_ac3b",
+        event_type="UPDATED_SALARY", snap_id=600,
+    )
+    second_send = _send_mock(3000)
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new=second_send),
+    ):
+        _prod_settings_mock(ms, threshold=60)
+        second = await send_pending_cards(db_session, _make_bot())
+
+    assert second["sent"] == 0
+    assert second["skipped_duplicate"] == 1
+    assert second_send.await_count == 0  # no second card
+    merged = await db_session.get(NotificationSent, e2)
+    assert merged is not None
+    assert merged.merged_into_event_id == e1
+    assert merged.tg_message_id == 2000  # shares the winner's delivered message
+
+
+@pytest.mark.asyncio
+async def test_distinct_snapshots_send_two_cards(db_session: AsyncSession) -> None:
+    """AC5: two events of DIFFERENT snapshots (separate edits) are NOT collapsed → TWO
+    cards — a real later edit must never be permanently silenced."""
+    sid = await _seed_resume(db_session, "resume_ac5")
+    await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_ac5",
+        event_type="UPDATED_SALARY", snap_id=700,
+    )
+    await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_ac5",
+        event_type="UPDATED_SALARY", snap_id=800,
+    )
+    mock_send = _send_mock(4000)
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new=mock_send),
+    ):
+        _prod_settings_mock(ms, threshold=60)
+        result = await send_pending_cards(db_session, _make_bot())
+
+    assert result["sent"] == 2
+    assert result["skipped_duplicate"] == 0
+    assert mock_send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_winner_reservation_crash_delivers_one_sibling(db_session: AsyncSession) -> None:
+    """Review note 3: if the elected winner already has a crashed reservation (reserved,
+    tg_message_id NULL), the idempotency subquery excludes it, the cross-batch lookup
+    ignores it (needs tg_message_id NOT NULL), and the still-pending siblings elect a NEW
+    winner → exactly ONE card delivered, others merged, no double-send."""
+    sid = await _seed_resume(db_session, "resume_fail")
+    e1 = await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_fail",
+        event_type="UPDATED_POSITION", snap_id=900,
+    )
+    e2 = await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_fail",
+        event_type="UPDATED_SALARY", snap_id=900,
+    )
+    e3 = await _add_grp_event(
+        db_session, search_id=sid, resume_id="resume_fail",
+        event_type="UPDATED_EXPERIENCE", snap_id=900,
+    )
+    # e1 crashed between reserve and finalize: a reserved row with no message id.
+    db_session.add(NotificationSent(event_id=e1, tg_message_id=None))
+    await db_session.commit()
+
+    mock_send = _send_mock(5000)
+    with (
+        patch("hh_monitor.tg.sender.settings") as ms,
+        patch("hh_monitor.tg.sender.send_card", new=mock_send),
+    ):
+        _prod_settings_mock(ms, threshold=60)
+        result = await send_pending_cards(db_session, _make_bot())
+
+    assert result["sent"] == 1  # exactly one card eventually delivered
+    assert result["skipped_duplicate"] == 1  # e3 merged into the new winner e2
+    assert mock_send.await_count == 1
+
+    ns2 = await db_session.get(NotificationSent, e2)  # new winner
+    assert ns2 is not None and ns2.merged_into_event_id is None and ns2.tg_message_id == 5000
+    ns3 = await db_session.get(NotificationSent, e3)  # merged into e2
+    assert ns3 is not None and ns3.merged_into_event_id == e2 and ns3.tg_message_id == 5000
+    ns1 = await db_session.get(NotificationSent, e1)  # untouched, still undelivered
+    assert ns1 is not None and ns1.tg_message_id is None and ns1.merged_into_event_id is None

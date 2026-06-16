@@ -228,6 +228,13 @@ class NotificationSent(Base):
     event_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("events.id"), primary_key=True)
     # NULL = reserved (reserve-then-send) but not yet finalized; set on a successful send.
     tg_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # NULL = this row IS a delivered card (the "winner"). Non-NULL = this event was merged
+    # into the winner event_id named here (same snapshot, several changed fields); it shares
+    # the winner's tg_message_id, was never shown as its own card, and is excluded from all
+    # "sent/notified" counts. Its presence still blocks the event from being re-queued.
+    merged_into_event_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("events.id"), nullable=True
+    )
     sent_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default="NOW()"
     )

@@ -9,6 +9,8 @@ from typing import Any
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from hh_monitor.db.models import Event, Resume, Search
+from hh_monitor.detector.labels import describe_change
+from hh_monitor.detector.types import EventType
 
 _VERDICT_EMOJI: dict[str, str] = {
     "подходит": "🟢",
@@ -159,11 +161,34 @@ def _extract_snapshot_fields(payload: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+def build_update_summary(items: list[tuple[str, dict[str, Any] | None]]) -> str | None:
+    """Aggregate the change-descriptions of every event in a collapsed group.
+
+    Reuses ``describe_change`` (the single source of truth shared with the weekly digest)
+    so a multi-field edit renders one «Обновлено» block of before→after lines. NEW
+    contributes nothing — a brand-new résumé has no meaningful "updated" line (AC6).
+    Lines are de-duplicated, order preserved. Returns None when there is nothing to show.
+    """
+    lines: list[str] = []
+    seen: set[str] = set()
+    for event_type, details in items:
+        if event_type == EventType.NEW.value:
+            continue
+        desc = describe_change(event_type, details)
+        if desc and desc not in seen:
+            seen.add(desc)
+            lines.append(desc)
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
 def build_card_html(
     resume: Resume,
     event: Event,
     search: Search,
     snapshot_payload: dict[str, Any] | None = None,
+    update_summary: str | None = None,
 ) -> str:
     snap = _extract_snapshot_fields(snapshot_payload) if snapshot_payload else {}
 
@@ -198,6 +223,14 @@ def build_card_html(
 
     # blank separator
     lines.append("")
+
+    # ── Updated fields (collapsed multi-field edit) ───────────────────────────
+    # One card per (résumé, snapshot); the changed fields from every merged sibling
+    # event are listed here as before→after lines (HTML-escaped).
+    if update_summary:
+        lines.append("✏️ Обновлено:")
+        lines.extend(safe(part) for part in update_summary.split("\n"))
+        lines.append("")
 
     # ── Identity block ────────────────────────────────────────────────────────
     if real_role:

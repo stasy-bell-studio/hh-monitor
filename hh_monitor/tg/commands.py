@@ -229,7 +229,7 @@ _ACTIVE_SQL = """
            )::int                                                                 AS avg_score
     FROM searches s
     LEFT JOIN events e ON e.search_id = s.id
-    LEFT JOIN notifications_sent ns ON ns.event_id = e.id
+    LEFT JOIN notifications_sent ns ON ns.event_id = e.id AND ns.merged_into_event_id IS NULL
     LEFT JOIN resumes r ON r.hh_resume_id = e.hh_resume_id
     WHERE s.archived_at IS NULL
     GROUP BY s.id
@@ -277,7 +277,7 @@ _ARCHIVE_SQL = """
            COUNT(ns.event_id) AS total
     FROM searches s
     LEFT JOIN events e ON e.search_id = s.id
-    LEFT JOIN notifications_sent ns ON ns.event_id = e.id
+    LEFT JOIN notifications_sent ns ON ns.event_id = e.id AND ns.merged_into_event_id IS NULL
     WHERE s.archived_at IS NOT NULL
     GROUP BY s.id
     ORDER BY s.archived_at DESC
@@ -321,6 +321,7 @@ _STATS_PERIODS_SQL = """
         COUNT(*) FILTER (WHERE sent_at >= NOW() - INTERVAL '7 days')   AS d7,
         COUNT(*) FILTER (WHERE sent_at >= NOW() - INTERVAL '30 days')  AS d30
     FROM notifications_sent
+    WHERE merged_into_event_id IS NULL
 """
 
 _STATS_TOP_POSITIONS_SQL = """
@@ -329,6 +330,7 @@ _STATS_TOP_POSITIONS_SQL = """
     JOIN events e ON e.id = ns.event_id
     JOIN searches s ON s.id = e.search_id
     WHERE ns.sent_at >= NOW() - INTERVAL '30 days'
+      AND ns.merged_into_event_id IS NULL
     GROUP BY s.position_code, s.position_name
     ORDER BY cnt DESC
     LIMIT 5
@@ -852,7 +854,7 @@ _FETCH_ACTIVE_ROW_SQL = """
            )::int                                                                 AS avg_score
     FROM searches s
     LEFT JOIN events e ON e.search_id = s.id
-    LEFT JOIN notifications_sent ns ON ns.event_id = e.id
+    LEFT JOIN notifications_sent ns ON ns.event_id = e.id AND ns.merged_into_event_id IS NULL
     LEFT JOIN resumes r ON r.hh_resume_id = e.hh_resume_id
     WHERE s.id = :id
     GROUP BY s.id

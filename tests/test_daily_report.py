@@ -9,6 +9,8 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from hh_monitor.daily_report.run import (
     MSK,
     _build_candidates_section,
@@ -21,7 +23,7 @@ from hh_monitor.daily_report.run import (
     _traffic_light,
     build_daily_report,
 )
-from hh_monitor.db.models import OAuthToken, ParserRun
+from hh_monitor.db.models import Event, NotificationSent, OAuthToken, ParserRun, Resume, Search
 
 # ── pure helpers ──────────────────────────────────────────────────────────────
 
@@ -431,6 +433,42 @@ async def test_candidates_uses_live_threshold() -> None:
 
     assert "оценка ≥ 80" in line  # DB value wins
     assert "оценка ≥ 70" not in line
+
+
+async def test_candidates_notified_excludes_merged(db_session: AsyncSession) -> None:
+    """AC7: 'уведомлений отправлено' counts delivered cards only — a merged-duplicate row
+    (multi-field edit collapsed into the winner) is not counted as a second notification."""
+    msk_now = datetime.now(MSK)
+    search = Search(
+        position_code="dr_pos", position_name="DR", hh_params={}, portrait={}, active=True
+    )
+    db_session.add(search)
+    await db_session.flush()
+    rid = "resume_dr_merged"
+    db_session.add(
+        Resume(hh_resume_id=rid, score_total=75, fit_score=60, llm_score=78, llm_verdict="подходит")
+    )
+    await db_session.flush()
+    winner = Event(
+        hh_resume_id=rid, event_type="UPDATED_POSITION", search_id=search.id,
+        llm_enriched=True, score_total=75, details={"curr_snapshot_id": 1},
+    )
+    sibling = Event(
+        hh_resume_id=rid, event_type="UPDATED_SALARY", search_id=search.id,
+        llm_enriched=True, score_total=75, details={"curr_snapshot_id": 1},
+    )
+    db_session.add_all([winner, sibling])
+    await db_session.flush()
+    db_session.add(NotificationSent(event_id=winner.id, tg_message_id=10))
+    db_session.add(
+        NotificationSent(event_id=sibling.id, tg_message_id=10, merged_into_event_id=winner.id)
+    )
+    await db_session.flush()
+
+    line = await _build_candidates_section(db_session, msk_now)
+    # two events scored ≥ 70, but only ONE delivered card (winner); merged sibling excluded.
+    assert "— 2," in line
+    assert "уведомлений отправлено — 1" in line
 
 
 # ── Telegram check ────────────────────────────────────────────────────────────

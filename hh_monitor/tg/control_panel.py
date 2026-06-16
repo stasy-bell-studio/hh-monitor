@@ -130,7 +130,7 @@ _CP_ACTIVE_SQL = """
            )::int                                                                     AS avg_score
     FROM searches s
     LEFT JOIN events e ON e.search_id = s.id
-    LEFT JOIN notifications_sent ns ON ns.event_id = e.id
+    LEFT JOIN notifications_sent ns ON ns.event_id = e.id AND ns.merged_into_event_id IS NULL
     LEFT JOIN resumes r ON r.hh_resume_id = e.hh_resume_id
     WHERE s.archived_at IS NULL
     GROUP BY s.id
@@ -143,6 +143,7 @@ _CP_STATS_PERIODS_SQL = """
         COUNT(*) FILTER (WHERE sent_at >= NOW() - INTERVAL '7 days')   AS d7,
         COUNT(*) FILTER (WHERE sent_at >= NOW() - INTERVAL '30 days')  AS d30
     FROM notifications_sent
+    WHERE merged_into_event_id IS NULL
 """
 
 _CP_STATS_BY_POSITION_SQL = """
@@ -154,6 +155,7 @@ _CP_STATS_BY_POSITION_SQL = """
     JOIN events e ON e.id = ns.event_id
     JOIN searches s ON s.id = e.search_id
     WHERE ns.sent_at >= NOW() - INTERVAL '30 days'
+      AND ns.merged_into_event_id IS NULL
     GROUP BY s.position_code
     ORDER BY d30 DESC
     LIMIT 10
@@ -190,7 +192,7 @@ _CP_FETCH_ACTIVE_ROW_SQL = """
            )::int                                                                     AS avg_score
     FROM searches s
     LEFT JOIN events e ON e.search_id = s.id
-    LEFT JOIN notifications_sent ns ON ns.event_id = e.id
+    LEFT JOIN notifications_sent ns ON ns.event_id = e.id AND ns.merged_into_event_id IS NULL
     LEFT JOIN resumes r ON r.hh_resume_id = e.hh_resume_id
     WHERE s.id = :id
     GROUP BY s.id

@@ -312,6 +312,8 @@ async def _build_candidates_section(
         select(func.count())
         .select_from(NotificationSent)
         .where(NotificationSent.sent_at >= cutoff)
+        # Count delivered cards only — a merged-duplicate row shares the winner's card.
+        .where(NotificationSent.merged_into_event_id.is_(None))
     )
     notified: int = int(notified_raw) if notified_raw is not None else 0
 
