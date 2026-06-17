@@ -16,11 +16,18 @@ from datetime import UTC, datetime, timedelta, timezone
 import httpx
 import structlog
 from aiogram import Bot
-from sqlalchemy import func, select
+from sqlalchemy import distinct, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.config import settings
-from hh_monitor.db.models import Event, NotificationSent, OAuthToken, ParserRun, Search
+from hh_monitor.db.models import (
+    Event,
+    NotificationSent,
+    OAuthToken,
+    ParserRun,
+    Resume,
+    Search,
+)
 from hh_monitor.hh.quota import HH_DAILY_VIEW_BUDGET
 from hh_monitor.tg.send_guard import send_enabled
 from hh_monitor.tg.sender import get_current_threshold
@@ -300,9 +307,17 @@ async def _build_candidates_section(
     cutoff = msk_now - timedelta(hours=24)
     threshold = await get_current_threshold(session)
 
+    # Count distinct PEOPLE (owner_id with hh_resume_id fallback), mirroring
+    # weekly_digest._person_key — a person with 2 résumés or 2 events counts once.
+    # ``'o:' || NULL`` is NULL in Postgres, so a NULL-owner résumé keeps its own key.
+    person_col = func.coalesce(
+        literal("o:").concat(Resume.owner_id),
+        literal("r:").concat(Event.hh_resume_id),
+    )
     scored_raw = await session.scalar(
-        select(func.count())
+        select(func.count(distinct(person_col)))
         .select_from(Event)
+        .join(Resume, Resume.hh_resume_id == Event.hh_resume_id)
         .where(Event.created_at >= cutoff)
         .where(Event.score_total >= threshold)
     )

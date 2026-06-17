@@ -53,6 +53,7 @@ def _candidate(**kw: object) -> dict[str, object]:
 
 def _hist(**kw: object) -> dict[str, object]:
     base: dict[str, object] = {
+        "person_key": "r:r1",
         "hh_resume_id": "r1",
         "url": "https://hh.ru/resume/r1",
         "created_at": datetime(2026, 6, 1, tzinfo=UTC),

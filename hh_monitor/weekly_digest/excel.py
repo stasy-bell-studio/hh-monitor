@@ -11,7 +11,8 @@ Sheet order:
   - «По позициям»       — per-position funnel breakdown.
   - «Воронка»           — KPI cells + BarChart over the funnel stages.
   - «Динамика»          — weekly_series rows + LineChart.
-  - «История кандидатов» — one row per all-time event for this week's candidates.
+  - «История кандидатов» — one row per all-time event, banded per PERSON (a band can
+    span several of one person's résumés).
 
 Style only is borrowed from hh_monitor/digest/export_xlsx.py (header fill/font, freeze
 panes, auto-filter, widths, wrap). The «Статус скрининга» column here is a read-only
@@ -66,7 +67,7 @@ _FILL_AMBER = PatternFill("solid", fgColor="FFF2CC")  # вердикт спор�
 _FILL_GRAY = PatternFill("solid", fgColor="E7E6E6")  # вердикт мимо
 _FILL_RED = PatternFill("solid", fgColor="F8CBAD")  # стоп-сигнал / отклонён
 _FILL_GREEN = PatternFill("solid", fgColor="C6EFCE")  # одобрен
-_FILL_GROUP = PatternFill("solid", fgColor="DDEBF7")  # история: per-resume band
+_FILL_GROUP = PatternFill("solid", fgColor="DDEBF7")  # история: per-person band
 
 # История: Δ-direction font colors for the «Оценка» cell.
 _FONT_UP = Font(size=9, bold=True, color="2E7D32")
@@ -331,6 +332,20 @@ def _sheet_summary(
         for col_idx, value in enumerate(total_vals, start=1):
             cell = ws.cell(row=row, column=col_idx, value=value)
             cell.font = _FONT_TOTAL
+        # «Найдено» here sums (person x position) rows, so it can exceed the funnel's
+        # distinct-people «Найдено» when someone matches >1 position. Note the delta.
+        multi = totals["found"] - data["funnel"]["found"]
+        if multi > 0:
+            row += 1
+            note = ws.cell(
+                row=row,
+                column=1,
+                value=(
+                    f"ℹ️ {multi} чел. подходят на несколько позиций — сумма по позициям "
+                    "больше, чем «Найдено» в воронке."
+                ),
+            )
+            note.font = _FONT_SUBTITLE
     ws.freeze_panes = f"A{header_row + 1}"
 
 
@@ -431,12 +446,13 @@ def _sheet_dynamics(wb: Workbook, weekly_series: list[_WeekPoint]) -> None:
 
 
 def _sheet_history(wb: Workbook, data: _DigestData) -> None:
-    """One row per lifetime event for this week's candidates, chronological per resume.
+    """One row per lifetime event for this week's candidates, chronological per person.
 
-    Per-resume groups are visually distinct (alternating band + top border). The «Оценка»
-    cell is colored by Δ direction vs the resume's previous *scored* event — None scores
-    are skipped (empty cell, no color, no baseline reset), so a removal never reads as a
-    score drop.
+    Per-PERSON groups are visually distinct (alternating band + top border); one band can
+    span several of a person's résumés, while each row's hyperlink still points at its own
+    résumé. The «Оценка» cell is colored by Δ direction vs the person's previous *scored*
+    event — None scores are skipped (empty cell, no color, no baseline reset), so a removal
+    never reads as a score drop.
     """
     ws = wb.create_sheet("История кандидатов")
     headers: list[tuple[str, int]] = [
@@ -450,15 +466,15 @@ def _sheet_history(wb: Workbook, data: _DigestData) -> None:
     _style_header(ws, headers)
     ws.freeze_panes = "B2"
 
-    prev_rid: str | None = None
+    prev_pkey: str | None = None
     prev_score: int | None = None
     group_idx = -1
     for row, h in enumerate(data["history"], start=2):
-        rid = h["hh_resume_id"]
-        new_group = rid != prev_rid
+        pkey = h["person_key"]
+        new_group = pkey != prev_pkey
         if new_group:
             group_idx += 1
-            prev_score = None  # new resume → reset Δ baseline
+            prev_score = None  # new person → reset Δ baseline
         band = _FILL_GROUP if group_idx % 2 == 1 else None
 
         score = h["score_total"]
@@ -491,7 +507,7 @@ def _sheet_history(wb: Workbook, data: _DigestData) -> None:
             elif prev_score is not None and score < prev_score:
                 score_cell.font = _FONT_DOWN
             prev_score = score  # baseline advances only on scored events
-        prev_rid = rid
+        prev_pkey = pkey
 
 
 def build_digest_workbook(

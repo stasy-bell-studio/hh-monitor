@@ -9,7 +9,7 @@ import structlog
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hh_monitor.config import settings
@@ -93,6 +93,16 @@ def _week_number(dt: datetime) -> int:
     return dt.isocalendar()[1]
 
 
+def _person_key(owner_id: str | None, hh_resume_id: str) -> str:
+    """Stable cross-résumé person key.
+
+    owner_id is the HH account id (one person, many résumés). The ``o:``/``r:`` prefixes
+    keep the owner-id space and résumé-id space from colliding and ensure every NULL-owner
+    résumé (404-only) stays its OWN person rather than collapsing into one shared bucket.
+    """
+    return f"o:{owner_id}" if owner_id else f"r:{hh_resume_id}"
+
+
 # ── Data shapes ────────────────────────────────────────────────────────────────
 
 
@@ -150,6 +160,9 @@ class _Candidate(TypedDict):
 class _HistoryRow(TypedDict):
     """One lifetime event for a candidate present in this week's digest."""
 
+    # Person key (owner_id with hh_resume_id fallback) — the «История кандидатов»
+    # sheet bands by person, so one band can span several of a person's résumés.
+    person_key: str
     hh_resume_id: str
     url: str
     created_at: datetime
@@ -247,11 +260,15 @@ async def _collect_data(
     rows = (await session.execute(stmt)).all()
 
     funnel = _Funnel(found=0, sent=0, approved=0, rejected=0, doubt=0, pending=0)
-    # Dedup to one row per resume, keeping the LATEST event (max created_at) as the
-    # displayed row — mirrors the DISTINCT ON (hh_resume_id) … ORDER BY created_at DESC
-    # pattern in hh_monitor/digest/query.py. ``latest_at`` tracks the kept event's time.
-    by_resume: dict[str, _Candidate] = {}
+    # Stage 1 — one row per RÉSUMÉ, keeping its LATEST event (max created_at) as the
+    # displayed row, exactly as before (mirrors DISTINCT ON (hh_resume_id) … ORDER BY
+    # created_at DESC). Stage 2 (below) then collapses résumés to (person, position).
+    # ``latest_at`` tracks the kept event's time; the side maps feed stage-2 selection.
+    by_rid: dict[str, _Candidate] = {}
     latest_at: dict[str, datetime] = {}
+    rid_owner: dict[str, str | None] = {}  # rid → owner_id (person key source)
+    rid_res_score: dict[str, int | None] = {}  # rid → Resume.score_total (stage-2 picker)
+    rid_position: dict[str, str] = {}  # rid → latest event's position_name
 
     for ev, res, srch, ns, sr, region in rows:
         # Per-candidate DISPLAY (sheet/per_position) uses the raw ns: a merged-duplicate
@@ -283,7 +300,10 @@ async def _collect_data(
         if prev_at is not None and ev.created_at <= prev_at:
             continue  # an already-kept later event wins as the displayed row
         latest_at[rid] = ev.created_at
-        by_resume[rid] = _Candidate(
+        rid_owner[rid] = res.owner_id
+        rid_res_score[rid] = res.score_total
+        rid_position[rid] = srch.position_name
+        by_rid[rid] = _Candidate(
             position_name=srch.position_name,
             score_total=ev.score_total,
             fit_score=res.fit_score,
@@ -307,15 +327,55 @@ async def _collect_data(
             change_types="",
         )
 
-    # found = distinct resumes (people), matching the deduped candidate sheets.
-    funnel["found"] = len(by_resume)
+    # Stage 2 — collapse résumés to (person, position). person_key = owner_id with
+    # hh_resume_id fallback. Same person + SAME position (the dual-résumé case) → ONE row;
+    # same person + DIFFERENT positions → one row per position (don't hide a real role fit).
+    # Representative résumé per group = max Resume.score_total (tie-break: latest event), so
+    # HR sees the person's strongest case. Single-résumé groups are untouched ⇒ output is
+    # byte-identical to before except the dual-résumé accounts.
+    groups: dict[tuple[str, str], list[str]] = {}
+    for rid in by_rid:
+        pkey = _person_key(rid_owner[rid], rid)
+        groups.setdefault((pkey, rid_position[rid]), []).append(rid)
 
-    # Lifetime history: ALL events (any date, any enrichment) for every resume in this
-    # week's digest. Drives both the trend columns and the «История кандидатов» sheet.
-    # Volume is tiny (~1 event/resume); ix_events_hh_resume_id (btree) covers the lookup.
-    history, trend = await _collect_history(session, list(by_resume.keys()))
-    for rid, cand in by_resume.items():
-        t = trend.get(rid)
+    by_pp: dict[tuple[str, str], _Candidate] = {}
+    person_owner: dict[str, str | None] = {}  # person_key → owner_id (None ⇒ own-résumé person)
+    person_rid: dict[str, str] = {}  # person_key → a representative rid (history fallback)
+    for (pkey, _pos), rids in groups.items():
+        rep_rid = max(
+            rids,
+            key=lambda r: (rid_res_score[r] if rid_res_score[r] is not None else -1, latest_at[r]),
+        )
+        cand = by_rid[rep_rid]
+        # Dual-résumé row: surface the representative résumé's headline score (its dossier
+        # already comes from that résumé's latest event — score + dossier stay coherent).
+        if len(rids) > 1 and rid_res_score[rep_rid] is not None:
+            cand["score_total"] = rid_res_score[rep_rid]
+        by_pp[(pkey, _pos)] = cand
+        person_owner[pkey] = rid_owner[rep_rid]
+        person_rid[pkey] = rep_rid
+
+    # found = distinct PEOPLE (one person can span several positions/résumés).
+    funnel["found"] = len({pkey for (pkey, _pos) in by_pp})
+
+    # Lifetime history stitched PER PERSON across ALL their résumés (not just the one that
+    # surfaced this week). Resolve every résumé of each owner to its person_key, then collect
+    # all their events. Volume is tiny; ix_events_hh_resume_id (btree) covers the lookup.
+    owner_ids = {o for o in person_owner.values() if o}
+    resume_to_person: dict[str, str] = {}
+    for pkey, owner in person_owner.items():
+        if not owner:  # NULL-owner person → its single résumé maps to itself
+            resume_to_person[person_rid[pkey]] = pkey
+    if owner_ids:
+        res_rows = await session.execute(
+            select(Resume.hh_resume_id, Resume.owner_id).where(Resume.owner_id.in_(owner_ids))
+        )
+        for hh_rid, oid in res_rows.all():
+            resume_to_person[hh_rid] = _person_key(oid, hh_rid)
+
+    history, trend = await _collect_history(session, resume_to_person)
+    for (pkey, _pos), cand in by_pp.items():
+        t = trend.get(pkey)
         first = t.score_first if t is not None else None
         cur = cand["score_total"]
         cand["score_first"] = first
@@ -324,14 +384,15 @@ async def _collect_data(
         cand["change_types"] = ", ".join(t.event_types) if t is not None else ""
 
     candidates_all = sorted(
-        by_resume.values(),
+        by_pp.values(),
         key=lambda c: (c["score_total"] is not None, c["score_total"] or 0),
         reverse=True,
     )
 
-    # per_position is computed over the DEDUPED candidates (per-person), so
-    # sum(count) == funnel.found. sent/approved/rejected/pending here are therefore
-    # per-person too and may diverge slightly from the per-notification funnel.
+    # per_position is computed over the (person x position) rows, so
+    # sum(count) >= funnel.found — it exceeds found only by the number of people who span
+    # multiple positions (footnote rendered when the delta > 0). sent/approved/rejected/
+    # pending here are per-person too and may diverge slightly from the per-notification funnel.
     pos_acc: dict[str, _PosAcc] = {}
     for c in candidates_all:
         acc = pos_acc.setdefault(
@@ -404,8 +465,8 @@ async def _collect_data(
     )
 
 
-class _ResumeTrend:
-    """Mutable per-resume trend accumulator (lifetime events)."""
+class _PersonTrend:
+    """Mutable per-PERSON trend accumulator (lifetime events across all their résumés)."""
 
     __slots__ = ("change_count", "event_types", "score_first")
 
@@ -416,32 +477,35 @@ class _ResumeTrend:
 
 
 async def _collect_history(
-    session: AsyncSession, resume_ids: list[str]
-) -> tuple[list[_HistoryRow], dict[str, _ResumeTrend]]:
-    """Fetch ALL lifetime events for *resume_ids* → (history rows, per-resume trend).
+    session: AsyncSession, resume_to_person: dict[str, str]
+) -> tuple[list[_HistoryRow], dict[str, _PersonTrend]]:
+    """Fetch ALL lifetime events for the given résumés → (history rows, per-PERSON trend).
 
-    Rows are ordered by resume then created_at ASC (chronological within resume), so the
-    first non-null score seen per resume is its earliest scored event.
+    *resume_to_person* maps every résumé of every person in the digest → that person's key,
+    so a person's events are stitched across all their résumés. Rows are ordered by person
+    then created_at ASC (chronological within person), so the first non-null score seen per
+    person is its earliest scored event and the «История кандидатов» bands group per person.
     """
     history: list[_HistoryRow] = []
-    trend: dict[str, _ResumeTrend] = {}
-    if not resume_ids:
+    trend: dict[str, _PersonTrend] = {}
+    if not resume_to_person:
         return history, trend
-    stmt = (
-        select(
-            Event.hh_resume_id,
-            Event.event_type,
-            Event.details,
-            Event.score_total,
-            Event.llm_verdict,
-            Event.created_at,
-        )
-        .where(Event.hh_resume_id.in_(resume_ids))
-        .order_by(Event.hh_resume_id, Event.created_at)
-    )
-    for rid, etype, details, score, verdict, created in (await session.execute(stmt)).all():
+    stmt = select(
+        Event.hh_resume_id,
+        Event.event_type,
+        Event.details,
+        Event.score_total,
+        Event.llm_verdict,
+        Event.created_at,
+    ).where(Event.hh_resume_id.in_(resume_to_person.keys()))
+    rows = (await session.execute(stmt)).all()
+    # Order by (person, created_at) — person_key is a derived value, so sort in Python.
+    rows = sorted(rows, key=lambda r: (resume_to_person[r[0]], r[5]))
+    for rid, etype, details, score, verdict, created in rows:
+        pkey = resume_to_person[rid]
         history.append(
             _HistoryRow(
+                person_key=pkey,
                 hh_resume_id=rid,
                 url=f"https://hh.ru/resume/{rid}",
                 created_at=created,
@@ -451,7 +515,7 @@ async def _collect_history(
                 verdict=verdict,
             )
         )
-        t = trend.setdefault(rid, _ResumeTrend())
+        t = trend.setdefault(pkey, _PersonTrend())
         t.change_count += 1
         if etype not in t.event_types:
             t.event_types.append(etype)
@@ -508,10 +572,16 @@ async def _collect_weekly_series(session: AsyncSession, weeks: int = 4) -> list[
     for i in range(weeks - 1, -1, -1):
         wf = now - timedelta(days=7 * (i + 1))
         wt = now - timedelta(days=7 * i)
-        # found counts DISTINCT resumes (people) so the headline, the week-over-week
-        # delta, and «Динамика» all agree — there is no found↔Динамика divergence.
+        # found counts DISTINCT PEOPLE (owner_id with hh_resume_id fallback), mirroring
+        # _person_key, so the headline, the week-over-week delta, and «Динамика» all agree.
+        # ``'o:' || NULL`` is NULL in Postgres, so a NULL-owner résumé coalesces to its own
+        # 'r:'<rid> key — NULLs never collapse into one bucket.
+        person_col = func.coalesce(
+            literal("o:").concat(Resume.owner_id),
+            literal("r:").concat(Event.hh_resume_id),
+        )
         found_stmt = (
-            select(func.count(distinct(Event.hh_resume_id)))
+            select(func.count(distinct(person_col)))
             .select_from(Event)
             .join(Resume, Resume.hh_resume_id == Event.hh_resume_id)
             .where(Event.llm_enriched.is_(True))
@@ -672,6 +742,15 @@ def _build_hr_message(
         "📋 <b>По позициям:</b>",
         f"<pre>{_positions_table(data['per_position'])}</pre>",
     ]
+
+    # «По позициям» counts (person x position) rows, so its total can exceed «Найдено»
+    # (distinct people) by the number of people who match more than one position.
+    multi = sum(pp["count"] for pp in data["per_position"]) - f["found"]
+    if multi > 0:
+        parts.append(
+            f"ℹ️ {multi} чел. подходят на несколько позиций — поэтому сумма по позициям "
+            "больше, чем «Найдено»."
+        )
 
     parts += ["", "📎 Полный список, воронка и динамика — в Excel ниже"]
     return "\n".join(parts)

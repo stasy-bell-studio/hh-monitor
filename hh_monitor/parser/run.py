@@ -145,22 +145,47 @@ async def _batch_lookup_hh_updated_at(
     return {row.hh_resume_id: row.hh_updated_at for row in result}
 
 
+def _extract_owner_id(payload: dict[str, Any]) -> str | None:
+    """payload.owner.id (HH account id) as a string, or None when absent.
+
+    A 404 payload is ``{"id": resume_id}`` (no owner) → None; the caller's upsert then
+    keeps any previously known owner instead of overwriting it with NULL.
+    """
+    owner = payload.get("owner")
+    if not isinstance(owner, dict):
+        return None
+    oid = owner.get("id")
+    return str(oid) if oid is not None else None
+
+
 async def _upsert_resume(
     session: AsyncSession,
     resume_id: str,
     search_id: int,
     hh_updated_at: datetime | None = None,
+    owner_id: str | None = None,
 ) -> None:
-    """INSERT or UPDATE last_seen_at, last_seen_search_id, and optionally hh_updated_at."""
+    """INSERT or UPDATE last_seen_at, last_seen_search_id, hh_updated_at, owner_id.
+
+    owner_id is forward-filled on every upsert but a NULL never overwrites a known owner
+    (prefetch-skip and 404 calls pass owner_id=None) — same conditional as hh_updated_at.
+    """
     update_set: dict[str, Any] = {
         "last_seen_at": func.now(),
         "last_seen_search_id": search_id,
     }
     if hh_updated_at is not None:
         update_set["hh_updated_at"] = hh_updated_at
+    if owner_id is not None:
+        update_set["owner_id"] = owner_id
     stmt = (
         pg_insert(Resume)
-        .values(hh_resume_id=resume_id, last_seen_search_id=search_id, hh_updated_at=hh_updated_at)
+        .values(
+            hh_resume_id=resume_id,
+            last_seen_search_id=search_id,
+            hh_updated_at=hh_updated_at,
+            owner_id=owner_id,
+        )
         .on_conflict_do_update(
             index_elements=["hh_resume_id"],
             set_=update_set,
@@ -361,8 +386,15 @@ async def run_parser(
                 payload_ts = _parse_hh_ts(payload.get("updated_at"))
                 effective_ts = payload_ts or item_ts
 
-                # Upsert resume master row (tracks which search last saw this resume)
-                await _upsert_resume(session, resume_id, search_id, hh_updated_at=effective_ts)
+                # Upsert resume master row (tracks which search last saw this resume,
+                # forward-fills the owner/person id from the freshly fetched payload)
+                await _upsert_resume(
+                    session,
+                    resume_id,
+                    search_id,
+                    hh_updated_at=effective_ts,
+                    owner_id=_extract_owner_id(payload),
+                )
 
                 # Dedup: skip if this (resume_id, content_hash) already exists
                 # anywhere in the table — not just in the most recent snapshot.

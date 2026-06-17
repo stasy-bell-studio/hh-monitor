@@ -106,6 +106,12 @@ class Resume(Base):
     # Used to skip the metered GET /resumes/{id} when the resume has not changed.
     hh_updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
+    # HH account id (payload.owner.id) — the cross-résumé "person" key. One account
+    # can hold several résumés; this stitches them to one person for the digest/funnel.
+    # NULL only for résumés that never had an owner-bearing snapshot (404-only). The
+    # partial index idx_resumes_owner_id lives in migration 20260617000000.
+    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     __table_args__ = (Index("idx_resumes_last_seen", "last_seen_at"),)
 
 

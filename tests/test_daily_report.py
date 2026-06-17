@@ -466,8 +466,9 @@ async def test_candidates_notified_excludes_merged(db_session: AsyncSession) -> 
     await db_session.flush()
 
     line = await _build_candidates_section(db_session, msk_now)
-    # two events scored ≥ 70, but only ONE delivered card (winner); merged sibling excluded.
-    assert "— 2," in line
+    # ONE person (one résumé) scored ≥ 70 across two events → counted once (distinct people);
+    # only ONE delivered card (winner) — the merged sibling is excluded.
+    assert "— 1," in line
     assert "уведомлений отправлено — 1" in line
 
 
