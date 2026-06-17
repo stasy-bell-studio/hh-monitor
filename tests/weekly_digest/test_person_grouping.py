@@ -79,14 +79,17 @@ async def test_ac3_two_resumes_same_position_collapse_to_one_person(
     now = datetime.now(UTC)
     date_from, date_to = now - timedelta(days=7), now
     sc = await _seed_search(db_session, "Директор филиала", "dir")
-    # Same owner, same position, two résumés. The stronger one (res_score 90) represents the
-    # group; its event score is 82, so a dual row must show res_score (90), not ev_score (82).
+    # Same owner, same position, two résumés. res_score is the RANKING key: the stronger one
+    # (res_score 90) represents the group, but the displayed score is that représentative's
+    # latest-event ev_score (82) — one meaning for the column, never the re-scored res_score.
+    # ac3_weak is the LATER event but lower res_score; ac3_strong is EARLIER but higher
+    # res_score — so picking the rep by max res_score (not recency) is what makes 82 win.
     await _seed_person_resume(
-        db_session, sc, rid="ac3_weak", owner_id="OWN1", created_at=now - timedelta(hours=3),
+        db_session, sc, rid="ac3_weak", owner_id="OWN1", created_at=now - timedelta(hours=1),
         res_score=70, ev_score=70,
     )
     await _seed_person_resume(
-        db_session, sc, rid="ac3_strong", owner_id="OWN1", created_at=now - timedelta(hours=1),
+        db_session, sc, rid="ac3_strong", owner_id="OWN1", created_at=now - timedelta(hours=3),
         res_score=90, ev_score=82,
     )
 
@@ -94,7 +97,9 @@ async def test_ac3_two_resumes_same_position_collapse_to_one_person(
 
     assert data["funnel"]["found"] == 1  # ONE person
     assert len(data["candidates_all"]) == 1  # same position → one row
-    assert data["candidates_all"][0]["score_total"] == 90  # representative's headline score
+    # Selection picked ac3_strong (max res_score 90 > 70, despite being older); displayed =
+    # that representative's latest-event ev_score (82), NOT its re-scored res_score (90).
+    assert data["candidates_all"][0]["score_total"] == 82
     # History stitched across BOTH résumés under one person_key.
     hist_rids = {h["hh_resume_id"] for h in data["history"]}
     assert hist_rids == {"ac3_weak", "ac3_strong"}

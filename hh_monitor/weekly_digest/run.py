@@ -342,16 +342,15 @@ async def _collect_data(
     person_owner: dict[str, str | None] = {}  # person_key → owner_id (None ⇒ own-résumé person)
     person_rid: dict[str, str] = {}  # person_key → a representative rid (history fallback)
     for (pkey, _pos), rids in groups.items():
+        # Resume.score_total is the RANKING key only (pick the person's strongest résumé);
+        # tie-break: latest event. The rendered row is that représentative's stage-1 row,
+        # so the Score column always shows the rep's LATEST-EVENT ev.score_total — one
+        # meaning for every row (single and dual), never a re-scored Resume.score_total.
         rep_rid = max(
             rids,
             key=lambda r: (rid_res_score[r] if rid_res_score[r] is not None else -1, latest_at[r]),
         )
-        cand = by_rid[rep_rid]
-        # Dual-résumé row: surface the representative résumé's headline score (its dossier
-        # already comes from that résumé's latest event — score + dossier stay coherent).
-        if len(rids) > 1 and rid_res_score[rep_rid] is not None:
-            cand["score_total"] = rid_res_score[rep_rid]
-        by_pp[(pkey, _pos)] = cand
+        by_pp[(pkey, _pos)] = by_rid[rep_rid]
         person_owner[pkey] = rid_owner[rep_rid]
         person_rid[pkey] = rep_rid
 
