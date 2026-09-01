@@ -71,8 +71,11 @@ async def chat_completion_messages(
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "response_format": {"type": "json_object"},
     }
+    # vLLM-hosted reasoning models (e.g. Qwen 3.8): disable chain-of-thought so
+    # the JSON answer lands in `content` within the token budget.
+    if settings.llm_enable_thinking is not None:
+        body["chat_template_kwargs"] = {"enable_thinking": settings.llm_enable_thinking}
     url = f"{settings.llm_base_url}/chat/completions"
 
     _own_client = http_client is None

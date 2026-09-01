@@ -289,7 +289,7 @@ async def _enrich_one(
         messages[0]["content"] = build_full_prompt(critic_prompt)
 
         log_ctx.info("llm_enrich.calling_api", fit_score=fit_score_val)
-        raw_resp = await llm_client.chat_completion_messages(messages, max_tokens=1024)
+        raw_resp = await llm_client.chat_completion_messages(messages, max_tokens=2048)
         raw_text = llm_client.extract_text(raw_resp)
         tokens_in, tokens_out = llm_client.extract_usage(raw_resp)
 

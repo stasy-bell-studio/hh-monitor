@@ -87,9 +87,11 @@ Rendered with:
 - `portrait` — `Portrait` instance (position_name, must_have_keywords, nice_to_have_keywords, stop_words)
 - `resume_json` — cleaned resume payload JSON (keys `actions`, `photo`, `negotiations_history` stripped)
 
-The template instructs the model to return **only** a JSON object.  `response_format={"type":"json_object"}`
-is sent in the API request to further enforce this.  `parse_response()` applies a regex fallback
-for models that wrap the JSON in prose text.
+The template instructs the model to return **only** a JSON object.  `parse_response()` applies
+a regex fallback for models that wrap the JSON in prose text.  (`response_format={"type":"json_object"}`
+is **not** sent: the corporate endpoint only supports `json_schema`/`text`.)  Reasoning models
+(e.g. Qwen 3.8 on vLLM) run with `chat_template_kwargs={"enable_thinking": false}` when
+`LLM_ENABLE_THINKING=false` is set, so the JSON lands in `content` within the token budget.
 
 ---
 
@@ -132,6 +134,7 @@ poetry run hh-monitor llm stats
 LLM_API_KEY=<corporate-llm-key>
 LLM_BASE_URL=https://llm.21-vek.spb.ru/v1
 LLM_MODEL=qwen/qwen3.8-27b
+LLM_ENABLE_THINKING=false      # reasoning models on vLLM: no chain-of-thought
 LLM_PROMPT_VERSION=v1          # bump to invalidate all cache entries
 SCORE_FIT_MIN_FOR_LLM=60       # fit_score threshold; 0 = enrich everyone
 ```
