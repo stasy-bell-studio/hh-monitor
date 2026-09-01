@@ -12,6 +12,7 @@ import html
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -36,7 +37,6 @@ from hh_monitor.weekly_digest.run import _send_long_message  # private cross-imp
 logger = structlog.get_logger(__name__)
 
 MSK = timezone(timedelta(hours=3))
-_OPENROUTER_URL = "https://openrouter.ai"
 _TELEGRAM_URL = "https://api.telegram.org"
 _QUOTA_AMBER: int = HH_DAILY_VIEW_BUDGET * 4 // 5  # 80% of budget
 
@@ -338,6 +338,12 @@ async def _build_candidates_section(
     )
 
 
+def _llm_origin() -> str:
+    """Origin URL of the LLM API (scheme://host), derived from settings."""
+    parsed = urlparse(settings.llm_base_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 async def _check_url(url: str, timeout: float = 5.0) -> bool:
     """Best-effort HTTP reachability check for non-Telegram URLs. Never raises."""
     try:
@@ -402,15 +408,15 @@ async def _build_external_section(session: AsyncSession) -> tuple[str, list[str]
             problems.append("HH OAuth")
         lines.append(f"{oauth_em} HH OAuth: токен истекает через {int(ttl_h)} ч.")
 
-    # OpenRouter and Telegram reachability — concurrent, best-effort.
-    or_ok, tg_ok = await asyncio.gather(
-        _check_url(_OPENROUTER_URL), _check_telegram()
+    # LLM API and Telegram reachability — concurrent, best-effort.
+    llm_ok, tg_ok = await asyncio.gather(
+        _check_url(_llm_origin()), _check_telegram()
     )
 
-    or_em = "🟢" if or_ok else "🔴"
-    if not or_ok:
-        problems.append("OpenRouter")
-    lines.append(f"{or_em} OpenRouter: {'доступен' if or_ok else 'недоступен'}")
+    llm_em = "🟢" if llm_ok else "🔴"
+    if not llm_ok:
+        problems.append("LLM API")
+    lines.append(f"{llm_em} LLM API: {'доступен' if llm_ok else 'недоступен'}")
 
     tg_em = "🟢" if tg_ok else "🔴"
     if not tg_ok:

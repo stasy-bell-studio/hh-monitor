@@ -1,8 +1,8 @@
-"""Async OpenRouter client with exponential back-off.
+"""Async LLM API client (OpenAI-compatible) with exponential back-off.
 
 Raises:
-    OpenRouterAuthError  — HTTP 401 (bad/missing API key)
-    OpenRouterApiError   — HTTP 4xx/5xx other than 401/429
+    LlmAuthError  — HTTP 401 (bad/missing API key)
+    LlmApiError   — HTTP 4xx/5xx other than 401/429
     httpx.TimeoutException — if all retries exhausted on timeouts
 """
 
@@ -16,7 +16,7 @@ import httpx
 import structlog
 
 from hh_monitor.config import settings
-from hh_monitor.errors import OpenRouterApiError, OpenRouterAuthError
+from hh_monitor.errors import LlmApiError, LlmAuthError
 
 log = structlog.get_logger(__name__)
 
@@ -43,29 +43,27 @@ async def chat_completion_messages(
     temperature: float = 0.2,
     http_client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
-    """Send a multi-turn chat-completion request to OpenRouter.
+    """Send a multi-turn chat-completion request to the LLM API.
 
     Returns the full parsed response dict from the API.
 
     Args:
         messages:    Pre-built messages list, e.g. [{"role": "system", ...}, {"role": "user", ...}].
-        model:       Override model slug; defaults to settings.openrouter_model.
+        model:       Override model slug; defaults to settings.llm_model.
         max_tokens:  Maximum tokens in the completion.
         temperature: Sampling temperature.
         http_client: Optional injected client (for testing).
 
     Raises:
-        OpenRouterAuthError: On HTTP 401.
-        OpenRouterApiError:  On any other non-200 response after retries.
+        LlmAuthError: On HTTP 401.
+        LlmApiError:  On any other non-200 response after retries.
     """
-    if not settings.openrouter_api_key:
-        raise OpenRouterAuthError("OPENROUTER_API_KEY is not configured")
+    if not settings.llm_api_key:
+        raise LlmAuthError("LLM_API_KEY is not configured")
 
-    effective_model = model or settings.openrouter_model
+    effective_model = model or settings.llm_model
     headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "HTTP-Referer": settings.openrouter_http_referer,
-        "X-Title": settings.openrouter_title,
+        "Authorization": f"Bearer {settings.llm_api_key}",
         "Content-Type": "application/json",
     }
     body: dict[str, Any] = {
@@ -75,7 +73,7 @@ async def chat_completion_messages(
         "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
-    url = f"{settings.openrouter_base_url}/chat/completions"
+    url = f"{settings.llm_base_url}/chat/completions"
 
     _own_client = http_client is None
     client = http_client or httpx.AsyncClient(timeout=60.0)
@@ -89,7 +87,7 @@ async def chat_completion_messages(
                     raise
                 delay = _backoff(attempt)
                 log.warning(
-                    "openrouter.timeout_retry",
+                    "llm.timeout_retry",
                     attempt=attempt + 1,
                     delay=round(delay, 1),
                 )
@@ -100,26 +98,26 @@ async def chat_completion_messages(
                 return resp.json()  # type: ignore[no-any-return]
 
             if resp.status_code == 401:
-                raise OpenRouterAuthError(resp.text)
+                raise LlmAuthError(resp.text)
 
             if resp.status_code == 429:
                 retry_after: float = float(resp.headers.get("Retry-After", _backoff(attempt)))
                 delay = min(_MAX_DELAY, retry_after)
                 log.warning(
-                    "openrouter.rate_limited",
+                    "llm.rate_limited",
                     attempt=attempt + 1,
                     retry_after=delay,
                 )
                 if attempt >= _MAX_RETRIES:
-                    raise OpenRouterApiError(429, resp.text)
+                    raise LlmApiError(429, resp.text)
                 await asyncio.sleep(delay)
                 continue
 
             # All other errors — no retry
-            raise OpenRouterApiError(resp.status_code, resp.text)
+            raise LlmApiError(resp.status_code, resp.text)
 
         # Should not be reached, but satisfies mypy
-        raise OpenRouterApiError(0, "exhausted retries")
+        raise LlmApiError(0, "exhausted retries")
     finally:
         if _own_client:
             await client.aclose()
@@ -139,14 +137,14 @@ async def chat_completion(
 
     Args:
         prompt:      User-turn message (the rendered Jinja prompt).
-        model:       Override model slug; defaults to settings.openrouter_model.
+        model:       Override model slug; defaults to settings.llm_model.
         max_tokens:  Maximum tokens in the completion.
         temperature: Sampling temperature.
         http_client: Optional injected client (for testing).
 
     Raises:
-        OpenRouterAuthError: On HTTP 401.
-        OpenRouterApiError:  On any other non-200 response after retries.
+        LlmAuthError: On HTTP 401.
+        LlmApiError:  On any other non-200 response after retries.
     """
     return await chat_completion_messages(
         [{"role": "user", "content": prompt}],
@@ -158,7 +156,7 @@ async def chat_completion(
 
 
 def extract_text(response: dict[str, Any]) -> str:
-    """Pull the assistant message text from an OpenRouter chat response.
+    """Pull the assistant message text from an LLM chat response.
 
     A null ``content`` yields ``""`` (not the literal ``"None"``); downstream the
     empty string fails dossier parsing and is never cached as a valid dossier.
@@ -166,7 +164,7 @@ def extract_text(response: dict[str, Any]) -> str:
     try:
         content = response["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise OpenRouterApiError(0, f"Unexpected response shape: {response}") from exc
+        raise LlmApiError(0, f"Unexpected response shape: {response}") from exc
     return "" if content is None else str(content)
 
 

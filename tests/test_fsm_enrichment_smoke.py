@@ -118,7 +118,7 @@ async def test_fsm_search_enriches_without_yaml(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC25: run_llm_enrichment completes for an FSM search with empty YAML registry."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, event = await _seed_fsm_search(db_session)
 
     with patch(

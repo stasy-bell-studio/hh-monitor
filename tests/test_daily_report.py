@@ -54,7 +54,7 @@ def test_verdict_all_green() -> None:
 
 
 def test_verdict_degraded() -> None:
-    result = _build_verdict(["Память", "OpenRouter"])
+    result = _build_verdict(["Память", "LLM API"])
     assert result == "⚠️ Есть проблемы — детали ниже"
 
 
@@ -681,8 +681,8 @@ async def test_external_check_timeout_never_raises() -> None:
     assert result is False
 
 
-async def test_external_openrouter_down() -> None:
-    """Unreachable OpenRouter → 🔴 compact, no crash."""
+async def test_external_llm_down() -> None:
+    """Unreachable LLM API → 🔴 compact, no crash."""
     mock_token = MagicMock(spec=OAuthToken)
     mock_token.expires_at = datetime.now(UTC) + timedelta(hours=100)
 
@@ -695,7 +695,7 @@ async def test_external_openrouter_down() -> None:
     ):
         block, problems, compact = await _build_external_section(session)
 
-    assert "OpenRouter" in problems
+    assert "LLM API" in problems
     assert "недоступен" in block
     assert compact == "🌐 Сервисы 🔴"
 
@@ -780,6 +780,7 @@ async def test_full_report_no_english_labels() -> None:
         patch("hh_monitor.daily_report.run._check_telegram", return_value=True),
         patch("hh_monitor.daily_report.run.settings") as mock_settings,
     ):
+        mock_settings.llm_base_url = "https://llm.21-vek.spb.ru/v1"
         mock_settings.telegram_score_threshold = 70
         report = await build_daily_report(session)
 
@@ -803,6 +804,7 @@ async def test_full_report_no_snapshotword() -> None:
         patch("hh_monitor.daily_report.run._check_telegram", return_value=True),
         patch("hh_monitor.daily_report.run.settings") as mock_settings,
     ):
+        mock_settings.llm_base_url = "https://llm.21-vek.spb.ru/v1"
         mock_settings.telegram_score_threshold = 70
         report = await build_daily_report(session)
 
@@ -825,6 +827,7 @@ async def test_full_report_header_format() -> None:
         patch("hh_monitor.daily_report.run._check_telegram", return_value=True),
         patch("hh_monitor.daily_report.run.settings") as mock_settings,
     ):
+        mock_settings.llm_base_url = "https://llm.21-vek.spb.ru/v1"
         mock_settings.telegram_score_threshold = 70
         report = await build_daily_report(session)
 
@@ -854,6 +857,7 @@ async def test_full_report_failed_unit_yields_degraded_verdict() -> None:
         patch("hh_monitor.daily_report.run._check_telegram", return_value=True),
         patch("hh_monitor.daily_report.run.settings") as mock_settings,
     ):
+        mock_settings.llm_base_url = "https://llm.21-vek.spb.ru/v1"
         mock_settings.telegram_score_threshold = 70
         report = await build_daily_report(session)
 
@@ -892,6 +896,7 @@ async def test_full_report_failed_run_yields_degraded_verdict() -> None:
         patch("hh_monitor.daily_report.run._check_telegram", return_value=True),
         patch("hh_monitor.daily_report.run.settings") as mock_settings,
     ):
+        mock_settings.llm_base_url = "https://llm.21-vek.spb.ru/v1"
         mock_settings.telegram_score_threshold = 70
         report = await build_daily_report(session)
 

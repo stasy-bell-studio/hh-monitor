@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from hh_monitor.errors import OpenRouterApiError, OpenRouterAuthError
+from hh_monitor.errors import LlmApiError, LlmAuthError
 from hh_monitor.llm_enrich.client import (
     chat_completion,
     chat_completion_messages,
@@ -19,7 +19,7 @@ from hh_monitor.llm_enrich.prompt import LlmResponse, build_messages, build_prom
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-_BASE = "https://openrouter.ai/api/v1"
+_BASE = "https://llm.21-vek.spb.ru/v1"
 _ENDPOINT = f"{_BASE}/chat/completions"
 
 
@@ -286,7 +286,7 @@ def test_build_messages_market_context_appended() -> None:
 @pytest.mark.asyncio
 async def test_chat_completion_messages_200(monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: pre-built messages list, 200 response."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "usr"}]
     with respx.mock:
         respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=_ok_response()))
@@ -298,8 +298,8 @@ async def test_chat_completion_messages_200(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_chat_completion_messages_no_api_key_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", None)
-    with pytest.raises(OpenRouterAuthError):
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", None)
+    with pytest.raises(LlmAuthError):
         await chat_completion_messages([{"role": "user", "content": "hi"}])
 
 
@@ -309,7 +309,7 @@ async def test_chat_completion_messages_no_api_key_raises(
 @pytest.mark.asyncio
 async def test_chat_completion_200(monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: 200 response returns parsed JSON."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     with respx.mock:
         respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=_ok_response()))
         result = await chat_completion("hello")
@@ -318,19 +318,19 @@ async def test_chat_completion_200(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_chat_completion_401_raises_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "bad-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "bad-key")
     with respx.mock:
         respx.post(_ENDPOINT).mock(return_value=httpx.Response(401, text="Unauthorized"))
-        with pytest.raises(OpenRouterAuthError):
+        with pytest.raises(LlmAuthError):
             await chat_completion("hello")
 
 
 @pytest.mark.asyncio
 async def test_chat_completion_500_raises_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     with respx.mock:
         respx.post(_ENDPOINT).mock(return_value=httpx.Response(500, text="Server Error"))
-        with pytest.raises(OpenRouterApiError) as exc_info:
+        with pytest.raises(LlmApiError) as exc_info:
             await chat_completion("hello")
     assert exc_info.value.status_code == 500
 
@@ -342,7 +342,7 @@ async def test_chat_completion_429_retries_then_raises(
     """429 with Retry-After header triggers retries; after max retries raises."""
     import asyncio as _asyncio
 
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     monkeypatch.setattr("hh_monitor.llm_enrich.client._MAX_RETRIES", 1)
 
     async def _no_sleep(_: float) -> None:
@@ -354,15 +354,15 @@ async def test_chat_completion_429_retries_then_raises(
         respx.post(_ENDPOINT).mock(
             return_value=httpx.Response(429, headers={"Retry-After": "0"}, text="Rate limited")
         )
-        with pytest.raises(OpenRouterApiError) as exc_info:
+        with pytest.raises(LlmApiError) as exc_info:
             await chat_completion("hello")
     assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
 async def test_chat_completion_no_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", None)
-    with pytest.raises(OpenRouterAuthError):
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", None)
+    with pytest.raises(LlmAuthError):
         await chat_completion("hello")
 
 
@@ -375,7 +375,7 @@ def test_extract_text_happy_path() -> None:
 
 
 def test_extract_text_bad_shape_raises() -> None:
-    with pytest.raises(OpenRouterApiError):
+    with pytest.raises(LlmApiError):
         extract_text({"choices": []})
 
 

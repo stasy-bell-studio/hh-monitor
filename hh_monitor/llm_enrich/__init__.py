@@ -1,1 +1,1 @@
-"""LLM enrichment package — scores resumes via OpenRouter (DeepSeek V3)."""
+"""LLM enrichment package — scores resumes via the corporate LLM API."""

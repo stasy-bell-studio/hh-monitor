@@ -32,7 +32,7 @@ def _make_search(
     )
 
 
-def _mock_openrouter_response(text: str) -> dict[str, Any]:
+def _mock_llm_response(text: str) -> dict[str, Any]:
     return {
         "choices": [{"message": {"content": text}}],
         "usage": {"prompt_tokens": 200, "completion_tokens": 150},
@@ -41,7 +41,7 @@ def _mock_openrouter_response(text: str) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_generate_critic_lens_returns_non_empty() -> None:
-    """generate_critic_lens calls OpenRouter and returns a non-empty string."""
+    """generate_critic_lens calls the LLM API and returns a non-empty string."""
     from hh_monitor.llm_enrich.critic_lens_builder import generate_critic_lens
 
     lens_text = (
@@ -54,7 +54,7 @@ async def test_generate_critic_lens_returns_non_empty() -> None:
     with patch(
         "hh_monitor.llm_enrich.critic_lens_builder.llm_client.chat_completion_messages",
         new_callable=AsyncMock,
-        return_value=_mock_openrouter_response(lens_text),
+        return_value=_mock_llm_response(lens_text),
     ):
         result = await generate_critic_lens(search)
 
@@ -72,7 +72,7 @@ async def test_generate_critic_lens_uses_position_name() -> None:
 
     async def capture_call(messages: list[Any], **kwargs: Any) -> dict[str, Any]:
         captured_messages.extend(messages)
-        return _mock_openrouter_response("ЧТО ВЫИСКИВАТЬ — опыт региональных сетей.\n" * 5)
+        return _mock_llm_response("ЧТО ВЫИСКИВАТЬ — опыт региональных сетей.\n" * 5)
 
     search = _make_search(position_name="Директор агентства")
 
@@ -117,7 +117,7 @@ async def test_cli_rebuild_critic_lens_persists_to_db(db_session: AsyncSession) 
         patch(
             "hh_monitor.llm_enrich.critic_lens_builder.llm_client.chat_completion_messages",
             new_callable=AsyncMock,
-            return_value=_mock_openrouter_response(LENS_TEXT),
+            return_value=_mock_llm_response(LENS_TEXT),
         ),
     ):
         returned_lens = await _rebuild_critic_lens(SEARCH_CODE, dry_run=False)
@@ -151,7 +151,7 @@ async def test_fallback_when_llm_returns_empty() -> None:
     with patch(
         "hh_monitor.llm_enrich.critic_lens_builder.llm_client.chat_completion_messages",
         new_callable=AsyncMock,
-        return_value=_mock_openrouter_response("   "),
+        return_value=_mock_llm_response("   "),
     ):
         result = await generate_critic_lens_from_portrait(
             portrait, position_name="Тест Менеджер", position_code="test"

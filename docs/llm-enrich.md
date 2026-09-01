@@ -1,7 +1,7 @@
 # LLM Enrichment — Design & Operations
 
 Module: `hh_monitor/llm_enrich/`  
-Provider: [OpenRouter](https://openrouter.ai/) → DeepSeek V3 (`deepseek/deepseek-chat-v3-0324`)
+Provider: корпоративная нейронка (OpenAI-совместимый API) → Qwen 3.8 (`qwen/qwen3.8-27b`)
 
 ---
 
@@ -39,7 +39,7 @@ run_llm_enrichment()
        │
        └─ (cache miss)
             ├─ build_prompt()      → Jinja2 template render
-            ├─ client.chat_completion()  → OpenRouter API
+            ├─ client.chat_completion()  → LLM API
             ├─ parse_response()    → LlmResponse (Pydantic)
             └─ llm_cache.save_cached()
        │
@@ -100,8 +100,8 @@ for models that wrap the JSON in prose text.
 - Timeout: 60 s
 - Max retries: 3 (on 429 and `httpx.TimeoutException`)
 - Back-off: exponential with ±25% jitter, capped at 60 s
-- 401 → `OpenRouterAuthError` (no retry)
-- Other 4xx/5xx → `OpenRouterApiError` (no retry)
+- 401 → `LlmAuthError` (no retry)
+- Other 4xx/5xx → `LlmApiError` (no retry)
 
 ---
 
@@ -129,17 +129,19 @@ poetry run hh-monitor llm stats
 ## Configuration (`.env`)
 
 ```bash
-OPENROUTER_API_KEY=sk-or-...
-OPENROUTER_MODEL=deepseek/deepseek-chat-v3-0324
+LLM_API_KEY=<corporate-llm-key>
+LLM_BASE_URL=https://llm.21-vek.spb.ru/v1
+LLM_MODEL=qwen/qwen3.8-27b
 LLM_PROMPT_VERSION=v1          # bump to invalidate all cache entries
 SCORE_FIT_MIN_FOR_LLM=60       # fit_score threshold; 0 = enrich everyone
 ```
 
 ---
 
-## Cost Estimate (DeepSeek V3, 2025)
+## Cost Estimate (Qwen 3.8, self-hosted corporate endpoint)
 
-Approximate pricing: ~$0.27 / 1M input tokens, ~$1.10 / 1M output tokens.
+Модель развёрнута на собственном контуре компании, поэтому платите за инфраструктуру,
+а не за токены. Ориентиры по объёму:
 
 | Resumes/day | ~Input tokens | ~Output tokens | ~Cost/day |
 |---|---|---|---|

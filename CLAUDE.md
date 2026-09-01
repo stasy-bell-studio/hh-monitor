@@ -20,7 +20,7 @@
 - Typer — CLI
 - Pydantic v2 — модели данных, портреты
 - PostgreSQL 16 (asyncpg)
-- LLM: OpenRouter / DeepSeek V3.2 через httpx
+- LLM: корпоративная нейронка (OpenAI-совместимый API, Qwen 3.8) через httpx
 - httpx — HH.ru API
 - structlog — логирование
 - pytest + pytest-asyncio + respx — тесты

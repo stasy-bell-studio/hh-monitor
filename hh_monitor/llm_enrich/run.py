@@ -5,7 +5,7 @@ For each unenriched event:
   2. Load the Portrait for the search's position_code.
   3. Check the hard-reject guard (stop region / forbidden industry / missing quals).
   4. Check the LLM cache.
-  5. Call OpenRouter if no cache hit.
+  5. Call the LLM API if no cache hit.
   6. Parse 5-field dossier JSON → save to events.llm_* columns.
   7. Derive llm_score / llm_verdict / score_total for resumes table (TG-bot backward compat).
   8. Mark event.llm_enriched = True.
@@ -44,7 +44,7 @@ from hh_monitor.llm_enrich.prompts import (
 
 log = structlog.get_logger(__name__)
 
-# Polite delay between consecutive OpenRouter calls (seconds)
+# Polite delay between consecutive LLM API calls (seconds)
 _INTER_CALL_DELAY = 0.5
 
 # Domain governor: candidates with no insurance domain experience are capped here.
@@ -284,7 +284,7 @@ async def _enrich_one(
                 "fit_score": fit_score_val,
             }
 
-        # 5. Call OpenRouter — build messages, override system prompt with dossier prompt
+        # 5. Call the LLM API — build messages, override system prompt with dossier prompt
         messages = build_messages(portrait, payload, global_ctx)
         messages[0]["content"] = build_full_prompt(critic_prompt)
 

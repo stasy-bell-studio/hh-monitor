@@ -1,6 +1,6 @@
 """Tests for hh_monitor.llm_enrich.run — enrichment runner.
 
-All tests use the real DB (db_session fixture) and mock OpenRouter HTTP calls
+All tests use the real DB (db_session fixture) and mock LLM HTTP calls
 with respx.  No real LLM calls are made.
 """
 
@@ -67,7 +67,7 @@ def _ok_llm_response(
     verdict_text: str = "Рекомендую на следующий этап.",
     real_role: str = "Директор регионального филиала, 120 агентов, страхование",
 ) -> dict[str, Any]:
-    """Build a dossier-format mock OpenRouter response (commit 9.3+)."""
+    """Build a dossier-format mock LLM response (commit 9.3+)."""
     return {
         "choices": [
             {
@@ -157,7 +157,7 @@ async def _seed_db(
 @pytest.mark.asyncio
 async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: event is enriched, resume columns updated, event marked done."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -197,7 +197,7 @@ async def test_run_enriches_event(db_session: Any, monkeypatch: pytest.MonkeyPat
 @pytest.mark.asyncio
 async def test_run_dry_run_skips_api(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """dry_run=True skips the API call; event remains un-enriched."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -223,7 +223,7 @@ async def test_run_dry_run_skips_api(db_session: Any, monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_run_below_threshold_skips(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Events with fit_score below threshold are skipped without API call."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
     search, resume, event = await _seed_db(db_session, fit_score=50)
     portraits = {search.position_code: _portrait(search.position_code)}
@@ -252,7 +252,7 @@ async def test_gate_zero_lets_low_fit_through(
 ) -> None:
     """score_fit_min_for_llm=0 (the safe explicit default) lets every prefiltered
     resume through — even fit_score=5 is enriched, never skipped as below_threshold."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 0)
     search, resume, event = await _seed_db(db_session, fit_score=5)
     portraits = {search.position_code: _portrait(search.position_code)}
@@ -278,7 +278,7 @@ async def test_gate_zero_lets_low_fit_through(
 @pytest.mark.asyncio
 async def test_run_stop_region_skips(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Resume in a stop region is skipped without API call."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     payload = {
         "id": "r_stop",
         "title": "директор",
@@ -311,7 +311,7 @@ async def test_run_stop_region_skips(db_session: Any, monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Cache hit: no API call, but resume is still enriched from cache."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -362,7 +362,7 @@ async def test_run_cache_hit_skips_api(db_session: Any, monkeypatch: pytest.Monk
 @pytest.mark.asyncio
 async def test_run_respects_limit(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Only `limit` events are processed per run."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search = Search(position_code="multi", position_name="Multi", hh_params={}, portrait={})
     db_session.add(search)
     await db_session.flush()
@@ -439,7 +439,7 @@ async def test_run_no_portrait_raises(db_session: Any) -> None:
 @pytest.mark.asyncio
 async def test_score_total_formula(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """score_total = round(0.1 * fit_score + 0.9 * llm_score)."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=60)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -471,7 +471,7 @@ async def test_low_fit_high_llm_reaches_threshold(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """fit_score=35 (below old gate of 40) + llm_score=75 → score_total >= 70, not skipped."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=35)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -701,7 +701,7 @@ async def test_hard_reject_event_not_re_picked(db_session: Any) -> None:
 @pytest.mark.asyncio
 async def test_persist_dossier_to_db(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """After enrichment, all 5 dossier fields are written to events."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -742,7 +742,7 @@ async def test_verdict_enum_and_full_text_split(
       events.llm_verdict = "мимо"
       events.llm_verdict_text = full text (длинный)
     """
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, resume_id="r_vt", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -800,8 +800,8 @@ async def test_verdict_enum_and_full_text_split(
 
 @pytest.mark.asyncio
 async def test_invalid_json_fallback(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """When DeepSeek returns non-JSON, verdict=raw_text, other fields None."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    """When the LLM returns non-JSON, verdict=raw_text, other fields None."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, resume_id="r_badjson", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -842,7 +842,7 @@ async def test_parse_failure_skips_cache_write(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """P2-3: a JSON-decode fallback from parse_dossier must NOT be cached."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, _resume, _event = await _seed_db(db_session, resume_id="r_p2_3_fail", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -879,7 +879,7 @@ async def test_parse_success_writes_cache(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """P2-3: a well-formed dossier IS written to the cache (success path)."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, _resume, _event = await _seed_db(db_session, resume_id="r_p2_3_ok", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -911,7 +911,7 @@ async def test_interview_questions_as_string_splits(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """interview_questions returned as a numbered string → split into list[str]."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, resume_id="r_striq", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -963,7 +963,7 @@ async def test_interview_questions_as_string_splits(
 @pytest.mark.asyncio
 async def test_force_ignores_valid_cache(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """force=True calls the API even when a valid dossier cache entry exists."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1017,7 +1017,7 @@ async def test_resume_ids_narrows_selection(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """resume_ids limits processing to the specified hh_resume_ids."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, _r1, _e1 = await _seed_db(db_session, resume_id="target_r", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1068,7 +1068,7 @@ async def test_force_reprocesses_enriched_event(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """force=True re-enriches events that already have llm_enriched=True."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1099,7 +1099,7 @@ async def test_real_role_written_to_resume(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """After enrichment, resume.llm_real_role is populated from the dossier."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1128,7 +1128,7 @@ async def test_non_force_uses_updated_cache(
     """After force+overwrite, a non-force run uses the updated cache (no extra API call)."""
     from sqlalchemy import update as sa_update
 
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     # Capture primitive IDs before any commits so expire_on_commit doesn't bite.
     search_id: int = search.id
@@ -1187,7 +1187,7 @@ async def test_non_force_uses_updated_cache(
 @pytest.mark.asyncio
 async def test_coerce_list_fields_to_str(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """LLM returns red_flags/weak_spots as lists → Event stores joined strings; None → ''."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, _resume, event = await _seed_db(db_session, resume_id="r_coerce", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1241,7 +1241,7 @@ async def test_nested_list_red_flags_does_not_crash(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """red_flags=[["nested","list"]] must not crash; flattened to a string."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, _resume, event = await _seed_db(db_session, resume_id="r_nested_rf", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1288,7 +1288,7 @@ async def test_dict_weak_spots_does_not_crash(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """weak_spots={"a":"b"} must not crash; coerced to str."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, _resume, event = await _seed_db(db_session, resume_id="r_dict_ws", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1334,7 +1334,7 @@ async def test_nested_interview_questions_flattened(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """interview_questions=[["Q1","Q2"],"Q3"] is flattened to ["Q1 Q2","Q3"]."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, _resume, event = await _seed_db(db_session, resume_id="r_nested_iq", fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1387,7 +1387,7 @@ async def test_below_threshold_closes_event(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Below-threshold event is closed (llm_enriched=True) so it is never re-picked."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
     search, resume, event = await _seed_db(db_session, fit_score=50)
     portraits = {search.position_code: _portrait(search.position_code)}
@@ -1412,7 +1412,7 @@ async def test_below_threshold_event_not_re_picked(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A closed below-threshold event is not selected in a subsequent enrichment run."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
     search, resume, event = await _seed_db(db_session, fit_score=50)
     # Capture IDs as plain ints now — _enrich_one's internal commit expires ORM objects,
@@ -1443,7 +1443,7 @@ async def test_enriched_event_has_per_event_scores(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """After successful enrichment, Event.fit_score and Event.score_total are written."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 
@@ -1467,7 +1467,7 @@ async def test_enriched_event_has_per_event_scores(
 @pytest.mark.asyncio
 async def test_enrich_uses_own_snapshot(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Event with curr_snapshot_id in details is scored from its own snapshot, not latest."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     monkeypatch.setattr("hh_monitor.llm_enrich.run.settings.score_fit_min_for_llm", 80)
 
     from hh_monitor.llm_enrich.run import _snapshot_by_id
@@ -1619,7 +1619,7 @@ async def test_governor_missing_domain_no_cap_integration(
     db_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Enrichment with dossier missing insurance_domain must NOT force score to 20."""
-    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
     search, resume, event = await _seed_db(db_session, fit_score=70)
     portraits = {search.position_code: _portrait(search.position_code)}
 

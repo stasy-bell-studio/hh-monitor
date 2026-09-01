@@ -4,7 +4,7 @@ Architecture:
   - SYSTEM_PROMPT: constant — insurance HR senior partner persona.
   - build_system_prompt(global_ctx): appends market context from _global.yaml.
   - prompt_template.j2 (user message): position + candidate resume block.
-  - build_messages(): assembles [system, user] list for OpenRouter.
+  - build_messages(): assembles [system, user] list for the LLM API.
   - LlmResponse: Pydantic schema for the structured JSON response.
   - parse_response(): parse raw LLM text → LlmResponse.
 """
@@ -259,7 +259,7 @@ def build_messages(
     resume_payload: dict[str, Any],
     global_ctx: GlobalContext,
 ) -> list[dict[str, str]]:
-    """Assemble [system, user] messages list for OpenRouter chat/completions.
+    """Assemble [system, user] messages list for LLM chat/completions.
 
     Args:
         portrait:       Portrait instance for the position.
