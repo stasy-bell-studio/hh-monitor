@@ -101,7 +101,7 @@ and the client appends the Qwen3 soft switch `/no_think` to the last user messag
 
 `hh_monitor/llm_enrich/client.py`
 
-- Timeout: 60 s
+- Timeout: `LLM_TIMEOUT` s (default 300 — reasoning models generate for 1-4 minutes)
 - Max retries: 3 (on 429 and `httpx.TimeoutException`)
 - Back-off: exponential with ±25% jitter, capped at 60 s
 - 401 → `LlmAuthError` (no retry)

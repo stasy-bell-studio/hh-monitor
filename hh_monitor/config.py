@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # Qwen3 soft switch: append "/no_think" to the last user message so the model
     # skips chain-of-thought and answers within the token budget.
     llm_no_think: bool = True
+    # Reasoning models generate 2-5k thinking tokens before the answer; a single
+    # call can take well over a minute server-side.
+    llm_timeout: float = Field(default=300.0, gt=0)
 
     llm_prompt_version: str = "v5"
     # Candidates with fit_score below this threshold are not sent to LLM (0 = all pass)

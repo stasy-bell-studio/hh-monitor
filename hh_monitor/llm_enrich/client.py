@@ -88,7 +88,7 @@ async def chat_completion_messages(
     url = f"{settings.llm_base_url}/chat/completions"
 
     _own_client = http_client is None
-    client = http_client or httpx.AsyncClient(timeout=60.0)
+    client = http_client or httpx.AsyncClient(timeout=settings.llm_timeout)
 
     try:
         for attempt in range(_MAX_RETRIES + 1):
