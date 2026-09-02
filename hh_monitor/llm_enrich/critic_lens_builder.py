@@ -127,7 +127,7 @@ async def _build_critic_lens_core(
     try:
         raw = await llm_client.chat_completion_messages(
             [{"role": "user", "content": prompt}],
-            max_tokens=1024,
+            max_tokens=8192,
             temperature=0.3,
         )
         text = llm_client.extract_text(raw)

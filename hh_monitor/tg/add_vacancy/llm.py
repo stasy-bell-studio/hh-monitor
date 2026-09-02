@@ -156,7 +156,7 @@ async def parse_to_portrait_dict(raw_text: str, position_name: str) -> dict[str,
     )
     raw = await llm_client.chat_completion_messages(
         [{"role": "user", "content": prompt}],
-        max_tokens=2048,
+        max_tokens=16000,
         temperature=0.2,
         response_json_schema={"type": "object"},
     )

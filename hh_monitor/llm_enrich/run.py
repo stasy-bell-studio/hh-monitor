@@ -289,8 +289,11 @@ async def _enrich_one(
         messages[0]["content"] = build_full_prompt(critic_prompt)
 
         log_ctx.info("llm_enrich.calling_api", fit_score=fit_score_val)
+        # Qwen 3.8 reasons 1.7-4.2k tokens before the JSON answer even with the
+        # /no_think soft switch (server ignores chat_template_kwargs) — 16k budget
+        # keeps finish_reason=stop instead of truncating mid-JSON.
         raw_resp = await llm_client.chat_completion_messages(
-            messages, max_tokens=2048, response_json_schema={"type": "object"}
+            messages, max_tokens=16000, response_json_schema={"type": "object"}
         )
         raw_text = llm_client.extract_text(raw_resp)
         tokens_in, tokens_out = llm_client.extract_usage(raw_resp)
