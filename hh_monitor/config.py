@@ -23,8 +23,9 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_model: str = "qwen/qwen3.8-27b"
     llm_base_url: str = "https://llm.21-vek.spb.ru/v1"
-    # vLLM chat_template_kwargs.enable_thinking; None = omit (server default)
-    llm_enable_thinking: bool | None = None
+    # Qwen3 soft switch: append "/no_think" to the last user message so the model
+    # skips chain-of-thought and answers within the token budget.
+    llm_no_think: bool = True
 
     llm_prompt_version: str = "v5"
     # Candidates with fit_score below this threshold are not sent to LLM (0 = all pass)

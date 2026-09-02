@@ -42,6 +42,7 @@ async def chat_completion_messages(
     max_tokens: int = 512,
     temperature: float = 0.2,
     http_client: httpx.AsyncClient | None = None,
+    response_json_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Send a multi-turn chat-completion request to the LLM API.
 
@@ -53,6 +54,8 @@ async def chat_completion_messages(
         max_tokens:  Maximum tokens in the completion.
         temperature: Sampling temperature.
         http_client: Optional injected client (for testing).
+        response_json_schema: When given, sends ``response_format`` json_schema
+            (guided decoding) so the answer is a valid JSON object.
 
     Raises:
         LlmAuthError: On HTTP 401.
@@ -60,6 +63,11 @@ async def chat_completion_messages(
     """
     if not settings.llm_api_key:
         raise LlmAuthError("LLM_API_KEY is not configured")
+
+    if settings.llm_no_think and messages:
+        last = messages[-1]
+        if last.get("role") == "user" and not str(last.get("content", "")).endswith("/no_think"):
+            last["content"] = f"{last['content']} /no_think"
 
     effective_model = model or settings.llm_model
     headers = {
@@ -72,10 +80,11 @@ async def chat_completion_messages(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-    # vLLM-hosted reasoning models (e.g. Qwen 3.8): disable chain-of-thought so
-    # the JSON answer lands in `content` within the token budget.
-    if settings.llm_enable_thinking is not None:
-        body["chat_template_kwargs"] = {"enable_thinking": settings.llm_enable_thinking}
+    if response_json_schema is not None:
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "hh_monitor_response", "schema": response_json_schema},
+        }
     url = f"{settings.llm_base_url}/chat/completions"
 
     _own_client = http_client is None

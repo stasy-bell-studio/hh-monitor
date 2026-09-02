@@ -89,9 +89,11 @@ Rendered with:
 
 The template instructs the model to return **only** a JSON object.  `parse_response()` applies
 a regex fallback for models that wrap the JSON in prose text.  (`response_format={"type":"json_object"}`
-is **not** sent: the corporate endpoint only supports `json_schema`/`text`.)  Reasoning models
-(e.g. Qwen 3.8 on vLLM) run with `chat_template_kwargs={"enable_thinking": false}` when
-`LLM_ENABLE_THINKING=false` is set, so the JSON lands in `content` within the token budget.
+is **not** sent: the corporate endpoint only supports `json_schema`/`text`.)  JSON call sites
+(dossier scoring, portrait parsing) send `response_format` with a minimal `json_schema`
+(`{"type": "object"}`) so the endpoint's guided decoding guarantees a parseable JSON object,
+and the client appends the Qwen3 soft switch `/no_think` to the last user message
+(`LLM_NO_THINK=true`) so reasoning does not consume the token budget.
 
 ---
 
@@ -134,7 +136,7 @@ poetry run hh-monitor llm stats
 LLM_API_KEY=<corporate-llm-key>
 LLM_BASE_URL=https://llm.21-vek.spb.ru/v1
 LLM_MODEL=qwen/qwen3.8-27b
-LLM_ENABLE_THINKING=false      # reasoning models on vLLM: no chain-of-thought
+LLM_NO_THINK=true             # Qwen3 soft switch: skip chain-of-thought
 LLM_PROMPT_VERSION=v1          # bump to invalidate all cache entries
 SCORE_FIT_MIN_FOR_LLM=60       # fit_score threshold; 0 = enrich everyone
 ```

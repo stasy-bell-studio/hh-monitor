@@ -303,6 +303,70 @@ async def test_chat_completion_messages_no_api_key_raises(
         await chat_completion_messages([{"role": "user", "content": "hi"}])
 
 
+@pytest.mark.asyncio
+async def test_chat_completion_messages_json_schema_response_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """response_json_schema → request body carries response_format json_schema."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
+    msgs = [{"role": "user", "content": "usr"}]
+    with respx.mock:
+        route = respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=_ok_response()))
+        await chat_completion_messages(msgs, response_json_schema={"type": "object"})
+    body = json.loads(route.calls.last.request.content)
+    assert body["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "hh_monitor_response", "schema": {"type": "object"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_messages_json_schema_omitted_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without response_json_schema the body has no response_format."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
+    with respx.mock:
+        route = respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=_ok_response()))
+        await chat_completion_messages([{"role": "user", "content": "usr"}])
+    body = json.loads(route.calls.last.request.content)
+    assert "response_format" not in body
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_messages_no_think_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """llm_no_think=True (default) appends the Qwen3 soft switch to the last user message."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_no_think", True)
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "Оцени кандидата"},
+    ]
+    with respx.mock:
+        route = respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=_ok_response()))
+        await chat_completion_messages(msgs)
+    body = json.loads(route.calls.last.request.content)
+    assert body["messages"][-1]["content"].endswith("/no_think")
+    assert body["messages"][0]["content"] == "sys"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_messages_no_think_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """llm_no_think=False → user message left untouched."""
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_api_key", "test-key")
+    monkeypatch.setattr("hh_monitor.llm_enrich.client.settings.llm_no_think", False)
+    msgs = [{"role": "user", "content": "Оцени кандидата"}]
+    with respx.mock:
+        route = respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=_ok_response()))
+        await chat_completion_messages(msgs)
+    body = json.loads(route.calls.last.request.content)
+    assert body["messages"][-1]["content"] == "Оцени кандидата"
+
+
 # ── chat_completion (legacy shim, HTTP mocked) ────────────────────────────────
 
 

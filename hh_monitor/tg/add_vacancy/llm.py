@@ -158,6 +158,7 @@ async def parse_to_portrait_dict(raw_text: str, position_name: str) -> dict[str,
         [{"role": "user", "content": prompt}],
         max_tokens=2048,
         temperature=0.2,
+        response_json_schema={"type": "object"},
     )
     text = llm_client.extract_text(raw)
     try:
